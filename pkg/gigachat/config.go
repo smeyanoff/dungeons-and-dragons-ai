@@ -1,0 +1,10 @@
+package gigachat
+
+// Config содержит параметры для GigaChat API.
+type Config struct {
+    AuthBaseURL  string // https://ngw.devices.sberbank.ru:9443
+    APIBaseURL   string // https://gigachat.devices.sberbank.ru/api/v1
+    ClientID     string
+    ClientSecret string
+    Scope        string // например "GIGACHAT_API_PERS"
+}
