@@ -1,30 +1,29 @@
 package application
 
 import (
-    "context"
+	"context"
 
-    "dungeons-and-dragons-ai/internal/rag/domain"
+	"dungeons-and-dragons-ai/internal/rag/domain"
 )
 
-
 type IndexDocument struct {
-    embedder domain.Embedder
-    store    domain.VectorStore
+	embedder domain.Embedder
+	store    domain.VectorStore
 }
 
 func NewIndexDocument(e domain.Embedder, s domain.VectorStore) *IndexDocument {
-    return &IndexDocument{embedder: e, store: s}
+	return &IndexDocument{embedder: e, store: s}
 }
 
 func (uc *IndexDocument) Execute(
-    ctx context.Context,
-    doc domain.Document,
+	ctx context.Context,
+	doc domain.Document,
 ) error {
 
-    embedding, err := uc.embedder.Embed(ctx, doc.Text)
-    if err != nil {
-        return err
-    }
+	embedding, err := uc.embedder.Embed(ctx, doc.Text)
+	if err != nil {
+		return err
+	}
 
-    return uc.store.Upsert(ctx, doc, embedding)
+	return uc.store.Upsert(ctx, doc, embedding)
 }
