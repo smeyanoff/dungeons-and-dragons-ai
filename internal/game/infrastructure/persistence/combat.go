@@ -20,6 +20,7 @@ func (r *CombatRepository) GetActiveBySessionID(ctx context.Context, sessionID u
 	var c combat.Combat
 	err := r.db.WithContext(ctx).
 		Preload("Participants.Character").
+		Preload("Participants.Character.Stats").
 		Where("game_session_id = ? AND state = ?", sessionID, combat.CombatStateActive).
 		First(&c).Error
 
@@ -44,6 +45,7 @@ func (r *CombatRepository) GetByID(ctx context.Context, id uint) (*combat.Combat
 	var c combat.Combat
 	err := r.db.WithContext(ctx).
 		Preload("Participants.Character").
+		Preload("Participants.Character.Stats").
 		First(&c, id).Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {

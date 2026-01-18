@@ -629,3 +629,227 @@ func TestRAGContextBuilder_BuildContext_WithInventoryQuery(t *testing.T) {
 		}
 	})
 }
+
+// TestRAGContextBuilder_BuildContext_PlayerCount проверяет добавление информации о количестве игроков (#65)
+func TestRAGContextBuilder_BuildContext_PlayerCount(t *testing.T) {
+	simpleBuilder := NewSimpleContextBuilder()
+	mockEmbedder := &mockEmbedder{
+		embedFunc: func(ctx context.Context, text string) ([]float32, error) {
+			return []float32{0.1, 0.2, 0.3}, nil
+		},
+	}
+	mockVectorStore := &mockVectorStore{
+		searchFunc: func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+			return []domain.Document{}, nil
+		},
+	}
+
+	retrieveUC := application.NewRetrieveContext(mockEmbedder, mockVectorStore)
+	mockEventRepo := &mockEventRepository{}
+	mockCombatRepo := &mockCombatRepository{}
+
+	t.Run("single player - shows player count and warning", func(t *testing.T) {
+		gs := &session.GameSession{
+			Model: gorm.Model{ID: 1},
+			World: world.World{
+				Name:        "Test World",
+				Description: "A test world",
+			},
+			Players: []player.Player{
+				{
+					Character: character.Character{
+						ID:    1,
+						Name:  "Solo Hero",
+						Race:  character.RaceHuman,
+						Class: character.ClassFighter,
+					},
+				},
+			},
+		}
+
+		mockCombatRepo := &mockCombatRepository{
+			getActiveBySessionIDFunc: func(ctx context.Context, sessionID uint) (*combat.Combat, error) {
+				// Создаем бой с одним игроком и одним врагом
+				char := &character.Character{
+					ID:    1,
+					Name:  "Solo Hero",
+					HP:    20,
+					MaxHP: 20,
+					Status: character.StatusAlive,
+				}
+				return &combat.Combat{
+					State: combat.CombatStateActive,
+					CurrentTurn: 0,
+					Participants: []combat.CombatParticipant{
+						{
+							IsPlayer:    true,
+							CharacterID: &char.ID,
+							Character:   char,
+							Initiative:  15,
+						},
+						{
+							IsPlayer:      false,
+							MonsterName:   "Goblin",
+							MonsterHP:     10,
+							MonsterMaxHP:  10,
+							MonsterAC:     12,
+							Initiative:    10,
+						},
+					},
+				}, nil
+			},
+		}
+
+		builder := NewRAGContextBuilder(simpleBuilder, retrieveUC, mockEventRepo, nil, mockCombatRepo)
+		result, err := builder.BuildContext(context.Background(), gs, "test message")
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Проверяем наличие информации о количестве игроков
+		if !contains(result, "Количество игроков: 1 (игрок один)") {
+			t.Error("expected player count '1 (игрок один)' in context")
+		}
+
+		// Проверяем наличие информации о бое
+		if !contains(result, "Игроков в бою: 1, Врагов: 1") {
+			t.Error("expected 'Игроков в бою: 1, Врагов: 1' in context")
+		}
+
+		// Проверяем предупреждение о единственном игроке
+		if !contains(result, "⚠️ ВАЖНО: Игрок один в бою") {
+			t.Error("expected warning about single player in combat")
+		}
+
+		// Проверяем критическую инструкцию для DM
+		if !contains(result, "⚠️ КРИТИЧЕСКИ ВАЖНО: Используй ТОЛЬКО реальных участников боя") {
+			t.Error("expected critical instruction about not inventing allies")
+		}
+	})
+
+	t.Run("multiple players - shows player count", func(t *testing.T) {
+		gs := &session.GameSession{
+			Model: gorm.Model{ID: 1},
+			World: world.World{
+				Name:        "Test World",
+				Description: "A test world",
+			},
+			Players: []player.Player{
+				{
+					Character: character.Character{
+						ID:    1,
+						Name:  "Hero 1",
+						Race:  character.RaceHuman,
+						Class: character.ClassFighter,
+					},
+				},
+				{
+					Character: character.Character{
+						ID:    2,
+						Name:  "Hero 2",
+						Race:  character.RaceElf,
+						Class: character.ClassWizard,
+					},
+				},
+			},
+		}
+
+		builder := NewRAGContextBuilder(simpleBuilder, retrieveUC, mockEventRepo, nil, mockCombatRepo)
+		result, err := builder.BuildContext(context.Background(), gs, "test message")
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Проверяем наличие информации о количестве игроков (2 игрока)
+		if !contains(result, "Количество игроков: 2") {
+			t.Error("expected player count '2' in context")
+		}
+
+		// Для нескольких игроков не должно быть предупреждения о единственном игроке
+		if contains(result, "⚠️ ВАЖНО: Игрок один в бою") {
+			t.Error("should not show single player warning for multiple players")
+		}
+	})
+
+	t.Run("combat context includes participants count", func(t *testing.T) {
+		gs := &session.GameSession{
+			Model: gorm.Model{ID: 1},
+			World: world.World{
+				Name:        "Test World",
+				Description: "A test world",
+			},
+			Players: []player.Player{
+				{
+					Character: character.Character{
+						ID:    1,
+						Name:  "Combat Hero",
+						Race:  character.RaceHuman,
+						Class: character.ClassFighter,
+						HP:    20,
+						MaxHP: 20,
+						Status: character.StatusAlive,
+					},
+				},
+			},
+		}
+
+		mockCombatRepo := &mockCombatRepository{
+			getActiveBySessionIDFunc: func(ctx context.Context, sessionID uint) (*combat.Combat, error) {
+				char := &character.Character{
+					ID:    1,
+					Name:  "Combat Hero",
+					HP:    20,
+					MaxHP: 20,
+					Status: character.StatusAlive,
+				}
+				return &combat.Combat{
+					State: combat.CombatStateActive,
+					CurrentTurn: 0,
+					Participants: []combat.CombatParticipant{
+						{
+							IsPlayer:    true,
+							CharacterID: &char.ID,
+							Character:   char,
+							Initiative:  15,
+						},
+						{
+							IsPlayer:      false,
+							MonsterName:   "Goblin 1",
+							MonsterHP:     10,
+							MonsterMaxHP:  10,
+							MonsterAC:     12,
+							Initiative:    12,
+						},
+						{
+							IsPlayer:      false,
+							MonsterName:   "Goblin 2",
+							MonsterHP:     8,
+							MonsterMaxHP:  8,
+							MonsterAC:     12,
+							Initiative:    10,
+						},
+					},
+				}, nil
+			},
+		}
+
+		builder := NewRAGContextBuilder(simpleBuilder, retrieveUC, mockEventRepo, nil, mockCombatRepo)
+		result, err := builder.BuildContext(context.Background(), gs, "test message")
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		// Проверяем наличие информации о количестве игроков и врагов в бою
+		if !contains(result, "Игроков в бою: 1, Врагов: 2") {
+			t.Error("expected 'Игроков в бою: 1, Врагов: 2' in context")
+		}
+
+		// Проверяем критическую инструкцию
+		if !contains(result, "НЕ выдумывай союзников, товарищей или NPC") {
+			t.Error("expected instruction about not inventing allies")
+		}
+	})
+}

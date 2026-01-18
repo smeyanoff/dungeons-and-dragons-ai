@@ -671,6 +671,170 @@ func TestBuildAnalysisPrompt(t *testing.T) {
 	}
 }
 
+// TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC проверяет, что handleCombatStart использует значения по умолчанию для HP/AC (#64)
+func TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC(t *testing.T) {
+	tests := []struct {
+		name             string
+		enemies          []Enemy
+		expectedDefaults bool
+		validate         func(*testing.T, *combat.Combat)
+	}{
+		{
+			name: "enemy with zero HP uses default",
+			enemies: []Enemy{
+				{Name: "Goblin", HP: 0, AC: 0, AttackBonus: 0}, // Все значения 0 - должны использовать дефолты
+			},
+			expectedDefaults: true,
+			validate: func(t *testing.T, c *combat.Combat) {
+				if len(c.Participants) < 2 {
+					t.Fatalf("expected at least 2 participants, got %d", len(c.Participants))
+				}
+				// Ищем врага (не игрока)
+				var enemyParticipant *combat.CombatParticipant
+				for i := range c.Participants {
+					if !c.Participants[i].IsPlayer {
+						enemyParticipant = &c.Participants[i]
+						break
+					}
+				}
+				if enemyParticipant == nil {
+					t.Fatal("expected at least one enemy participant")
+				}
+				// Проверяем дефолтные значения: HP=10, AC=12, AttackBonus=2
+				if enemyParticipant.MonsterHP != 10 {
+					t.Errorf("expected default HP 10, got %d", enemyParticipant.MonsterHP)
+				}
+				if enemyParticipant.MonsterMaxHP != 10 {
+					t.Errorf("expected default MaxHP 10, got %d", enemyParticipant.MonsterMaxHP)
+				}
+				if enemyParticipant.MonsterAC != 12 {
+					t.Errorf("expected default AC 12, got %d", enemyParticipant.MonsterAC)
+				}
+				// AttackBonus применяется только если < 0, для 0 остается 0
+				if enemyParticipant.MonsterAttackBonus != 0 {
+					t.Errorf("expected AttackBonus 0 (0 is not < 0, so default not applied), got %d", enemyParticipant.MonsterAttackBonus)
+				}
+			},
+		},
+		{
+			name: "enemy with negative HP uses default",
+			enemies: []Enemy{
+				{Name: "Orc", HP: -5, AC: -3, AttackBonus: -1}, // Отрицательные значения - должны использовать дефолты
+			},
+			expectedDefaults: true,
+			validate: func(t *testing.T, c *combat.Combat) {
+				var enemyParticipant *combat.CombatParticipant
+				for i := range c.Participants {
+					if !c.Participants[i].IsPlayer {
+						enemyParticipant = &c.Participants[i]
+						break
+					}
+				}
+				if enemyParticipant == nil {
+					t.Fatal("expected at least one enemy participant")
+				}
+				// Проверяем дефолтные значения для отрицательных значений
+				if enemyParticipant.MonsterHP != 10 {
+					t.Errorf("expected default HP 10 for negative HP, got %d", enemyParticipant.MonsterHP)
+				}
+				if enemyParticipant.MonsterAC != 12 {
+					t.Errorf("expected default AC 12 for negative AC, got %d", enemyParticipant.MonsterAC)
+				}
+			},
+		},
+		{
+			name: "enemy with valid HP/AC uses provided values",
+			enemies: []Enemy{
+				{Name: "Dragon", HP: 100, AC: 18, AttackBonus: 8}, // Валидные значения - должны использоваться
+			},
+			expectedDefaults: false,
+			validate: func(t *testing.T, c *combat.Combat) {
+				var enemyParticipant *combat.CombatParticipant
+				for i := range c.Participants {
+					if !c.Participants[i].IsPlayer {
+						enemyParticipant = &c.Participants[i]
+						break
+					}
+				}
+				if enemyParticipant == nil {
+					t.Fatal("expected at least one enemy participant")
+				}
+				// Проверяем, что используются переданные значения, а не дефолты
+				if enemyParticipant.MonsterHP != 100 {
+					t.Errorf("expected HP 100, got %d", enemyParticipant.MonsterHP)
+				}
+				if enemyParticipant.MonsterMaxHP != 100 {
+					t.Errorf("expected MaxHP 100, got %d", enemyParticipant.MonsterMaxHP)
+				}
+				if enemyParticipant.MonsterAC != 18 {
+					t.Errorf("expected AC 18, got %d", enemyParticipant.MonsterAC)
+				}
+				if enemyParticipant.MonsterAttackBonus != 8 {
+					t.Errorf("expected AttackBonus 8, got %d", enemyParticipant.MonsterAttackBonus)
+				}
+			},
+		},
+		{
+			name: "enemy with zero HP but valid AC",
+			enemies: []Enemy{
+				{Name: "Skeleton", HP: 0, AC: 15, AttackBonus: 3}, // HP=0 (дефолт), AC=15 (валидно)
+			},
+			expectedDefaults: true,
+			validate: func(t *testing.T, c *combat.Combat) {
+				var enemyParticipant *combat.CombatParticipant
+				for i := range c.Participants {
+					if !c.Participants[i].IsPlayer {
+						enemyParticipant = &c.Participants[i]
+						break
+					}
+				}
+				if enemyParticipant == nil {
+					t.Fatal("expected at least one enemy participant")
+				}
+				// HP должен быть дефолтным (10), AC должен быть переданным (15)
+				if enemyParticipant.MonsterHP != 10 {
+					t.Errorf("expected default HP 10, got %d", enemyParticipant.MonsterHP)
+				}
+				if enemyParticipant.MonsterAC != 15 {
+					t.Errorf("expected AC 15, got %d", enemyParticipant.MonsterAC)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			llm := &mockLLM{}
+			combatRepo := &mockCombatRepo{}
+			questRepo := &mockQuestRepo{}
+
+			uc := NewAnalyzeDMResponseUseCase(
+				llm,
+				combatRepo,
+				questRepo,
+				nil, // inventoryRepo
+				1,   // sessionID
+				1,   // worldID
+				1,   // characterID
+			)
+
+			ctx := context.Background()
+			err := uc.handleCombatStart(ctx, tt.enemies)
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(combatRepo.savedCombats) == 0 {
+				t.Fatal("expected combat to be saved")
+			}
+
+			savedCombat := combatRepo.savedCombats[0]
+			tt.validate(t, savedCombat)
+		})
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		(len(s) > len(substr) && (s[:len(substr)] == substr ||

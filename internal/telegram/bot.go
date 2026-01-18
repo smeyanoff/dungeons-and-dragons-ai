@@ -14,8 +14,10 @@ import (
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
-	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
+	mapapp 	"dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	"dungeons-and-dragons-ai/internal/game/domain/feedback"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/pkg/logger"
 
@@ -42,6 +44,19 @@ type Bot struct {
 	getQuestsUC       *questapp.GetQuestsUseCase
 	getMapUC          *mapapp.GetMapUseCase
 	sessionRepo       session.Repository
+	combatRepo        CombatRepository
+	feedbackRepo      FeedbackRepository
+}
+
+// FeedbackRepository интерфейс для работы с фидбеком
+type FeedbackRepository interface {
+	Save(ctx context.Context, fb *feedback.Feedback) error
+}
+
+// CombatRepository интерфейс для работы с боем
+type CombatRepository interface {
+	GetActiveBySessionID(ctx context.Context, sessionID uint) (*combat.Combat, error)
+	Save(ctx context.Context, c *combat.Combat) error
 }
 
 func NewBot(
@@ -57,6 +72,8 @@ func NewBot(
 	getQuestsUC *questapp.GetQuestsUseCase,
 	getMapUC *mapapp.GetMapUseCase,
 	sessionRepo session.Repository,
+	combatRepo CombatRepository,
+	feedbackRepo FeedbackRepository,
 ) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -76,6 +93,8 @@ func NewBot(
 		getQuestsUC:       getQuestsUC,
 		getMapUC:          getMapUC,
 		sessionRepo:       sessionRepo,
+		combatRepo:        combatRepo,
+		feedbackRepo:      feedbackRepo,
 	}
 
 	// Настраиваем Bot Commands Menu для отображения команд в интерфейсе Telegram
@@ -107,6 +126,8 @@ func (b *Bot) setupBotCommands() error {
 		{Command: "history", Description: "История игры"},
 		{Command: "quests", Description: "Активные квесты"},
 		{Command: "map", Description: "Карта мира"},
+		{Command: "flee", Description: "Попытаться выйти из боя"},
+		{Command: "feedback", Description: "Отправить отзыв о игре"},
 		{Command: "endgame", Description: "Завершить игру"},
 	}
 
@@ -178,7 +199,8 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 			logger.Int64("chat_id", chatID),
 			logger.Int64("user_id", int64(userID)),
 		)
-		return b.handleCommand(ctx, chatID, update.Message.Command(), update.Message.CommandArguments(), int64(userID))
+		// Для команды /feedback передаем также информацию о пользователе для метаданных
+		return b.handleCommand(ctx, chatID, update.Message.Command(), update.Message.CommandArguments(), int64(userID), update.Message.From)
 	}
 
 	// Обычные сообщения - действия игрока
@@ -190,7 +212,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 	return b.handlePlayerAction(ctx, chatID, text)
 }
 
-func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args string, tgUserID int64) error {
+func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args string, tgUserID int64, from *tgbotapi.User) error {
 	switch command {
 	case "start":
 		return b.handleStart(ctx, chatID)
@@ -214,6 +236,10 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleQuests(ctx, chatID)
 	case "map":
 		return b.handleMap(ctx, chatID)
+	case "flee", "run":
+		return b.handleFlee(ctx, chatID)
+	case "feedback":
+		return b.handleFeedback(ctx, chatID, args, tgUserID, from)
 	case "attack":
 		return b.handleAttack(ctx, chatID, args)
 	case "pickup":
@@ -261,8 +287,10 @@ func (b *Bot) handleHelp(ctx context.Context, chatID int64) error {
 /history - посмотреть историю игры
 /quests - посмотреть активные квесты
 /map - посмотреть карту мира
+/flee - попытаться выйти из боя (во время боя)
 /abilities [filter] - показать способности персонажа (filter: all/spells/feats/class)
 /spells - показать заклинания персонажа
+/feedback <текст> - отправить отзыв о игре
 
 💡 После начала игры просто пишите мне, что хотите сделать, и я буду описывать что происходит!`
 
@@ -1107,6 +1135,126 @@ func (b *Bot) handleAbilities(ctx context.Context, chatID int64, args string) er
 func (b *Bot) handleSpells(ctx context.Context, chatID int64, args string) error {
 	// Используем handleAbilities с фильтром "spells"
 	return b.handleAbilities(ctx, chatID, "spells")
+}
+
+func (b *Bot) handleFlee(ctx context.Context, chatID int64) error {
+	// Получаем сессию
+	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil {
+		logger.Error("Failed to get session",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+		)
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении сессии: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	if gs == nil {
+		msg := tgbotapi.NewMessage(chatID, "Игра не начата. Используйте /newgame для начала новой игры.")
+		return b.sendMessage(msg)
+	}
+
+	// Получаем активный бой
+	if b.combatRepo == nil {
+		msg := tgbotapi.NewMessage(chatID, "Ошибка: система боя недоступна.")
+		return b.sendMessage(msg)
+	}
+
+	activeCombat, err := b.combatRepo.GetActiveBySessionID(ctx, gs.ID)
+	if err != nil {
+		logger.Error("Failed to get active combat",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+			logger.Uint("session_id", gs.ID),
+		)
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении информации о бое: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	if activeCombat == nil || !activeCombat.IsActive() {
+		msg := tgbotapi.NewMessage(chatID, "Сейчас нет активного боя. Команда /flee доступна только во время боя.")
+		return b.sendMessage(msg)
+	}
+
+	// Завершаем бой
+	activeCombat.State = combat.CombatStateFinished
+
+	// Сохраняем изменения
+	if err := b.combatRepo.Save(ctx, activeCombat); err != nil {
+		logger.Error("Failed to save combat",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+			logger.Uint("session_id", gs.ID),
+		)
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при завершении боя: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	logger.Info("Combat ended via /flee command",
+		logger.Int64("chat_id", chatID),
+		logger.Uint("session_id", gs.ID),
+		logger.Uint("combat_id", activeCombat.ID),
+	)
+
+	// Формируем сообщение о попытке бегства
+	// DM опишет результат бегства при следующем действии игрока
+	fleeText := `🏃 Попытка бегства...
+
+Вы попытались выйти из боя. Бой завершен.
+
+Продолжайте играть - DM опишет результат вашего бегства.`
+
+	msg := tgbotapi.NewMessage(chatID, fleeText)
+	return b.sendMessage(msg)
+}
+
+func (b *Bot) handleFeedback(ctx context.Context, chatID int64, args string, tgUserID int64, from *tgbotapi.User) error {
+	// Проверяем, что текст фидбека указан
+	feedbackText := strings.TrimSpace(args)
+	if feedbackText == "" {
+		msg := tgbotapi.NewMessage(chatID, "Пожалуйста, укажите ваш отзыв. Формат: /feedback <текст отзыва>\n\nПример: /feedback Отличная игра! Очень интересный DM.")
+		return b.sendMessage(msg)
+	}
+
+	if b.feedbackRepo == nil {
+		msg := tgbotapi.NewMessage(chatID, "Извините, система фидбека временно недоступна.")
+		return b.sendMessage(msg)
+	}
+
+	// Создаем фидбек
+	fb := &feedback.Feedback{
+		ChatID:  chatID,
+		UserID:  tgUserID,
+		Message: feedbackText,
+	}
+
+	// Добавляем метаданные пользователя, если доступны
+	if from != nil {
+		fb.UserFirstName = from.FirstName
+		fb.UserLastName = from.LastName
+		fb.UserUsername = from.UserName
+	}
+
+	// Сохраняем фидбек
+	if err := b.feedbackRepo.Save(ctx, fb); err != nil {
+		logger.Error("Failed to save feedback",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+			logger.Int64("user_id", tgUserID),
+		)
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при сохранении отзыва: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	logger.Info("Feedback saved",
+		logger.Int64("chat_id", chatID),
+		logger.Int64("user_id", tgUserID),
+		logger.Uint("feedback_id", fb.ID),
+	)
+
+	// Отправляем подтверждение пользователю
+	msg := tgbotapi.NewMessage(chatID, "✅ Спасибо за ваш отзыв! Он поможет нам улучшить игру. 🎲")
+	return b.sendMessage(msg)
 }
 
 func (b *Bot) handleEndGame(ctx context.Context, chatID int64) error {

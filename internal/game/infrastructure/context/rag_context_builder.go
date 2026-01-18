@@ -67,6 +67,15 @@ func (b *RAGContextBuilder) BuildContext(
 	var parts []string
 	parts = append(parts, baseContext)
 
+	// Добавляем информацию о количестве игроков в сессии
+	playerCount := len(gs.Players)
+	parts = append(parts, "\n--- Игроки в сессии ---")
+	if playerCount == 1 {
+		parts = append(parts, "Количество игроков: 1 (игрок один)")
+	} else {
+		parts = append(parts, fmt.Sprintf("Количество игроков: %d", playerCount))
+	}
+
 	// Добавляем информацию о персонаже ДО попытки RAG
 	// Это гарантирует, что информация о персонаже будет в контексте даже при ошибке RAG
 	var playerCharacterID uint
@@ -172,6 +181,26 @@ func (b *RAGContextBuilder) BuildContext(
 			if currentTurnMessage != "" {
 				parts = append(parts, currentTurnMessage)
 			}
+			
+			// Подсчитываем количество игроков и врагов в бою
+			playersInCombat := 0
+			enemiesInCombat := 0
+			for _, p := range activeCombat.Participants {
+				if p.IsAlive() {
+					if p.IsPlayer {
+						playersInCombat++
+					} else {
+						enemiesInCombat++
+					}
+				}
+			}
+			parts = append(parts, fmt.Sprintf("Игроков в бою: %d, Врагов: %d", playersInCombat, enemiesInCombat))
+			
+			// Если игрок один в бою, явно указываем это
+			if playerCount == 1 && playersInCombat == 1 {
+				parts = append(parts, "⚠️ ВАЖНО: Игрок один в бою. Нет союзников, товарищей или других NPC.")
+			}
+			
 			// Добавляем информацию об участниках боя и их HP
 			parts = append(parts, "Участники боя:")
 			for i, participant := range activeCombat.Participants {
@@ -189,6 +218,13 @@ func (b *RAGContextBuilder) BuildContext(
 					parts = append(parts, fmt.Sprintf("%d. %s (%s) - HP: %d/%d, Инициатива: %d", i+1, name, role, hp, maxHP, initiative))
 				}
 			}
+			
+			// КРИТИЧЕСКИ ВАЖНО: Инструкция для DM о невыдумывании участников
+			parts = append(parts, "")
+			parts = append(parts, "⚠️ КРИТИЧЕСКИ ВАЖНО: Используй ТОЛЬКО реальных участников боя из списка выше.")
+			parts = append(parts, "НЕ выдумывай союзников, товарищей или NPC, которых нет в списке участников боя.")
+			parts = append(parts, "Если игрок один в бою, НЕ упоминай 'товарищей', 'союзников' или других NPC.")
+			parts = append(parts, "Все участники боя перечислены выше - используй ТОЛЬКО их.")
 			// КРИТИЧНО: Индикатор статуса боя в ответах
 			parts = append(parts, "\n⚔️ КРИТИЧЕСКИ ВАЖНО: Статус боя в ответах")
 			parts = append(parts, "ВСЕГДА упоминай статус боя в НАЧАЛЕ своего ответа, если идет активный бой.")
@@ -201,6 +237,11 @@ func (b *RAGContextBuilder) BuildContext(
 			parts = append(parts, "2. Когда описываешь атаку врага по игроку, ОБЯЗАТЕЛЬНО используй инструмент 'perform_enemy_attack' (предпочтительно) или 'apply_damage' с параметрами target_type='player', target_name='player', damage_amount=<количество урона>. Инструмент 'perform_enemy_attack' автоматически выполнит бросок кубиков для атаки врага, проверит попадание и применит урон.")
 			parts = append(parts, "3. Используй инструмент 'get_battlefield_status' для визуализации поля боя с информацией о всех участниках (HP, AC, инициатива, текущий ход).")
 			parts = append(parts, "4. После получения результата от инструмента, опиши результат атаки в своем ответе игроку, включив информацию об уроне и текущем HP.")
+			parts = append(parts, "")
+			parts = append(parts, "Инструкции по использованию validation tools:")
+			parts = append(parts, "1. Если игрок пытается использовать предмет (выпить зелье, надеть доспех, применить предмет), ОБЯЗАТЕЛЬНО используй инструмент 'validate_item_usage' для проверки наличия предмета в инвентаре перед описанием использования.")
+			parts = append(parts, "2. Если игрок пытается выполнить действие, требующее физических характеристик (поднять тяжелый предмет, перепрыгнуть препятствие, проявить ловкость), используй инструмент 'check_stat_requirements' для проверки достаточности характеристик.")
+			parts = append(parts, "3. На основе результатов validation tools решай, может ли игрок выполнить действие, и описывай соответствующий результат.")
 			logger.Debug("Added combat information to context",
 				logger.Uint("session_id", gs.ID),
 				logger.Int("participants_count", len(activeCombat.Participants)),

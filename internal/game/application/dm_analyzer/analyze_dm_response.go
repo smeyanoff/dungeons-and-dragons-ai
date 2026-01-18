@@ -17,17 +17,17 @@ import (
 // DMResponseAnalysis содержит структурированный анализ ответа DM
 type DMResponseAnalysis struct {
 	// Боевая ситуация
-	CombatDetected        bool    `json:"combat_detected"`         // Начался ли бой
-	Enemies               []Enemy `json:"enemies,omitempty"`       // Список врагов, если бой начался
-	CombatStartMessage    string  `json:"combat_start_message,omitempty"` // Сообщение о порядке ходов при начале боя
+	CombatDetected     bool    `json:"combat_detected"`                // Начался ли бой
+	Enemies            []Enemy `json:"enemies,omitempty"`              // Список врагов, если бой начался
+	CombatStartMessage string  `json:"combat_start_message,omitempty"` // Сообщение о порядке ходов при начале боя
 
 	// Квесты
-	QuestCompleted bool   `json:"quest_completed"` // Выполнен ли квест
-	QuestFailed    bool   `json:"quest_failed"`    // Провален ли квест
+	QuestCompleted bool   `json:"quest_completed"`       // Выполнен ли квест
+	QuestFailed    bool   `json:"quest_failed"`          // Провален ли квест
 	QuestTitle     string `json:"quest_title,omitempty"` // Название квеста (если выполнен/провален)
 
 	// Опыт
-	ExperienceGained int    `json:"experience_gained"` // Количество опыта (0 если нет)
+	ExperienceGained int    `json:"experience_gained"`           // Количество опыта (0 если нет)
 	ExperienceReason string `json:"experience_reason,omitempty"` // Причина начисления опыта
 
 	// Предметы
@@ -37,18 +37,18 @@ type DMResponseAnalysis struct {
 // Enemy представляет врага в бою
 type Enemy struct {
 	Name        string `json:"name"`         // Имя врага
-	HP          int    `json:"hp"`          // HP врага
-	AC          int    `json:"ac"`          // Класс брони
+	HP          int    `json:"hp"`           // HP врага
+	AC          int    `json:"ac"`           // Класс брони
 	AttackBonus int    `json:"attack_bonus"` // Бонус к атаке
 }
 
 // Item представляет предмет, полученный игроком
 type Item struct {
-	Name        string `json:"name"`         // Название предмета
-	Description string `json:"description"`  // Описание предмета
+	Name        string  `json:"name"`        // Название предмета
+	Description string  `json:"description"` // Описание предмета
 	Weight      float64 `json:"weight"`      // Вес в кг (оценка, если не указано)
-	Quantity    int    `json:"quantity"`     // Количество (по умолчанию 1)
-	Type        string `json:"type"`         // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
+	Quantity    int     `json:"quantity"`    // Количество (по умолчанию 1)
+	Type        string  `json:"type"`        // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
 }
 
 // CombatRepository интерфейс для работы с боями
@@ -77,8 +77,8 @@ type AnalyzeDMResponseUseCase struct {
 	inventoryRepo      InventoryRepository
 	sessionID          uint
 	worldID            uint
-	characterID        uint    // ID персонажа игрока
-	combatStartMessage string  // Сообщение о порядке ходов при начале боя
+	characterID        uint   // ID персонажа игрока
+	combatStartMessage string // Сообщение о порядке ходов при начале боя
 }
 
 func NewAnalyzeDMResponseUseCase(
@@ -139,31 +139,32 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 	llmCtx, llmCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer llmCancel()
 
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 512)
+	// Увеличено с 512 до 1024 для предотвращения обрезанного JSON
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 1024)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
 
 	// Очищаем ответ от markdown блоков и лишнего текста
 	cleaned := cleanJSONResponse(raw)
-	
+
 	// Логируем оригинальный ответ для анализа проблем
 	log.Printf("[DM Analyzer] Raw LLM response (length: %d): %s", len(raw), raw[:min(200, len(raw))])
-	
+
 	// Пытаемся восстановить JSON если он невалиден
 	if !json.Valid([]byte(cleaned)) {
 		log.Printf("[DM Analyzer] Invalid JSON after initial cleaning, attempting repair...")
 		cleaned = tryRepairTruncatedJSON(cleaned)
-		
+
 		if !json.Valid([]byte(cleaned)) {
 			// Пробуем более агрессивную очистку
 			cleaned = aggressiveJSONClean(cleaned)
-			
+
 			if !json.Valid([]byte(cleaned)) {
 				// Логируем проблемный ответ для анализа
 				log.Printf("[DM Analyzer] Failed to parse JSON after all repair attempts")
 				log.Printf("[DM Analyzer] Cleaned JSON (length: %d): %s", len(cleaned), cleaned)
-				
+
 				// Возвращаем пустой анализ вместо ошибки (fallback механизм)
 				// Это позволяет системе продолжать работать даже при проблемах с парсингом
 				log.Printf("[DM Analyzer] Returning empty analysis as fallback")
@@ -177,7 +178,7 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 		// Логируем ошибку парсинга для анализа
 		log.Printf("[DM Analyzer] Failed to unmarshal JSON: %v", err)
 		log.Printf("[DM Analyzer] Cleaned JSON that failed to parse: %s", cleaned)
-		
+
 		// Возвращаем пустой анализ вместо ошибки (fallback механизм)
 		log.Printf("[DM Analyzer] Returning empty analysis as fallback")
 		return &DMResponseAnalysis{}, nil
@@ -242,11 +243,11 @@ func (uc *AnalyzeDMResponseUseCase) handleCombatStart(
 	// Создаем новый бой
 	newCombat := &combat.Combat{
 		GameSessionID: uc.sessionID,
-		State:          combat.CombatStateNotStarted,
+		State:         combat.CombatStateNotStarted,
 		Participants:  make([]combat.CombatParticipant, 0),
-		CurrentTurn:    0,
-		CreatedAt:      time.Now(),
-		UpdatedAt:      time.Now(),
+		CurrentTurn:   0,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 
 	// Добавляем игрока
@@ -259,14 +260,36 @@ func (uc *AnalyzeDMResponseUseCase) handleCombatStart(
 
 	// Добавляем врагов
 	for _, enemy := range enemies {
+		// Используем значения по умолчанию, если HP или другие параметры не указаны или равны 0
+		hp := enemy.HP
+		if hp <= 0 {
+			hp = 10 // Значение по умолчанию для HP монстра
+		}
+
+		ac := enemy.AC
+		if ac <= 0 {
+			ac = 12 // Значение по умолчанию для AC монстра
+		}
+
+		attackBonus := enemy.AttackBonus
+		if attackBonus < 0 {
+			attackBonus = 2 // Значение по умолчанию для бонуса атаки
+		}
+
+		// Пропускаем врагов без имени
+		if enemy.Name == "" {
+			log.Printf("[DM Analyzer] Skipping enemy without name (HP: %d, AC: %d)", enemy.HP, enemy.AC)
+			continue
+		}
+
 		enemyParticipant := combat.CombatParticipant{
-			IsPlayer:       false,
-			MonsterName:    enemy.Name,
-			MonsterHP:      enemy.HP,
-			MonsterMaxHP:   enemy.HP,
-			MonsterAC:      enemy.AC,
-			MonsterAttackBonus: enemy.AttackBonus,
-			CreatedAt:      time.Now(),
+			IsPlayer:           false,
+			MonsterName:        enemy.Name,
+			MonsterHP:          hp,
+			MonsterMaxHP:       hp,
+			MonsterAC:          ac,
+			MonsterAttackBonus: attackBonus,
+			CreatedAt:          time.Now(),
 		}
 		newCombat.Participants = append(newCombat.Participants, enemyParticipant)
 	}
@@ -471,6 +494,9 @@ func buildAnalysisPrompt(dmResponse string) string {
 - Не добавляй объяснения или комментарии
 - Убедись, что все строки в кавычках, все числа без кавычек, все булевы значения - true/false
 - Убедись, что все скобки и массивы закрыты
+- ОБЯЗАТЕЛЬНО заверши JSON полностью - все открывающие скобки { должны быть закрыты }, все массивы [ должны быть закрыты ]
+- Если не можешь завершить JSON полностью, верни пустой JSON объект {}
+- НЕ обрезай JSON в середине структуры - если не хватает места, верни сокращенную но полную структуру
 
 Пример правильного ответа:
 {"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[]}`, dmResponse)
@@ -479,7 +505,7 @@ func buildAnalysisPrompt(dmResponse string) string {
 // cleanJSONResponse очищает ответ LLM от markdown блоков кода и лишнего текста
 func cleanJSONResponse(raw string) string {
 	raw = strings.TrimSpace(raw)
-	
+
 	// Удаляем markdown блоки кода
 	if strings.HasPrefix(raw, "```json") {
 		raw = strings.TrimPrefix(raw, "```json")
@@ -488,23 +514,23 @@ func cleanJSONResponse(raw string) string {
 		raw = strings.TrimPrefix(raw, "```")
 		raw = strings.TrimSpace(raw)
 	}
-	
+
 	// Удаляем закрывающий markdown блок
 	raw = strings.TrimSuffix(raw, "```")
 	raw = strings.TrimSpace(raw)
-	
+
 	// Удаляем текст до первого { (если есть префиксный текст)
 	firstBrace := strings.Index(raw, "{")
 	if firstBrace > 0 {
 		raw = raw[firstBrace:]
 	}
-	
+
 	// Удаляем текст после последнего } (если есть постфиксный текст)
 	lastBrace := strings.LastIndex(raw, "}")
 	if lastBrace >= 0 && lastBrace < len(raw)-1 {
 		raw = raw[:lastBrace+1]
 	}
-	
+
 	return strings.TrimSpace(raw)
 }
 
@@ -514,26 +540,26 @@ func aggressiveJSONClean(jsonStr string) string {
 	if jsonStr == "" {
 		return "{}"
 	}
-	
+
 	// Удаляем все символы до первого {
 	firstBrace := strings.Index(jsonStr, "{")
 	if firstBrace > 0 {
 		jsonStr = jsonStr[firstBrace:]
 	}
-	
+
 	// Удаляем все символы после последнего }
 	lastBrace := strings.LastIndex(jsonStr, "}")
 	if lastBrace >= 0 && lastBrace < len(jsonStr)-1 {
 		jsonStr = jsonStr[:lastBrace+1]
 	}
-	
+
 	// Удаляем комментарии (однострочные // и многострочные /* */)
 	// Это не стандартный JSON, но иногда LLM добавляет комментарии
 	jsonStr = removeJSONComments(jsonStr)
-	
+
 	// Исправляем незакрытые строки и скобки
 	jsonStr = tryRepairTruncatedJSON(jsonStr)
-	
+
 	return strings.TrimSpace(jsonStr)
 }
 

@@ -450,3 +450,164 @@ func TestCombatRepository_ContextTimeout(t *testing.T) {
 		}
 	})
 }
+
+// TestCombatRepository_PreloadStats проверяет, что Stats загружаются через Preload (#64)
+func TestCombatRepository_PreloadStats(t *testing.T) {
+	db := setupCombatTestDB(t)
+	repo := NewCombatRepository(db)
+	ctx := context.Background()
+
+	t.Run("GetActiveBySessionID preloads Character.Stats", func(t *testing.T) {
+		// Создаем сессию
+		w := &world.World{Name: "Stats World", Description: "Stats"}
+		if err := db.Create(w).Error; err != nil {
+			t.Fatalf("Failed to create world: %v", err)
+		}
+
+		gs := &session.GameSession{ChatID: 99999, State: session.StateActive, WorldID: w.ID}
+		if err := db.Create(gs).Error; err != nil {
+			t.Fatalf("Failed to create session: %v", err)
+		}
+
+		// Создаем персонажа с Stats
+		char := &character.Character{
+			Name:   "Stats Character",
+			Race:   character.RaceHuman,
+			Class:  character.ClassFighter,
+			Level:  1,
+			HP:     20,
+			MaxHP:  20,
+			Status: character.StatusAlive,
+			Stats: character.Stats{
+				Strength:     16,
+				Dexterity:    14,
+				Constitution: 15,
+				Intelligence: 12,
+				Wisdom:       13,
+				Charisma:     10,
+			},
+		}
+		if err := db.Create(char).Error; err != nil {
+			t.Fatalf("Failed to create character: %v", err)
+		}
+
+		// Создаем активный бой
+		c := &combat.Combat{
+			GameSessionID: gs.ID,
+			State:         combat.CombatStateActive,
+			CurrentTurn:   0,
+			Participants: []combat.CombatParticipant{
+				{
+					IsPlayer:    true,
+					CharacterID: &char.ID,
+					Character:   char,
+					Initiative:  15,
+				},
+			},
+		}
+		if err := db.Create(c).Error; err != nil {
+			t.Fatalf("Failed to create combat: %v", err)
+		}
+
+		// Тестируем получение - Stats должны быть загружены через Preload
+		result, err := repo.GetActiveBySessionID(ctx, gs.ID)
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected combat, got nil")
+		}
+		if len(result.Participants) != 1 {
+			t.Fatalf("Expected 1 participant, got: %d", len(result.Participants))
+		}
+		if result.Participants[0].Character == nil {
+			t.Fatal("Expected Character to be loaded")
+		}
+		if result.Participants[0].Character.Stats.Strength == 0 {
+			t.Error("Expected Stats.Strength to be loaded via Preload, got 0")
+		}
+		if result.Participants[0].Character.Stats.Strength != 16 {
+			t.Errorf("Expected Stats.Strength 16, got: %d", result.Participants[0].Character.Stats.Strength)
+		}
+		if result.Participants[0].Character.Stats.Dexterity != 14 {
+			t.Errorf("Expected Stats.Dexterity 14, got: %d", result.Participants[0].Character.Stats.Dexterity)
+		}
+	})
+
+	t.Run("GetByID preloads Character.Stats", func(t *testing.T) {
+		// Создаем сессию
+		w := &world.World{Name: "Stats World 2", Description: "Stats 2"}
+		if err := db.Create(w).Error; err != nil {
+			t.Fatalf("Failed to create world: %v", err)
+		}
+
+		gs := &session.GameSession{ChatID: 88888, State: session.StateActive, WorldID: w.ID}
+		if err := db.Create(gs).Error; err != nil {
+			t.Fatalf("Failed to create session: %v", err)
+		}
+
+		// Создаем персонажа с Stats
+		char := &character.Character{
+			Name:   "Stats Character 2",
+			Race:   character.RaceElf,
+			Class:  character.ClassWizard,
+			Level:  3,
+			HP:     25,
+			MaxHP:  25,
+			Status: character.StatusAlive,
+			Stats: character.Stats{
+				Strength:     10,
+				Dexterity:    16,
+				Constitution: 12,
+				Intelligence: 18,
+				Wisdom:       15,
+				Charisma:     14,
+			},
+		}
+		if err := db.Create(char).Error; err != nil {
+			t.Fatalf("Failed to create character: %v", err)
+		}
+
+		// Создаем бой
+		c := &combat.Combat{
+			GameSessionID: gs.ID,
+			State:         combat.CombatStateActive,
+			CurrentTurn:   0,
+			Participants: []combat.CombatParticipant{
+				{
+					IsPlayer:    true,
+					CharacterID: &char.ID,
+					Character:   char,
+					Initiative:  20,
+				},
+			},
+		}
+		if err := db.Create(c).Error; err != nil {
+			t.Fatalf("Failed to create combat: %v", err)
+		}
+
+		// Тестируем получение по ID - Stats должны быть загружены через Preload
+		result, err := repo.GetByID(ctx, c.ID)
+		if err != nil {
+			t.Fatalf("Expected no error, got: %v", err)
+		}
+		if result == nil {
+			t.Fatal("Expected combat, got nil")
+		}
+		if len(result.Participants) != 1 {
+			t.Fatalf("Expected 1 participant, got: %d", len(result.Participants))
+		}
+		if result.Participants[0].Character == nil {
+			t.Fatal("Expected Character to be loaded")
+		}
+		if result.Participants[0].Character.Stats.Intelligence == 0 {
+			t.Error("Expected Stats.Intelligence to be loaded via Preload, got 0")
+		}
+		if result.Participants[0].Character.Stats.Intelligence != 18 {
+			t.Errorf("Expected Stats.Intelligence 18, got: %d", result.Participants[0].Character.Stats.Intelligence)
+		}
+		if result.Participants[0].Character.Stats.Dexterity != 16 {
+			t.Errorf("Expected Stats.Dexterity 16, got: %d", result.Participants[0].Character.Stats.Dexterity)
+		}
+	})
+}

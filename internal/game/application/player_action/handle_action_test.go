@@ -12,6 +12,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
+	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
@@ -239,8 +240,27 @@ func (m *mockWorldEventRepo) Save(ctx context.Context, e *world.WorldEvent) erro
 	return nil
 }
 
+// Mock Inventory Repository
+type mockInventoryRepo struct {
+	getByCharacterIDFunc func(ctx context.Context, characterID uint) (*inventory.Inventory, error)
+	saveFunc             func(ctx context.Context, inv *inventory.Inventory) error
+}
+
+func (m *mockInventoryRepo) GetByCharacterID(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
+	if m.getByCharacterIDFunc != nil {
+		return m.getByCharacterIDFunc(ctx, characterID)
+	}
+	return nil, nil
+}
+
+func (m *mockInventoryRepo) Save(ctx context.Context, inv *inventory.Inventory) error {
+	if m.saveFunc != nil {
+		return m.saveFunc(ctx, inv)
+	}
+	return nil
+}
+
 // Mock Check World Events Use Case - используем реальный use case с моковым репозиторием
-// mockInventoryRepo определен в action_validator_test.go (общий для пакета)
 func newMockCheckWorldEventsUC() *worldeventapp.CheckWorldEventsUseCase {
 	repo := &mockWorldEventRepo{}
 	return worldeventapp.NewCheckWorldEventsUseCase(repo)
@@ -659,7 +679,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 			eventRepo := &mockEventRepo{}
 			worldEventRepo := &mockWorldEventRepo{}
 
-			validator := NewActionValidator(nil)
+			validator := NewActionValidator()
 			if tt.setupMocks != nil {
 				tt.setupMocks(llm, sessionRepo, ctxBuilder, eventRepo, validator)
 			}
@@ -813,7 +833,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 			eventRepo := &mockEventRepo{}
 			worldEventRepo := &mockWorldEventRepo{}
 
-			validator := NewActionValidator(nil)
+			validator := NewActionValidator()
 			if tt.setupMocks != nil {
 				tt.setupMocks(llm, sessionRepo, ctxBuilder, eventRepo, validator, tt.characterStats)
 			}

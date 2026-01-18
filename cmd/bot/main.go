@@ -24,6 +24,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
+	"dungeons-and-dragons-ai/internal/game/domain/feedback"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/item"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
@@ -204,12 +205,13 @@ func main() {
 	combatRepo := persistence.NewCombatRepository(db)
 	questRepo := persistence.NewQuestRepository(db)
 	worldEventRepo := persistence.NewWorldEventRepository(db)
+	feedbackRepo := persistence.NewFeedbackRepository(db)
 
 	// Инициализация кэша ответов DM (TTL 1 час)
 	responseCache := dmcache.NewDMResponseCache(1 * time.Hour)
 
 	// Инициализация валидатора действий
-	actionValidator := player_action.NewActionValidator(inventoryRepo)
+	actionValidator := player_action.NewActionValidator()
 
 	// Инициализация use cases
 	initCampaignUC := campaign.NewInitCampaignUseCase(llm, worldRepo)
@@ -229,7 +231,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getMapUC, sessionRepo)
+	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getMapUC, sessionRepo, combatRepo, feedbackRepo)
 	if err != nil {
 		logger.Fatal("Failed to create bot",
 			logger.ErrorField(err),
@@ -365,6 +367,7 @@ func runMigrations(db *gorm.DB) error {
 		&combat.CombatParticipant{},
 		&item.Item{},
 		&quest.Quest{},
+		&feedback.Feedback{},
 	)
 }
 

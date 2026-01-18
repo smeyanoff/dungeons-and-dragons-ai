@@ -14,6 +14,7 @@ import (
 	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
+	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
@@ -114,7 +115,11 @@ type QuestRepository interface {
 	Save(ctx context.Context, q *quest.Quest) error
 }
 
-// InventoryRepository определен в action_validator.go (общий интерфейс)
+// InventoryRepository интерфейс для работы с инвентарем
+type InventoryRepository interface {
+	GetByCharacterID(ctx context.Context, characterID uint) (*inventory.Inventory, error)
+	Save(ctx context.Context, inv *inventory.Inventory) error
+}
 
 func NewHandleActionUseCase(
 	llm domain.LLM,
@@ -493,6 +498,8 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 		registry.Register(dm_tools.NewGetInventoryTool(uc.inventoryRepo, player.CharacterID))
 		registry.Register(dm_tools.NewAddItemTool(uc.inventoryRepo, player.CharacterID))
 		registry.Register(dm_tools.NewRemoveItemTool(uc.inventoryRepo, player.CharacterID))
+		// Регистрируем инструменты для валидации действий
+		registry.Register(dm_tools.NewValidateItemUsageTool(uc.inventoryRepo, player.CharacterID))
 	}
 	
 	// Регистрируем инструменты для работы с характеристиками персонажа
@@ -502,6 +509,8 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 		registry.Register(dm_tools.NewRequestAbilityCheckTool(uc.sessionRepo, gs.ChatID))
 		registry.Register(dm_tools.NewRequestSavingThrowTool(uc.sessionRepo, gs.ChatID))
 		registry.Register(dm_tools.NewEvaluateCheckTool(uc.sessionRepo, gs.ChatID))
+		// Регистрируем инструмент для проверки требований к характеристикам
+		registry.Register(dm_tools.NewCheckStatRequirementsTool(uc.sessionRepo, gs.ChatID))
 	}
 	
 	// Регистрируем инструменты для работы с боем
