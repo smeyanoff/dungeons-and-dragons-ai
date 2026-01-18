@@ -1,16 +1,18 @@
 package embeddings
 
 import (
-	"dungeons-and-dragons-ai/pkg/gigachat"
+	"context"
+	"errors"
 
 	"dungeons-and-dragons-ai/internal/rag/domain"
+	"dungeons-and-dragons-ai/pkg/gigachat"
 )
 
 type GigachatEmbedder struct {
 	client *gigachat.Client
 }
 
-func NewGigachatEmbedder(client *gigachat.Client) *GigachatEmbedder {
+func NewGigachatEmbedder(client *gigachat.Client) domain.Embedder {
 	return &GigachatEmbedder{
 		client: client,
 	}

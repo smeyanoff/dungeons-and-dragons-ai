@@ -6,9 +6,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 )
 
-const defaultEmbeddingModel = "GigaChat-Embeddings"
+const defaultEmbeddingModel = "Embeddings"
+
+// getEmbeddingModel возвращает название модели эмбеддингов из переменной окружения
+// или значение по умолчанию. Доступные модели: "Embeddings", "EmbeddingsGigaR"
+func getEmbeddingModel() string {
+	if model := os.Getenv("GIGACHAT_EMBEDDINGS_MODEL"); model != "" {
+		return model
+	}
+	return defaultEmbeddingModel
+}
 
 func (c *Client) Embed(
 	ctx context.Context,
@@ -27,7 +37,7 @@ func (c *Client) EmbedBatch(
 ) ([][]float32, error) {
 
 	reqBody := EmbeddingRequest{
-		Model: defaultEmbeddingModel,
+		Model: getEmbeddingModel(),
 		Input: texts,
 	}
 

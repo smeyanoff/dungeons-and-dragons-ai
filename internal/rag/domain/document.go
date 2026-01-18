@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 type SourceType string
 
 const (
@@ -15,4 +17,5 @@ type Document struct {
 	Source    SourceType
 	SessionID uint
 	Text      string
+	Timestamp time.Time // Временная метка для сортировки по времени
 }

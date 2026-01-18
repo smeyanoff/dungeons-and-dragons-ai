@@ -3,21 +3,37 @@ package gigachat
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"time"
 )
 
 type Client struct {
-	auth *authClient
-	cfg  Config
+	auth   *authClient
+	cfg    Config
+	client *http.Client
 }
 
 func NewClient(cfg Config) *Client {
 	return &Client{
 		auth: newAuthClient(cfg),
 		cfg:  cfg,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        100,
+				IdleConnTimeout:     90 * time.Second,
+				TLSHandshakeTimeout: 10 * time.Second,
+			},
+		},
 	}
+}
+
+// GetToken получает токен доступа для проверки credentials
+// Публичный метод для валидации credentials при старте приложения
+func (c *Client) GetToken(ctx context.Context) (string, error) {
+	return c.auth.getToken(ctx)
 }
 
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
@@ -34,5 +50,37 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 
-	return http.DefaultClient.Do(req)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Если получили 401 Unauthorized, токен мог истек - пробуем обновить и повторить запрос
+	if resp.StatusCode == 401 {
+		resp.Body.Close() // Закрываем предыдущий ответ
+
+		// Инвалидируем старый токен
+		c.auth.invalidateToken()
+
+		// Получаем новый токен
+		newToken, err := c.auth.getToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to refresh token after 401: %w", err)
+		}
+
+		log.Printf("GigaChat: Token was invalid (401), refreshed and retrying request")
+
+		// Повторяем запрос с новым токеном
+		req, err = http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+newToken)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+
+		return c.client.Do(req)
+	}
+
+	return resp, nil
 }

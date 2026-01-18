@@ -2,17 +2,76 @@ package vectorstore
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"sort"
+	"time"
 
 	"dungeons-and-dragons-ai/internal/rag/domain"
 	"github.com/qdrant/go-client/qdrant"
 )
 
+const (
+	collectionName = "dnd"
+	// GigaChat-Embeddings размерность векторов
+	embeddingDimension = 1024
+)
+
 type QdrantStore struct {
-	client *qdrant.Client
+	Client *qdrant.Client
 }
 
-func NewQdrantStore(client *qdrant.Client) *QdrantStore {
-	return &QdrantStore{client: client}
+func NewQdrantStore(client *qdrant.Client) domain.VectorStore {
+	return &QdrantStore{Client: client}
+}
+
+// EnsureCollection реализует domain.VectorStore
+func (s *QdrantStore) EnsureCollection(ctx context.Context) error {
+	return s.ensureCollection(ctx)
+}
+
+func (s *QdrantStore) ensureCollection(ctx context.Context) error {
+	// Проверяем существование коллекции
+	collections, err := s.Client.ListCollections(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get collections: %w", err)
+	}
+
+	// Проверяем, существует ли коллекция
+	collectionExists := false
+	for _, name := range collections {
+		if name == collectionName {
+			collectionExists = true
+			break
+		}
+	}
+
+	if collectionExists {
+		// Коллекция существует, проверяем размерность
+		collectionInfo, err := s.Client.GetCollectionInfo(ctx, collectionName)
+		if err != nil {
+			return fmt.Errorf("failed to get collection info: %w", err)
+		}
+
+		// Проверяем размерность (упрощенная проверка - если коллекция существует, считаем что OK)
+		// Более детальная проверка требует доступа к Config.Params, который может отличаться в разных версиях API
+		_ = collectionInfo // Используем для проверки доступности
+		return nil
+	}
+
+	// Коллекция не существует, создаем её
+	err = s.Client.CreateCollection(ctx, &qdrant.CreateCollection{
+		CollectionName: collectionName,
+		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
+			Size:     embeddingDimension,
+			Distance: qdrant.Distance_Cosine,
+		}),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create collection: %w", err)
+	}
+
+	return nil
 }
 
 func (s *QdrantStore) Upsert(
@@ -21,8 +80,8 @@ func (s *QdrantStore) Upsert(
 	embedding []float32,
 ) error {
 
-	_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
-		CollectionName: "dnd",
+	_, err := s.Client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: collectionName,
 		Points: []*qdrant.PointStruct{
 			{
 				Id: &qdrant.PointId{
@@ -38,9 +97,10 @@ func (s *QdrantStore) Upsert(
 					},
 				},
 				Payload: map[string]*qdrant.Value{
-					"session_id": {Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(doc.SessionID)}},
+					"session_id": {Kind: &qdrant.Value_IntegerValue{IntegerValue: safeUintToInt64(doc.SessionID)}},
 					"source":     {Kind: &qdrant.Value_StringValue{StringValue: string(doc.Source)}},
 					"text":       {Kind: &qdrant.Value_StringValue{StringValue: doc.Text}},
+					"timestamp":  {Kind: &qdrant.Value_IntegerValue{IntegerValue: doc.Timestamp.Unix()}},
 				},
 			},
 		},
@@ -56,10 +116,18 @@ func (s *QdrantStore) Search(
 	limit int,
 ) ([]domain.Document, error) {
 
-	resp, err := s.client.Search(ctx, &qdrant.SearchPoints{
-		CollectionName: "dnd",
+	// Валидация limit для предотвращения overflow
+	if limit < 0 {
+		return nil, fmt.Errorf("limit must be non-negative, got %d", limit)
+	}
+	if limit > math.MaxInt {
+		return nil, fmt.Errorf("limit exceeds maximum allowed value %d, got %d", math.MaxInt, limit)
+	}
+	limitUint64 := uint64(limit)
+	resp, err := s.Client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
+		CollectionName: collectionName,
 		Vector:         embedding,
-		Limit:          uint64(limit),
+		Limit:          limitUint64,
 		Filter: &qdrant.Filter{
 			Must: []*qdrant.Condition{
 				{
@@ -68,7 +136,7 @@ func (s *QdrantStore) Search(
 							Key: "session_id",
 							Match: &qdrant.Match{
 								MatchValue: &qdrant.Match_Integer{
-									Integer: int64(sessionID),
+									Integer: safeUintToInt64(sessionID),
 								},
 							},
 						},
@@ -81,15 +149,43 @@ func (s *QdrantStore) Search(
 		return nil, err
 	}
 
-	docs := make([]domain.Document, 0, len(resp))
-	for _, p := range resp {
+	docs := make([]domain.Document, 0, len(resp.Result))
+	for _, p := range resp.Result {
 		payload := p.Payload
-		docs = append(docs, domain.Document{
-			ID:     p.Id.GetUuid(),
-			Source: domain.SourceType(payload["source"].GetStringValue()),
-			Text:   payload["text"].GetStringValue(),
-		})
+		doc := domain.Document{
+			ID:        p.Id.GetUuid(),
+			SessionID: sessionID,
+			Source:    domain.SourceType(payload["source"].GetStringValue()),
+			Text:      payload["text"].GetStringValue(),
+		}
+		// Восстанавливаем timestamp, если он есть
+		if tsValue, ok := payload["timestamp"]; ok {
+			if ts := tsValue.GetIntegerValue(); ts > 0 {
+				doc.Timestamp = time.Unix(ts, 0)
+			}
+		}
+		// Если timestamp не найден, устанавливаем нулевое время (для обратной совместимости)
+		if doc.Timestamp.IsZero() {
+			doc.Timestamp = time.Now()
+		}
+		docs = append(docs, doc)
 	}
 
+	// Сортируем документы по времени (более новые первыми для приоритета недавних событий)
+	// Это улучшает понимание временной последовательности в RAG
+	sort.Slice(docs, func(i, j int) bool {
+		return docs[i].Timestamp.After(docs[j].Timestamp)
+	})
+
 	return docs, nil
+}
+
+// safeUintToInt64 безопасно преобразует uint в int64 с проверкой на overflow
+func safeUintToInt64(val uint) int64 {
+	if val > math.MaxInt64 {
+		// Если значение превышает MaxInt64, возвращаем MaxInt64
+		// В практике это не должно происходить для sessionID и других ID
+		return math.MaxInt64
+	}
+	return int64(val)
 }

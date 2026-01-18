@@ -7,11 +7,11 @@ import (
 )
 
 type RetrieveContext struct {
-	embedder Embedder
-	store    VectorStore
+	embedder domain.Embedder
+	store    domain.VectorStore
 }
 
-func NewRetrieveContext(e Embedder, s VectorStore) *RetrieveContext {
+func NewRetrieveContext(e domain.Embedder, s domain.VectorStore) *RetrieveContext {
 	return &RetrieveContext{embedder: e, store: s}
 }
 
