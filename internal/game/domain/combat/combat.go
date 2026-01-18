@@ -373,6 +373,8 @@ func (cp *CombatParticipant) GetName() string {
 
 // GetInitiativeOrderMessage возвращает текстовое сообщение с порядком ходов по инициативе
 // Формат: "⚔️ Бой начался! Порядок ходов:\n1. [Имя] (инициатива: X)\n2. [Монстр] (инициатива: Y)..."
+// Использует отдельный счетчик для нумерации, чтобы корректно отображать всех участников
+// даже если некоторые мертвы (мертвые участники не отображаются, но нумерация остается корректной)
 func (c *Combat) GetInitiativeOrderMessage() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -384,11 +386,23 @@ func (c *Combat) GetInitiativeOrderMessage() string {
 	var sb strings.Builder
 	sb.WriteString("⚔️ Бой начался! Порядок ходов:\n")
 
-	for i, participant := range c.Participants {
+	// Используем отдельный счетчик для нумерации (1, 2, 3...)
+	// Это гарантирует корректную нумерацию даже если некоторые участники мертвы
+	turnNumber := 1
+	for _, participant := range c.Participants {
+		// Отображаем только живых участников
 		if participant.IsAlive() {
 			name := participant.GetName()
 			initiative := participant.Initiative
-			sb.WriteString(fmt.Sprintf("%d. %s (инициатива: %d)\n", i+1, name, initiative))
+			// Определяем тип участника для лучшего отображения
+			participantType := "👹 Враг"
+			if participant.IsPlayer {
+				if participant.Character != nil {
+					participantType = "👤 Игрок"
+				}
+			}
+			sb.WriteString(fmt.Sprintf("%d. %s %s (инициатива: %d)\n", turnNumber, participantType, name, initiative))
+			turnNumber++
 		}
 	}
 

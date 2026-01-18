@@ -524,6 +524,7 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 				nil, // checkAchievementsUC - optional
 				nil, // notificationService - optional
 				nil, // generateImageUC - optional
+				nil, // useSpellUC - optional
 				nil, // responseCache - optional
 				nil, // actionValidator - optional
 			)
@@ -712,6 +713,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 				nil, // checkAchievementsUC - optional
 				nil, // notificationService - optional
 				nil, // generateImageUC - optional
+				nil, // useSpellUC - optional
 				nil, // responseCache
 				validator,
 			)
@@ -869,6 +871,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				nil, // checkAchievementsUC - optional
 				nil, // notificationService - optional
 				nil, // generateImageUC - optional
+				nil, // useSpellUC - optional
 				nil, // responseCache
 				validator,
 			)

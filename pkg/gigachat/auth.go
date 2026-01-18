@@ -150,7 +150,14 @@ func (a *authClient) getTokenWithRetry(ctx context.Context, clientID, authHeader
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			// Вычисляем exponential backoff: 1s, 2s, 4s
-			backoff := initialBackoff * time.Duration(1<<uint(attempt-1))
+			// Проверяем на overflow перед конвертацией int -> uint
+			// attempt-1 всегда >= 0, так как attempt > 0
+			shift := attempt - 1
+			if shift < 0 || shift > 63 {
+				// Защита от overflow: ограничиваем сдвиг разумными пределами
+				shift = 63 // максимальный безопасный сдвиг для uint64
+			}
+			backoff := initialBackoff * time.Duration(1<<uint(shift))
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}

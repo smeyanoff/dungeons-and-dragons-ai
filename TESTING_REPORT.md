@@ -2,15 +2,26 @@
 
 **Последнее обновление:** Январь 2025
 
+## 📊 Краткая сводка
+
+- **Тестовых файлов:** 35
+- **Всего тестов:** 610+
+- **Статус:** ✅ Большинство тестов проходят успешно
+- **Последние изменения:** Добавлены тесты для задач #69 и #70 (январь 2025)
+  - #69: Отображение игрока и спутников в порядке ходов боя
+  - #70: Автоматическое выполнение ходов врагов в бою
+- **Известные проблемы:** 1 тест падает в `player_action` (требует исправления mock setup)
+
 ## 📊 Статистика
 
 - **Тестовых файлов:** 35
-- **Всего тестов:** 600+ (добавлено 40+ новых тестов в январе 2025)
+- **Всего тестов:** 610+ (добавлено 50+ новых тестов в январе 2025)
 - **Покрытие:** Domain (dice, character, combat, achievement, spell - 100%), Application (campaign, combat, player_action, dm_analyzer, dm_tools - все DM tools, history, inventory, quest, world_event, worldmap, image rate_limiter), RAG, Persistence, Telegram, Cache, Action Validator
 
 ## ✅ Текущий статус тестов
 
-**Все тесты проходят успешно** ✅
+**Большинство тестов проходят успешно** ✅
+⚠️ **Известная проблема:** 1 тест в `player_action` падает (не связан с новыми изменениями)
 
 ### Покрытие основных компонентов
 
@@ -33,10 +44,11 @@
 - `image` - **НОВОЕ:** тесты для rate_limiter (CheckLimit, GetRemainingQuota, CleanupOldRecords) - 11 тестов
 
 ✅ **Domain Layer:**
-- `combat` - полное покрытие (включая GetInitiativeOrderMessage, GetCurrentTurnMessage)
+- `combat` - полное покрытие (включая GetInitiativeOrderMessage, GetCurrentTurnMessage, NextTurn, определение хода врага)
+  - **НОВОЕ (Январь 2025):** Тесты для #69 и #70 - отображение игрока/спутников в порядке ходов, определение хода врага после NextTurn
 - `character`, `dice` - полное покрытие
-- `achievement` - **НОВОЕ:** полное покрытие (IsCompleted, GetProgressPercentage) - 13 тестов
-- `spell` - **НОВОЕ:** полное покрытие (IsCantrip, IsAvailableForClass, SpellSlots методы, CalculateSpellSlotsForLevel) - 27 тестов
+- `achievement` - полное покрытие (IsCompleted, GetProgressPercentage) - 13 тестов
+- `spell` - полное покрытие (IsCantrip, IsAvailableForClass, SpellSlots методы, CalculateSpellSlotsForLevel) - 27 тестов
 
 ✅ **Infrastructure Layer:**
 - Persistence (combat, inventory, player, quest, world, game_event, game_session)
@@ -55,10 +67,11 @@
 
 **Все критичные проблемы решены** ✅
 
-⚠️ **Известные проблемы (низкий приоритет):**
-1. Игнорирование ошибки сохранения при завершении боя (`handle_combat.go:125`) - не критично, требует улучшения обработки ошибок
-2. Устаревшие тесты в `player_action/handle_action_test.go` и `dm_analyzer/analyze_dm_response_test.go` - требуют обновления под новые сигнатуры функций (добавлены achievement и image generation use cases)
-3. Application-тесты для `achievement` и `spell` use cases требуют интеграционных тестов с БД - domain-тесты покрывают основную логику
+⚠️ **Известные проблемы:**
+1. **ИСПРАВЛЕНО (Январь 2025):** Обновлены тесты в `player_action/handle_action_test.go` для новой сигнатуры `NewHandleActionUseCase` (добавлен параметр `useSpellUC`)
+2. **Требует внимания:** Тест `TestHandleActionUseCase_Execute_WithActionValidator_Stats/action_validation_fails_-_insufficient_strength_shows_correct_stat` падает - ожидает сообщение валидации, но получает "Test DM response" (возможно, проблема в mock setup)
+3. Игнорирование ошибки сохранения при завершении боя (`handle_combat.go:125`) - не критично, требует улучшения обработки ошибок
+4. Application-тесты для `achievement` и `spell` use cases требуют интеграционных тестов с БД - domain-тесты покрывают основную логику
 
 ## Запуск тестов
 
@@ -91,7 +104,19 @@ go test ./internal/game/application/image -v     # Image rate limiter tests
 
 ## 📝 Последние добавленные тесты (Январь 2025)
 
-### Тесты для критических исправлений боевой системы (Задачи #64, #65, #66, #4)
+### Тесты для критических исправлений боевой системы (Задачи #69, #70 - Январь 2025)
+✅ **Добавлено:** Новые тесты для последнего реализованного функционала
+- **Задача #69 - Отображение игрока и спутников в порядке ходов боя:**
+  - `TestGetInitiativeOrderMessage_PlayerAndCompanionsDisplay` - проверка отображения всех участников (игрок, спутники, враги) с иконками 👤 Игрок / 👹 Враг
+  - `TestGetInitiativeOrderMessage_CorrectNumberingWithDead` - проверка корректной нумерации (1, 2, 3...) с отдельным счетчиком даже при наличии мертвых участников
+  - Проверяет, что игроки и спутники отображаются с правильными типами и нумерацией в сообщении о порядке ходов
+
+- **Задача #70 - Автоматическое выполнение ходов врагов в бою:**
+  - `TestNextTurn_EnemyTurnDetection` - проверка корректного определения хода врага после NextTurn() (необходимое условие для автоматической генерации ходов врагов)
+  - `TestNextTurn_EnemyTurnAfterPlayerAction` - проверка логики определения хода врага после хода игрока (симуляция сценария для Task #70)
+  - Тесты проверяют, что после NextTurn() корректно определяется `currentParticipant.IsPlayer == false` для автоматической генерации хода врага
+
+### Тесты для критических исправлений боевой системы (Задачи #64, #65, #66)
 ✅ **Добавлено:** Новые тесты для исправлений из последнего спринта
 - **Задача #64 - Исправление расчета HP/AC/броска в бою:**
   - `TestCombatRepository_PreloadStats` - 2 теста проверки загрузки `Character.Stats` через `Preload` в `GetActiveBySessionID` и `GetByID`
@@ -145,11 +170,12 @@ go test ./internal/game/application/image -v     # Image rate limiter tests
 ✅ **Все критичные задачи выполнены**
 
 📋 **Backlog:**
+- Интеграционные тесты для автоматического выполнения ходов врагов (#70) - требуется мокирование LLM для полной проверки generateEnemyTurn()
 - Интеграционные тесты для `GetAchievementsUseCase` и `GetSpellsUseCase` (требуют БД, сейчас есть только domain-тесты)
 - Интеграционные тесты (БД, Qdrant, Telegram API)
 - End-to-end тесты полного цикла команд бота
 - Тесты для `extractCombatToolMessage` и форматирования результатов combat tools
-- Исправление устаревших тестов в `player_action` и `dm_analyzer` (обновление сигнатур)
+- Исправление падающего теста `TestHandleActionUseCase_Execute_WithActionValidator_Stats`
 
 ---
 

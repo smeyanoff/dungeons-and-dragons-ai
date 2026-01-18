@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -484,6 +485,146 @@ func TestGetInitiativeOrderMessage_WithDeadParticipant(t *testing.T) {
 	}
 }
 
+// TestGetInitiativeOrderMessage_PlayerAndCompanionsDisplay - Task #69
+// Проверяет, что игрок и спутники отображаются в порядке ходов с правильными иконками
+func TestGetInitiativeOrderMessage_PlayerAndCompanionsDisplay(t *testing.T) {
+	combat := &Combat{
+		State:       CombatStateActive,
+		CurrentTurn: 0,
+		Participants: []CombatParticipant{
+			createPlayerParticipant("Player 1", 16, 14, 15),
+			createPlayerParticipant("Companion NPC", 14, 12, 13), // Спутник (NPC companion)
+			createMonsterParticipant("Goblin", 10, 12),
+			createMonsterParticipant("Orc", 15, 14),
+		},
+	}
+	
+	// Устанавливаем инициативу вручную для предсказуемости теста
+	combat.Participants[0].Initiative = 20 // Игрок первый
+	combat.Participants[1].Initiative = 15 // Спутник второй
+	combat.Participants[2].Initiative = 12 // Гоблин третий
+	combat.Participants[3].Initiative = 10 // Орк четвертый
+
+	message := combat.GetInitiativeOrderMessage()
+	
+	// Проверяем наличие всех участников
+	if !strings.Contains(message, "Player 1") {
+		t.Error("message should contain player name")
+	}
+	if !strings.Contains(message, "Companion NPC") {
+		t.Error("message should contain companion name")
+	}
+	if !strings.Contains(message, "Goblin") {
+		t.Error("message should contain first enemy name")
+	}
+	if !strings.Contains(message, "Orc") {
+		t.Error("message should contain second enemy name")
+	}
+	
+	// Проверяем наличие иконок типа участника (Task #69)
+	if !strings.Contains(message, "👤 Игрок") {
+		t.Error("message should contain player icon (👤 Игрок)")
+	}
+	if !strings.Contains(message, "👹 Враг") {
+		t.Error("message should contain enemy icon (👹 Враг)")
+	}
+	
+	// Проверяем правильную нумерацию с отдельным счетчиком (1, 2, 3, 4...)
+	// Должна быть последовательная нумерация независимо от индексов массива
+	lines := strings.Split(message, "\n")
+	turnOrderLines := []string{}
+	for _, line := range lines {
+		if strings.Contains(line, "👤 Игрок") || strings.Contains(line, "👹 Враг") {
+			turnOrderLines = append(turnOrderLines, line)
+		}
+	}
+	
+	if len(turnOrderLines) != 4 {
+		t.Errorf("expected 4 participants in turn order, got %d", len(turnOrderLines))
+	}
+	
+	// Проверяем, что нумерация начинается с 1 и последовательна
+	for i, line := range turnOrderLines {
+		expectedNumber := i + 1
+		if !strings.HasPrefix(strings.TrimSpace(line), fmt.Sprintf("%d.", expectedNumber)) {
+			t.Errorf("line %d should start with '%d.', got: %s", i, expectedNumber, line)
+		}
+	}
+}
+
+// TestGetInitiativeOrderMessage_CorrectNumberingWithDead - Task #69
+// Проверяет, что нумерация корректна даже при наличии мертвых участников
+func TestGetInitiativeOrderMessage_CorrectNumberingWithDead(t *testing.T) {
+	combat := &Combat{
+		State:       CombatStateActive,
+		CurrentTurn: 0,
+		Participants: []CombatParticipant{
+			createPlayerParticipant("Player 1", 16, 14, 15),
+			createMonsterParticipant("Dead Goblin", 10, 12), // Мертвый
+			createMonsterParticipant("Orc", 15, 14),         // Живой
+			createMonsterParticipant("Dead Orc", 15, 14),    // Мертвый
+			createPlayerParticipant("Companion", 14, 12, 13), // Живой спутник
+		},
+	}
+	
+	// Устанавливаем инициативу
+	combat.Participants[0].Initiative = 18
+	combat.Participants[1].Initiative = 12
+	combat.Participants[2].Initiative = 15
+	combat.Participants[3].Initiative = 10
+	combat.Participants[4].Initiative = 14
+	
+	// Убиваем некоторых участников
+	combat.Participants[1].MonsterHP = 0 // Dead Goblin
+	combat.Participants[3].MonsterHP = 0 // Dead Orc
+
+	message := combat.GetInitiativeOrderMessage()
+	
+	// Проверяем, что живые участники присутствуют
+	if !strings.Contains(message, "Player 1") {
+		t.Error("message should contain alive player name")
+	}
+	if !strings.Contains(message, "Orc") {
+		t.Error("message should contain alive enemy name")
+	}
+	if !strings.Contains(message, "Companion") {
+		t.Error("message should contain alive companion name")
+	}
+	
+	// Проверяем, что мертвые участники НЕ присутствуют в порядке ходов
+	// (могут быть упомянуты только в текущем ходе, если CurrentTurn указывает на них)
+	if strings.Contains(message, "Dead Goblin") && strings.Contains(message, "инициатива:") {
+		// Если мертвый участник упоминается с инициативой, это ошибка
+		if strings.Contains(message, "Dead Goblin") && strings.Contains(message, "инициатива: 12") {
+			t.Error("dead participant should not appear in turn order list")
+		}
+	}
+	
+	// Проверяем правильную нумерацию (1, 2, 3 для трех живых участников)
+	// Мертвые участники не должны влиять на нумерацию
+	lines := strings.Split(message, "\n")
+	turnOrderLines := []string{}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if (strings.Contains(trimmed, "👤 Игрок") || strings.Contains(trimmed, "👹 Враг")) && strings.Contains(trimmed, "инициатива:") {
+			turnOrderLines = append(turnOrderLines, trimmed)
+		}
+	}
+	
+	expectedLivingParticipants := 3 // Player 1, Orc, Companion
+	if len(turnOrderLines) != expectedLivingParticipants {
+		t.Errorf("expected %d living participants in turn order, got %d. Message: %s", expectedLivingParticipants, len(turnOrderLines), message)
+	}
+	
+	// Проверяем, что нумерация последовательна (1, 2, 3)
+	for i, line := range turnOrderLines {
+		expectedNumber := i + 1
+		if !strings.HasPrefix(line, fmt.Sprintf("%d.", expectedNumber)) {
+			t.Errorf("line %d should start with '%d.', got: %s", i, expectedNumber, line)
+		}
+	}
+}
+
 func TestGetCurrentTurnMessage(t *testing.T) {
 	combat := &Combat{
 		State:       CombatStateActive,
@@ -800,5 +941,111 @@ func TestCombatRaceCondition_MixedOperations(t *testing.T) {
 		if c.Participants[i].GetHP() < 0 {
 			t.Errorf("Participant %d HP should not be negative: %d", i, c.Participants[i].GetHP())
 		}
+	}
+}
+
+// TestNextTurn_EnemyTurnDetection - Task #70
+// Проверяет, что после NextTurn() корректно определяется, является ли текущий ход вражеским
+// Это необходимое условие для автоматического выполнения ходов врагов
+func TestNextTurn_EnemyTurnDetection(t *testing.T) {
+	combat := &Combat{
+		State:       CombatStateActive,
+		CurrentTurn: 0, // Ход игрока
+		Participants: []CombatParticipant{
+			createPlayerParticipant("Player 1", 16, 14, 15),
+			createMonsterParticipant("Goblin", 10, 12),
+			createPlayerParticipant("Companion", 14, 12, 13),
+			createMonsterParticipant("Orc", 15, 14),
+		},
+	}
+
+	// Проверяем, что первый ход - игрок
+	currentParticipant := combat.GetCurrentParticipant()
+	if currentParticipant == nil {
+		t.Fatal("expected participant, got nil")
+	}
+	if !currentParticipant.IsPlayer {
+		t.Error("expected player turn, got enemy turn")
+	}
+
+	// Переходим к следующему ходу (должен быть враг)
+	combat.NextTurn()
+	currentParticipant = combat.GetCurrentParticipant()
+	if currentParticipant == nil {
+		t.Fatal("expected participant after NextTurn, got nil")
+	}
+	
+	// Проверяем, что текущий ход - враг (Task #70: это условие для автоматического выполнения ходов врагов)
+	if currentParticipant.IsPlayer {
+		t.Error("expected enemy turn after NextTurn from player, but got player turn")
+	}
+	if currentParticipant.GetName() != "Goblin" {
+		t.Errorf("expected 'Goblin' as next enemy, got '%s'", currentParticipant.GetName())
+	}
+
+	// Переходим еще раз (должен быть снова игрок/спутник)
+	combat.NextTurn()
+	currentParticipant = combat.GetCurrentParticipant()
+	if currentParticipant == nil {
+		t.Fatal("expected participant, got nil")
+	}
+	
+	// Должен быть спутник (второй игрок)
+	if !currentParticipant.IsPlayer {
+		t.Error("expected player/companion turn, got enemy turn")
+	}
+
+	// Переходим еще раз (должен быть враг - Orc)
+	combat.NextTurn()
+	currentParticipant = combat.GetCurrentParticipant()
+	if currentParticipant == nil {
+		t.Fatal("expected participant, got nil")
+	}
+	
+	if currentParticipant.IsPlayer {
+		t.Error("expected enemy turn (Orc), but got player turn")
+	}
+	if currentParticipant.GetName() != "Orc" {
+		t.Errorf("expected 'Orc' as next enemy, got '%s'", currentParticipant.GetName())
+	}
+}
+
+// TestNextTurn_EnemyTurnAfterPlayerAction - Task #70
+// Проверяет логику определения хода врага после хода игрока
+// Симулирует сценарий, когда после хода игрока следующий ход - враг
+func TestNextTurn_EnemyTurnAfterPlayerAction(t *testing.T) {
+	combat := &Combat{
+		State:       CombatStateActive,
+		CurrentTurn: 0, // Игрок делает ход
+		Participants: []CombatParticipant{
+			createPlayerParticipant("Player 1", 16, 14, 15),
+			createMonsterParticipant("Goblin", 10, 12),
+		},
+	}
+
+	// Игрок делает ход (текущий ход - игрок)
+	currentParticipant := combat.GetCurrentParticipant()
+	if currentParticipant == nil || !currentParticipant.IsPlayer {
+		t.Fatal("expected player turn initially")
+	}
+
+	// После хода игрока переходим к следующему ходу
+	// В реальном коде это происходит в HandleActionUseCase.Execute() после обработки действия игрока
+	combat.NextTurn()
+
+	// Теперь текущий ход должен быть врага (Task #70: условие для автоматической генерации хода врага)
+	currentParticipant = combat.GetCurrentParticipant()
+	if currentParticipant == nil {
+		t.Fatal("expected participant after NextTurn, got nil")
+	}
+
+	// Ключевая проверка для Task #70: следующий ход должен быть врага
+	if currentParticipant.IsPlayer {
+		t.Error("BUG #70: After player turn, next turn should be enemy for automatic enemy turn execution")
+	}
+
+	// Проверяем, что это именно враг
+	if !strings.Contains(currentParticipant.GetName(), "Goblin") {
+		t.Errorf("expected enemy 'Goblin' after player turn, got '%s'", currentParticipant.GetName())
 	}
 }

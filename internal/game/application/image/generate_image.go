@@ -2,7 +2,7 @@ package image
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -71,9 +71,11 @@ func (uc *ImageGenerationUseCase) Execute(ctx context.Context, req GenerateImage
 	if req.EntityID > 0 {
 		filename = fmt.Sprintf("%s_%d.jpg", req.Type, req.EntityID)
 	} else {
-		// Для кастомных изображений используем хэш промпта
-		hash := md5.Sum([]byte(req.UserPrompt))
-		filename = fmt.Sprintf("%s_%s_%s.jpg", req.Type, hex.EncodeToString(hash[:8]), time.Now().Format("20060102"))
+		// Для кастомных изображений используем SHA256 хэш промпта
+		// Используем SHA256 вместо MD5 для более безопасного хэширования
+		hash := sha256.Sum256([]byte(req.UserPrompt))
+		// Используем первые 16 байт (32 hex символа) из SHA256 хэша для имени файла
+		filename = fmt.Sprintf("%s_%s_%s.jpg", req.Type, hex.EncodeToString(hash[:16]), time.Now().Format("20060102"))
 	}
 
 	// Проверяем кэш, если не требуется принудительная регенерация

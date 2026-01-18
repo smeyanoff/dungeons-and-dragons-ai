@@ -3,6 +3,7 @@ package dice
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -136,5 +137,15 @@ func secureRandomInt(max int) int {
 	// Используем модульную арифметику для получения значения в диапазоне [0, max)
 	// Для избежания bias используем метод отклонения
 	// Упрощенная версия: просто используем модуль (для малых max это приемлемо)
-	return int(randomValue % uint64(max))
+	result := randomValue % uint64(max)
+	
+	// Проверяем на overflow перед конвертацией uint64 -> int
+	// В Go int может быть 32 или 64 бит, но для безопасности проверяем
+	// max обычно мал (например, 20 для d20), поэтому overflow маловероятен,
+	// но для безопасности проверяем против math.MaxInt (работает для обеих платформ)
+	if result > uint64(math.MaxInt) {
+		// Если результат превышает MaxInt, возвращаем 0 (не должно происходить для обычных dice)
+		return 0
+	}
+	return int(result)
 }

@@ -18,6 +18,8 @@ import (
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
+	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
+	"dungeons-and-dragons-ai/internal/game/domain/subscription"
 	mapapp 	"dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
@@ -49,7 +51,10 @@ type Bot struct {
 	getMapUC          *mapapp.GetMapUseCase
 	getAchievementsUC *achievementapp.GetAchievementsUseCase
 	getSpellsUC       *spellapp.GetSpellsUseCase
+	useSpellUC        *spellapp.UseSpellUseCase
 	generateImageUC   *imageapp.ImageGenerationUseCase
+	getSubscriptionUC *subscriptionapp.GetSubscriptionUseCase
+	checkLimitsUC     *subscriptionapp.CheckLimitsUseCase
 	sessionRepo       session.Repository
 	combatRepo        CombatRepository
 	feedbackRepo      FeedbackRepository
@@ -80,7 +85,10 @@ func NewBot(
 	getMapUC *mapapp.GetMapUseCase,
 	getAchievementsUC *achievementapp.GetAchievementsUseCase,
 	getSpellsUC *spellapp.GetSpellsUseCase,
+	useSpellUC *spellapp.UseSpellUseCase,
 	generateImageUC *imageapp.ImageGenerationUseCase,
+	getSubscriptionUC *subscriptionapp.GetSubscriptionUseCase,
+	checkLimitsUC *subscriptionapp.CheckLimitsUseCase,
 	sessionRepo session.Repository,
 	combatRepo CombatRepository,
 	feedbackRepo FeedbackRepository,
@@ -104,7 +112,10 @@ func NewBot(
 		getMapUC:          getMapUC,
 		getAchievementsUC: getAchievementsUC,
 		getSpellsUC:       getSpellsUC,
+		useSpellUC:        useSpellUC,
 		generateImageUC:   generateImageUC,
+		getSubscriptionUC: getSubscriptionUC,
+		checkLimitsUC:     checkLimitsUC,
 		sessionRepo:       sessionRepo,
 		combatRepo:        combatRepo,
 		feedbackRepo:      feedbackRepo,
@@ -135,6 +146,9 @@ func (b *Bot) setupBotCommands() error {
 		{Command: "battlefield", Description: "Показать поле боя"},
 		{Command: "abilities", Description: "Способности персонажа"},
 		{Command: "spells", Description: "Просмотр заклинаний"},
+		{Command: "cast", Description: "Использовать заклинание"},
+		{Command: "subscription", Description: "Информация о подписке"},
+		{Command: "subscribe", Description: "Оформить подписку"},
 		{Command: "roll", Description: "Бросить кубик"},
 		{Command: "history", Description: "История игры"},
 		{Command: "quests", Description: "Активные квесты"},
@@ -260,8 +274,14 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleAchievements(ctx, chatID, tgUserID)
 		case "spells":
 			return b.handleSpells(ctx, chatID, tgUserID)
+		case "cast":
+			return b.handleCast(ctx, chatID, tgUserID, args)
 		case "image":
 			return b.handleImage(ctx, chatID, tgUserID, args)
+		case "subscribe":
+			return b.handleSubscribe(ctx, chatID, tgUserID, args)
+		case "subscription":
+			return b.handleSubscription(ctx, chatID, tgUserID)
 		case "flee", "run":
 		return b.handleFlee(ctx, chatID)
 	case "feedback":
@@ -314,6 +334,7 @@ func (b *Bot) handleHelp(ctx context.Context, chatID int64) error {
 /flee - попытаться выйти из боя (во время боя)
 /abilities [filter] - показать способности персонажа (filter: all/spells/feats/class)
 /spells - показать заклинания персонажа
+/cast <название> [цель] - использовать заклинание (например: /cast Огненный снаряд)
 /feedback <текст> - отправить отзыв о игре
 
 💡 После начала игры просто пишите мне, что хотите сделать, и я буду описывать что происходит!`
@@ -1093,11 +1114,207 @@ func (b *Bot) handleSpells(ctx context.Context, chatID int64, tgUserID int64) er
 	return b.sendLongMessage(chatID, spellsText)
 }
 
+// handleCast обрабатывает команду /cast для использования заклинания
+func (b *Bot) handleCast(ctx context.Context, chatID int64, tgUserID int64, args string) error {
+	if b.useSpellUC == nil {
+		msg := tgbotapi.NewMessage(chatID, "Система использования заклинаний временно недоступна.")
+		return b.sendMessage(msg)
+	}
+
+	// Парсим аргументы: /cast <название_заклинания> [цель]
+	parts := strings.Fields(args)
+	if len(parts) == 0 {
+		msg := tgbotapi.NewMessage(chatID, `✨ Использование заклинания
+
+Используйте команду:
+/cast <название_заклинания> [цель]
+
+Примеры:
+/cast Огненный снаряд
+/cast Лечение ран
+/cast Магическая стрела goblin
+
+Используйте /spells для просмотра доступных заклинаний.`)
+		return b.sendMessage(msg)
+	}
+
+	spellName := parts[0]
+	target := ""
+	if len(parts) > 1 {
+		target = strings.Join(parts[1:], " ")
+	}
+
+	req := spellapp.UseSpellRequest{
+		ChatID:    chatID,
+		TgUserID:  tgUserID,
+		SpellName: spellName,
+		Target:    target,
+	}
+
+	resp, err := b.useSpellUC.Execute(ctx, req)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при использовании заклинания: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	if !resp.Success {
+		errorMsg := tgbotapi.NewMessage(chatID, resp.Message)
+		return b.sendMessage(errorMsg)
+	}
+
+	return b.sendLongMessage(chatID, resp.Message)
+}
+
+// handleSubscription обрабатывает команду /subscription для просмотра информации о подписке
+func (b *Bot) handleSubscription(ctx context.Context, chatID int64, tgUserID int64) error {
+	if b.getSubscriptionUC == nil {
+		msg := tgbotapi.NewMessage(chatID, "Система подписок временно недоступна.")
+		return b.sendMessage(msg)
+	}
+
+	req := subscriptionapp.GetSubscriptionRequest{
+		TgUserID: tgUserID,
+	}
+
+	resp, err := b.getSubscriptionUC.Execute(ctx, req)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении информации о подписке: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	// Формируем подробное сообщение о подписке
+	var message strings.Builder
+	message.WriteString(resp.Message)
+	message.WriteString("\n\n")
+	
+	details := resp.PlanDetails
+	message.WriteString(fmt.Sprintf("📋 Тариф: %s\n", details.Name))
+	
+	if details.Price > 0 {
+		message.WriteString(fmt.Sprintf("💰 Цена: %d₽/мес\n", details.Price))
+	}
+	
+	message.WriteString("\n📊 Лимиты:\n")
+	if details.MaxActiveGames == 0 {
+		message.WriteString("  ✅ Активных игр: безлимит\n")
+	} else {
+		message.WriteString(fmt.Sprintf("  📝 Активных игр: %d\n", details.MaxActiveGames))
+	}
+	
+	if details.MaxMessagesPerDay == 0 {
+		message.WriteString("  ✅ Сообщений/день: безлимит\n")
+	} else {
+		message.WriteString(fmt.Sprintf("  💬 Сообщений/день: %d\n", details.MaxMessagesPerDay))
+	}
+	
+	if details.MaxImagesPerDay == 0 {
+		message.WriteString("  ✅ Изображений/день: безлимит\n")
+	} else {
+		message.WriteString(fmt.Sprintf("  🖼️ Изображений/день: %d\n", details.MaxImagesPerDay))
+	}
+	
+	if details.MaxSaves == 0 {
+		message.WriteString("  ✅ Сохранений: безлимит\n")
+	} else {
+		message.WriteString(fmt.Sprintf("  💾 Сохранений: %d\n", details.MaxSaves))
+	}
+	
+	message.WriteString(fmt.Sprintf("  🎒 Слотов инвентаря: %d\n", details.MaxInventorySlots))
+	
+	if resp.DaysRemaining > 0 {
+		message.WriteString(fmt.Sprintf("\n⏰ Осталось дней: %d", resp.DaysRemaining))
+	} else if resp.DaysRemaining == -1 {
+		message.WriteString("\n✨ Бессрочная подписка")
+	}
+	
+	return b.sendLongMessage(chatID, message.String())
+}
+
+// handleSubscribe обрабатывает команду /subscribe для оформления подписки
+func (b *Bot) handleSubscribe(ctx context.Context, chatID int64, tgUserID int64, args string) error {
+	if b.getSubscriptionUC == nil {
+		msg := tgbotapi.NewMessage(chatID, "Система подписок временно недоступна.")
+		return b.sendMessage(msg)
+	}
+
+	// Получаем текущую подписку
+	req := subscriptionapp.GetSubscriptionRequest{
+		TgUserID: tgUserID,
+	}
+
+	resp, err := b.getSubscriptionUC.Execute(ctx, req)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении информации о подписке: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	// Формируем сообщение с доступными тарифами
+	var message strings.Builder
+	message.WriteString("💎 Доступные тарифы:\n\n")
+	
+	message.WriteString("🆓 Free - Бесплатно\n")
+	message.WriteString("  • 1 активная игра\n")
+	message.WriteString("  • 50 сообщений/день\n")
+	message.WriteString("  • 5 изображений/день\n")
+	message.WriteString("  • 1 сохранение\n")
+	message.WriteString("  • 30 слотов инвентаря\n\n")
+	
+	message.WriteString("⭐ Premium - 299₽/мес\n")
+	message.WriteString("  • Безлимит игр\n")
+	message.WriteString("  • Безлимит сообщений\n")
+	message.WriteString("  • Безлимит изображений\n")
+	message.WriteString("  • 10 сохранений\n")
+	message.WriteString("  • 50 слотов инвентаря\n")
+	message.WriteString("  • Приоритетная обработка\n")
+	message.WriteString("  • Эксклюзивные миры\n")
+	message.WriteString("  • Приоритетная поддержка\n\n")
+	
+	message.WriteString("👑 Pro - 599₽/мес\n")
+	message.WriteString("  • Все из Premium\n")
+	message.WriteString("  • Мультиплеер до 8 игроков\n")
+	message.WriteString("  • API доступ\n")
+	message.WriteString("  • Кастомные моды\n")
+	message.WriteString("  • 70 слотов инвентаря\n\n")
+	
+	if resp.Subscription.IsActive() && resp.Subscription.Plan != subscription.PlanFree {
+		message.WriteString(fmt.Sprintf("ℹ️ У вас уже активна подписка %s\n", resp.Subscription.Plan))
+		if resp.DaysRemaining > 0 {
+			message.WriteString(fmt.Sprintf("Осталось дней: %d\n", resp.DaysRemaining))
+		}
+	} else {
+		message.WriteString("⚠️ Интеграция с платежными системами в разработке.\n")
+		message.WriteString("Для оформления подписки свяжитесь с поддержкой.")
+	}
+
+	return b.sendLongMessage(chatID, message.String())
+}
+
 // handleImage обрабатывает команду /image для генерации изображений
 func (b *Bot) handleImage(ctx context.Context, chatID int64, tgUserID int64, args string) error {
 	if b.generateImageUC == nil {
 		msg := tgbotapi.NewMessage(chatID, "Генерация изображений временно недоступна.")
 		return b.sendMessage(msg)
+	}
+
+	// Проверяем лимит изображений для пользователя (если доступна проверка подписки)
+	var skipLimitCheck bool
+	if b.checkLimitsUC != nil {
+		// Проверяем лимит изображений
+		limitReq := subscriptionapp.CheckLimitRequest{
+			TgUserID:  tgUserID,
+			LimitType: subscriptionapp.LimitTypeImagesPerDay,
+		}
+		limitResp, err := b.checkLimitsUC.Execute(ctx, limitReq)
+		if err == nil {
+			if !limitResp.Allowed {
+				msg := tgbotapi.NewMessage(chatID, limitResp.Message)
+				return b.sendMessage(msg)
+			}
+			// Если лимит 0 (безлимит), пропускаем проверку лимитера
+			if limitResp.Limit == 0 {
+				skipLimitCheck = true
+			}
+		}
 	}
 
 	// Если аргументы не указаны, показываем справку
@@ -1136,7 +1353,7 @@ func (b *Bot) handleImage(ctx context.Context, chatID int64, tgUserID int64, arg
 		EntityID:       0,
 		ForceRegenerate: false,
 		UserID:         tgUserID,
-		SkipLimitCheck: false, // TODO: Проверять Premium статус
+		SkipLimitCheck: skipLimitCheck, // Проверяется через checkLimitsUC
 	}
 
 	resp, err := b.generateImageUC.Execute(ctx, req)

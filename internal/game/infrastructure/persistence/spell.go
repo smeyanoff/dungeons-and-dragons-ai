@@ -116,8 +116,8 @@ func (r *SpellRepository) Save(ctx context.Context, s *spell.Spell) error {
 func (r *SpellRepository) GetCharacterSpells(ctx context.Context, characterID uint) ([]*spell.CharacterSpell, error) {
 	var characterSpells []*spell.CharacterSpell
 	err := r.db.WithContext(ctx).
-		Preload("Spell").
-		Where("character_id = ?", characterID).
+		Joins("Spell").
+		Where("character_spells.character_id = ?", characterID).
 		Order("spell.level ASC, spell.name ASC").
 		Find(&characterSpells).Error
 	

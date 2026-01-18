@@ -23,6 +23,7 @@ import (
 	"dungeons-and-dragons-ai/internal/llm/domain"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
+	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	"dungeons-and-dragons-ai/pkg/logger"
 
 	"github.com/google/uuid"
@@ -42,6 +43,7 @@ type HandleActionUseCase struct {
 	checkAchievementsUC *achievementapp.CheckAchievementsUseCase // Для проверки достижений
 	notificationService achievementapp.NotificationService        // Для отправки уведомлений о достижениях
 	generateImageUC    *imageapp.ImageGenerationUseCase          // Для генерации изображений
+	useSpellUC         *spellapp.UseSpellUseCase                 // Для использования заклинаний (опционально)
 	responseCache      *dmcache.DMResponseCache
 	actionValidator    *ActionValidator
 }
@@ -140,6 +142,7 @@ func NewHandleActionUseCase(
 	checkAchievementsUC *achievementapp.CheckAchievementsUseCase,
 	notificationService achievementapp.NotificationService,
 	generateImageUC *imageapp.ImageGenerationUseCase,
+	useSpellUC *spellapp.UseSpellUseCase,
 	responseCache *dmcache.DMResponseCache,
 	actionValidator *ActionValidator,
 ) *HandleActionUseCase {
@@ -157,6 +160,7 @@ func NewHandleActionUseCase(
 		checkAchievementsUC: checkAchievementsUC,
 		notificationService: notificationService,
 		generateImageUC:    generateImageUC,
+		useSpellUC:         useSpellUC,
 		responseCache:      responseCache,
 		actionValidator:    actionValidator,
 	}
@@ -427,6 +431,66 @@ func (uc *HandleActionUseCase) Execute(
 		response = fmt.Sprintf("%s\n\n%s", response, combatStartMessage)
 	}
 
+	// Проверяем активный бой и автоматически выполняем ходы врагов
+	// Это решает задачу #70: Автоматическое выполнение ходов врагов в бою
+	if uc.combatRepo != nil {
+		activeCombat, err := uc.combatRepo.GetActiveBySessionID(ctx, gs.ID)
+		if err != nil {
+			logger.Warn("Failed to get active combat for enemy turn check",
+				logger.ErrorField(err),
+				logger.Uint("session_id", gs.ID),
+			)
+		} else if activeCombat != nil && activeCombat.IsActive() {
+			// Переходим к следующему ходу после действия игрока
+			activeCombat.NextTurn()
+			
+			// Проверяем, чей следующий ход
+			currentParticipant := activeCombat.GetCurrentParticipant()
+			if currentParticipant != nil && !currentParticipant.IsPlayer {
+				// Следующий ход принадлежит врагу - автоматически генерируем его действие
+				logger.Info("Enemy turn detected, generating automatic enemy action",
+					logger.Uint("session_id", gs.ID),
+					logger.String("enemy_name", currentParticipant.GetName()),
+				)
+				
+				// Сохраняем состояние боя после перехода хода
+				if err := uc.combatRepo.Save(ctx, activeCombat); err != nil {
+					logger.Error("Failed to save combat after next turn",
+						logger.ErrorField(err),
+						logger.Uint("session_id", gs.ID),
+					)
+				}
+				
+				// Генерируем автоматический ход врага
+				enemyActionResponse, err := uc.generateEnemyTurn(ctx, gs, activeCombat, currentParticipant)
+				if err != nil {
+					logger.Error("Failed to generate enemy turn",
+						logger.ErrorField(err),
+						logger.Uint("session_id", gs.ID),
+					)
+					// Не прерываем выполнение - возвращаем ответ игрока даже если вражеский ход не сгенерирован
+				} else if enemyActionResponse != "" {
+					// Добавляем автоматический ход врага к ответу
+					response = fmt.Sprintf("%s\n\n%s", response, enemyActionResponse)
+					
+					// Сохраняем ответ врага как событие DM
+					enemyEvent := &event.StoryEvent{
+						GameSessionID: gs.ID,
+						AuthorType:    event.AuthorTypeDM,
+						Content:       enemyActionResponse,
+						CreatedAt:     time.Now(),
+					}
+					if err := uc.eventRepo.Save(ctx, enemyEvent); err != nil {
+						logger.Warn("Failed to save enemy turn event",
+							logger.ErrorField(err),
+							logger.Uint("session_id", gs.ID),
+						)
+					}
+				}
+			}
+		}
+	}
+
 	return response, nil
 }
 
@@ -512,6 +576,138 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	return combatStartMessage
 }
 
+// generateEnemyTurn генерирует автоматический ход врага в бою
+// Это решает задачу #70: Автоматическое выполнение ходов врагов в бою
+func (uc *HandleActionUseCase) generateEnemyTurn(
+	ctx context.Context,
+	gs *session.GameSession,
+	activeCombat *combat.Combat,
+	enemyParticipant *combat.CombatParticipant,
+) (string, error) {
+	// Находим игрока как цель атаки
+	var playerParticipant *combat.CombatParticipant
+	for i := range activeCombat.Participants {
+		if activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
+			playerParticipant = &activeCombat.Participants[i]
+			break
+		}
+	}
+
+	if playerParticipant == nil {
+		// Игрок мертв или не найден - враг не может атаковать
+		return "", fmt.Errorf("player not found or dead")
+	}
+
+	// Получаем игрока для доступа к персонажу
+	player := gs.GetFirstPlayer()
+	if player == nil {
+		return "", fmt.Errorf("player not found in session")
+	}
+
+	// Строим контекст боя для DM
+	combatContext := uc.buildCombatContext(gs, activeCombat)
+
+	// Формируем промпт для автоматического хода врага
+	enemyName := enemyParticipant.GetName()
+	enemyHP := enemyParticipant.GetHP()
+	enemyMaxHP := enemyParticipant.GetMaxHP()
+	playerName := playerParticipant.GetName()
+	playerHP := playerParticipant.GetHP()
+	playerMaxHP := playerParticipant.GetMaxHP()
+	
+	enemyTurnPrompt := fmt.Sprintf(`Ты — Dungeon Master в игре Dungeons & Dragons.
+
+Контекст текущего боя:
+%s
+
+Сейчас ход врага "%s" (%d/%d HP). Игрок "%s" (%d/%d HP) является целью.
+
+ОПИШИ действие врага и ОБЯЗАТЕЛЬНО используй инструмент 'perform_enemy_attack' для автоматической атаки врага по игроку.
+Инструмент 'perform_enemy_attack' автоматически выполнит бросок кубиков, проверит попадание и применит урон.
+
+Формат ответа:
+1. Краткое описание действия врага (1-2 предложения)
+2. Использование инструмента 'perform_enemy_attack' с параметром target_name='%s'
+3. Описание результата атаки на основе результата инструмента
+
+Пример: "%s рычит и бросается на %s!" → используй perform_enemy_attack(target_name='%s')
+
+ВАЖНО: ОБЯЗАТЕЛЬНО используй инструмент 'perform_enemy_attack' - без него атака не будет выполнена!`,
+		combatContext,
+		enemyName, enemyHP, enemyMaxHP,
+		playerName, playerHP, playerMaxHP,
+		playerName,
+		enemyName, playerName, playerName)
+
+	// Создаем реестр инструментов и регистрируем perform_enemy_attack
+	toolRegistry := dm_tools.NewToolRegistry()
+	if uc.combatRepo != nil && uc.sessionRepo != nil {
+		// Создаем адаптеры для передачи sessionRepo в tool
+		// Для PerformEnemyAttackTool нужны sessionRepo и playerRepo
+		sessionAdapter := &sessionRepoAdapter{sessionRepo: uc.sessionRepo}
+		playerAdapter := &playerRepoAdapter{sessionRepo: uc.sessionRepo}
+		// Преобразуем sessionRepoAdapter в dm_tools.GameSessionRepository через интерфейс
+		// sessionRepoAdapter уже реализует нужный интерфейс, поэтому можем использовать его напрямую
+		var gameSessionRepo dm_tools.GameSessionRepository = sessionAdapter
+		toolRegistry.Register(dm_tools.NewPerformEnemyAttackTool(uc.combatRepo, gameSessionRepo, playerAdapter, gs.ID, gs.ChatID))
+		toolRegistry.Register(dm_tools.NewCheckCombatStatusTool(uc.combatRepo, gs.ID))
+		toolRegistry.Register(dm_tools.NewGetBattlefieldStatusTool(uc.combatRepo, gs.ID))
+	}
+
+	// Генерируем ответ DM с поддержкой tools
+	logger.Info("Generating enemy turn with tools",
+		logger.Uint("session_id", gs.ID),
+		logger.String("enemy_name", enemyName),
+	)
+
+	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer llmCancel()
+
+	enemyResponse, _, err := uc.generateWithToolsLoop(llmCtx, enemyTurnPrompt, toolRegistry, gs.ID)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate enemy turn: %w", err)
+	}
+
+	logger.Info("Enemy turn generated",
+		logger.Uint("session_id", gs.ID),
+		logger.String("enemy_name", enemyName),
+		logger.Int("response_length", len(enemyResponse)),
+	)
+
+	return enemyResponse, nil
+}
+
+// buildCombatContext строит контекст боя для DM
+func (uc *HandleActionUseCase) buildCombatContext(gs *session.GameSession, activeCombat *combat.Combat) string {
+	var parts []string
+	parts = append(parts, "--- Текущий бой ---")
+	parts = append(parts, fmt.Sprintf("Статус: %s", activeCombat.State))
+	
+	// Добавляем информацию об участниках
+	parts = append(parts, "\nУчастники боя:")
+	for i, participant := range activeCombat.Participants {
+		if participant.IsAlive() {
+			name := participant.GetName()
+			hp := participant.GetHP()
+			maxHP := participant.GetMaxHP()
+			ac := participant.GetAC()
+			participantType := "👹 Враг"
+			if participant.IsPlayer {
+				participantType = "👤 Игрок"
+			}
+			isCurrent := i == activeCombat.CurrentTurn
+			currentMarker := ""
+			if isCurrent {
+				currentMarker = " ← ТЕКУЩИЙ ХОД"
+			}
+			parts = append(parts, fmt.Sprintf("%s %s: %d/%d HP, AC %d%s", 
+				participantType, name, hp, maxHP, ac, currentMarker))
+		}
+	}
+	
+	return strings.Join(parts, "\n")
+}
+
 func buildDMPrompt(gameContext, playerMessage string) string {
 	// Проверяем, есть ли в контексте информация о активном бое
 	hasActiveCombat := strings.Contains(gameContext, "--- Текущий бой ---") || 
@@ -581,6 +777,13 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 		// Создаем адаптер для разрыва циклической зависимости
 		imageService := imageapp.NewImageGenerationServiceAdapter(uc.generateImageUC)
 		registry.Register(dm_tools.NewGenerateImageTool(imageService, gs.ChatID, userID))
+	}
+	
+	// Регистрируем инструмент для использования заклинаний (если доступен)
+	if uc.useSpellUC != nil && uc.sessionRepo != nil {
+		sessionAdapter := &sessionRepoAdapter{sessionRepo: uc.sessionRepo}
+		var gameSessionRepo dm_tools.GameSessionRepository = sessionAdapter
+		registry.Register(dm_tools.NewUseSpellTool(uc.useSpellUC, gameSessionRepo, gs.ID, gs.ChatID))
 	}
 	
 	return registry

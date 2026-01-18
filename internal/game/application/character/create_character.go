@@ -2,10 +2,10 @@ package character
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"strings"
-	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
@@ -103,15 +103,29 @@ func (uc *CreateCharacterUseCase) Execute(
 
 // generateStats генерирует характеристики персонажа по стандартным правилам D&D
 // Использует метод "4d6 drop lowest" для каждой характеристики
+// Использует crypto/rand для криптографически безопасной генерации случайных чисел
 func generateStats() *character.Stats {
-	// Инициализируем генератор случайных чисел
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// secureRandInt генерирует криптографически безопасное случайное число от 1 до max (включительно)
+	secureRandInt := func(max int) int {
+		if max <= 0 {
+			return 0
+		}
+		// Генерируем случайное число в диапазоне [0, max)
+		bigMax := big.NewInt(int64(max))
+		randomBig, err := rand.Int(rand.Reader, bigMax)
+		if err != nil {
+			// Fallback: если crypto/rand не работает, возвращаем 1 (не должно происходить)
+			return 1
+		}
+		// Преобразуем в int и добавляем 1 для диапазона [1, max]
+		return int(randomBig.Int64()) + 1
+	}
 
 	rollStat := func() int {
-		// Бросаем 4d6
+		// Бросаем 4d6 используя криптографически безопасный генератор
 		rolls := make([]int, 4)
 		for i := range rolls {
-			rolls[i] = rng.Intn(6) + 1
+			rolls[i] = secureRandInt(6) // d6: от 1 до 6
 		}
 
 		// Находим минимальное значение

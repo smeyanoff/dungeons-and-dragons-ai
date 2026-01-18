@@ -13,7 +13,6 @@ import (
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
-	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
 	"dungeons-and-dragons-ai/internal/game/application/dice"
 	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
@@ -21,6 +20,8 @@ import (
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
+	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
+	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
 	mapapp 	"dungeons-and-dragons-ai/internal/game/application/worldmap"
 	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
@@ -185,16 +186,17 @@ func main() {
 	// Создаем ImageGenerationUseCase
 	generateImageUC := imageapp.NewImageGenerationUseCase(imageGenerator, imageStorage)
 	
-	// Настраиваем лимитер для генерации изображений (5/день для Free)
+	// Настраиваем лимитер для генерации изображений (5/день для Free по умолчанию)
+	// Будет обновлен после создания subscriptionRepo для интеграции с подписками
 	dailyLimit := 5
 	if envLimit := getEnv("IMAGE_DAILY_LIMIT", ""); envLimit != "" {
 		if limit, err := strconv.Atoi(envLimit); err == nil && limit > 0 {
 			dailyLimit = limit
 		}
 	}
-	rateLimiter := imageapp.NewInMemoryRateLimiter(dailyLimit)
-	generateImageUC.SetLimiter(rateLimiter)
-	logger.Info("Image generation rate limiter configured",
+	fallbackLimiter := imageapp.NewInMemoryRateLimiter(dailyLimit)
+	generateImageUC.SetLimiter(fallbackLimiter)
+	logger.Info("Image generation rate limiter configured (will be updated with subscription integration)",
 		logger.Int("daily_limit", dailyLimit),
 	)
 
@@ -245,6 +247,16 @@ func main() {
 	feedbackRepo := persistence.NewFeedbackRepository(db)
 	achievementRepo := persistence.NewAchievementRepository(db)
 	spellRepo := persistence.NewSpellRepository(db)
+	subscriptionRepo := persistence.NewSubscriptionRepository(db)
+
+	// Создаем use cases для подписок (нужно для лимитера изображений)
+	getSubscriptionUC := subscriptionapp.NewGetSubscriptionUseCase(subscriptionRepo)
+	checkLimitsUC := subscriptionapp.NewCheckLimitsUseCase(subscriptionRepo, sessionRepo, fallbackLimiter)
+
+	// Обновляем лимитер изображений для использования системы подписок
+	subscriptionImageLimiter := subscriptionapp.NewSubscriptionImageLimiter(checkLimitsUC, fallbackLimiter)
+	generateImageUC.SetLimiter(subscriptionImageLimiter)
+	logger.Info("Image generation rate limiter updated with subscription integration")
 
 	// Инициализация кэша ответов DM (TTL 1 час)
 	responseCache := dmcache.NewDMResponseCache(1 * time.Hour)
@@ -269,7 +281,8 @@ func main() {
 	addExperienceUC.SetCheckAchievementsUseCase(checkAchievementsUC)
 	addExperienceUC.SetNotificationService(notificationService)
 	checkWorldEventsUC := worldeventapp.NewCheckWorldEventsUseCase(worldEventRepo)
-	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, responseCache, actionValidator)
+	useSpellUC := spellapp.NewUseSpellUseCase(spellRepo, sessionRepo, playerRepo)
+	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
@@ -282,6 +295,7 @@ func main() {
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
 	getAchievementsUC := achievementapp.NewGetAchievementsUseCase(achievementRepo, sessionRepo)
 	getSpellsUC := spellapp.NewGetSpellsUseCase(spellRepo, sessionRepo)
+	// getSubscriptionUC и checkLimitsUC уже созданы выше для использования в лимитере изображений
 
 	// Инициализация базовых достижений при старте
 	logger.Info("Initializing default achievements")
@@ -307,7 +321,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getMapUC, getAchievementsUC, getSpellsUC, generateImageUC, sessionRepo, combatRepo, feedbackRepo)
+	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getMapUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, sessionRepo, combatRepo, feedbackRepo)
 	if err != nil {
 		logger.Fatal("Failed to create bot",
 			logger.ErrorField(err),

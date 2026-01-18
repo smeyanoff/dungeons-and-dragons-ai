@@ -133,6 +133,9 @@ services:
       # Application
       - TZ=${TZ:-Europe/Moscow}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      
+      # Image storage - используем /tmp для read-only файловой системы
+      - IMAGE_STORAGE_PATH=/tmp/images
     networks:
       - dnd-network
     # Production security settings

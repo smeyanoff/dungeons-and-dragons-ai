@@ -27,7 +27,8 @@ type LocalImageStorage struct {
 // NewLocalImageStorage создает новый LocalImageStorage
 func NewLocalImageStorage(basePath string) (ImageStorage, error) {
 	// Создаем директорию, если её нет
-	if err := os.MkdirAll(basePath, 0755); err != nil {
+	// Используем 0750 вместо 0755 для более строгих прав доступа (только владелец и группа)
+	if err := os.MkdirAll(basePath, 0750); err != nil {
 		return nil, fmt.Errorf("failed to create storage directory: %w", err)
 	}
 
@@ -40,7 +41,8 @@ func NewLocalImageStorage(basePath string) (ImageStorage, error) {
 func (s *LocalImageStorage) Save(ctx context.Context, imageData []byte, filename string) (string, error) {
 	filePath := filepath.Join(s.basePath, filename)
 	
-	if err := os.WriteFile(filePath, imageData, 0644); err != nil {
+	// Используем 0600 вместо 0644 для более строгих прав доступа (только владелец)
+	if err := os.WriteFile(filePath, imageData, 0600); err != nil {
 		return "", fmt.Errorf("failed to save image: %w", err)
 	}
 
