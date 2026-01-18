@@ -511,9 +511,11 @@ func TestAnalyzeDMResponseUseCase_Execute(t *testing.T) {
 				combatRepo,
 				questRepo,
 				inventoryRepo,
-				1, // sessionID
-				1, // worldID
-				1, // characterID
+				1,   // sessionID
+				123, // chatID
+				1,   // worldID
+				1,   // characterID
+				1,   // playerID
 			)
 
 			analysis, err := uc.Execute(context.Background(), tt.dmResponse)
@@ -814,8 +816,10 @@ func TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC(t *testing.T) {
 				questRepo,
 				nil, // inventoryRepo
 				1,   // sessionID
+				123, // chatID
 				1,   // worldID
 				1,   // characterID
+				1,   // playerID
 			)
 
 			ctx := context.Background()

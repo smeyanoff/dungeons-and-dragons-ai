@@ -10,10 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
+	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
 	"dungeons-and-dragons-ai/internal/game/application/dice"
+	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	"dungeons-and-dragons-ai/internal/game/application/history"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
@@ -21,8 +24,10 @@ import (
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
 	mapapp 	"dungeons-and-dragons-ai/internal/game/application/worldmap"
 	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
+	"dungeons-and-dragons-ai/internal/game/domain/achievement"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	"dungeons-and-dragons-ai/internal/game/domain/spell"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/feedback"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
@@ -33,7 +38,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
-	"dungeons-and-dragons-ai/internal/llm/infrastructure"
+	llminfrastructure "dungeons-and-dragons-ai/internal/llm/infrastructure"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragembeddings "dungeons-and-dragons-ai/internal/rag/infrastructure/embeddings"
 	ragvectorstore "dungeons-and-dragons-ai/internal/rag/infrastructure/vectorstore"
@@ -159,7 +164,39 @@ func main() {
 	}
 
 	// Инициализация LLM
-	llm := infrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
+	llm := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
+	
+	// Инициализация ImageGenerator для генерации изображений
+	imageGenerator := llminfrastructure.NewGigachatImageGenerator(gigachatClient, gigachatModel)
+	
+	// Инициализация ImageStorage для локального хранения изображений
+	imageStoragePath := getEnv("IMAGE_STORAGE_PATH", "./images")
+	imageStorage, err := imageapp.NewLocalImageStorage(imageStoragePath)
+	if err != nil {
+		logger.Fatal("Failed to create image storage",
+			logger.ErrorField(err),
+			logger.String("path", imageStoragePath),
+		)
+	}
+	logger.Info("Image storage initialized",
+		logger.String("path", imageStoragePath),
+	)
+	
+	// Создаем ImageGenerationUseCase
+	generateImageUC := imageapp.NewImageGenerationUseCase(imageGenerator, imageStorage)
+	
+	// Настраиваем лимитер для генерации изображений (5/день для Free)
+	dailyLimit := 5
+	if envLimit := getEnv("IMAGE_DAILY_LIMIT", ""); envLimit != "" {
+		if limit, err := strconv.Atoi(envLimit); err == nil && limit > 0 {
+			dailyLimit = limit
+		}
+	}
+	rateLimiter := imageapp.NewInMemoryRateLimiter(dailyLimit)
+	generateImageUC.SetLimiter(rateLimiter)
+	logger.Info("Image generation rate limiter configured",
+		logger.Int("daily_limit", dailyLimit),
+	)
 
 	// Инициализация Qdrant
 	logger.Info("Initializing Qdrant client",
@@ -206,6 +243,8 @@ func main() {
 	questRepo := persistence.NewQuestRepository(db)
 	worldEventRepo := persistence.NewWorldEventRepository(db)
 	feedbackRepo := persistence.NewFeedbackRepository(db)
+	achievementRepo := persistence.NewAchievementRepository(db)
+	spellRepo := persistence.NewSpellRepository(db)
 
 	// Инициализация кэша ответов DM (TTL 1 час)
 	responseCache := dmcache.NewDMResponseCache(1 * time.Hour)
@@ -218,25 +257,69 @@ func main() {
 	simpleContextBuilder := contextbuilder.NewSimpleContextBuilder()
 	ragContextBuilder := contextbuilder.NewRAGContextBuilder(simpleContextBuilder, retrieveContextUC, eventRepo, inventoryRepo, combatRepo)
 	addExperienceUC := characterapp.NewAddExperienceUseCase(playerRepo, sessionRepo)
+	checkAchievementsUC := achievementapp.NewCheckAchievementsUseCase(achievementRepo, playerRepo)
+	
+	// Создаем notification service для отправки уведомлений о достижениях через Telegram
+	// Нужно создать bot API для notification service, но bot еще не создан
+	// Поэтому создадим его позже или передадим через callback
+	// Временно создадим NoOpNotificationService и заменим позже
+	notificationService := &achievementapp.NoOpNotificationService{}
+	
+	// Настраиваем проверку достижений в AddExperienceUseCase
+	addExperienceUC.SetCheckAchievementsUseCase(checkAchievementsUC)
+	addExperienceUC.SetNotificationService(notificationService)
 	checkWorldEventsUC := worldeventapp.NewCheckWorldEventsUseCase(worldEventRepo)
-	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, responseCache, actionValidator)
+	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, responseCache, actionValidator)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
 	addItemUC := inventoryapp.NewAddItemUseCase(sessionRepo, inventoryRepo)
 	handleCombatUC := combatapp.NewHandleCombatUseCase(combatRepo, sessionRepo)
+	// Настраиваем проверку достижений в HandleCombatUseCase
+	handleCombatUC.SetCheckAchievementsUseCase(checkAchievementsUC)
 	rollDiceUC := dice.NewRollDiceUseCase()
 	getQuestsUC := questapp.NewGetQuestsUseCase(sessionRepo, questRepo)
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
+	getAchievementsUC := achievementapp.NewGetAchievementsUseCase(achievementRepo, sessionRepo)
+	getSpellsUC := spellapp.NewGetSpellsUseCase(spellRepo, sessionRepo)
+
+	// Инициализация базовых достижений при старте
+	logger.Info("Initializing default achievements")
+	initCtx, initCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer initCancel()
+	if err := achievementRepo.InitDefaultAchievements(initCtx); err != nil {
+		logger.Warn("Failed to initialize default achievements",
+			logger.ErrorField(err),
+		)
+	} else {
+		logger.Info("Default achievements initialized successfully")
+	}
+
+	// Инициализация базовых заклинаний при старте
+	logger.Info("Initializing default spells")
+	if err := spellRepo.InitDefaultSpells(initCtx); err != nil {
+		logger.Warn("Failed to initialize default spells",
+			logger.ErrorField(err),
+		)
+	} else {
+		logger.Info("Default spells initialized successfully")
+	}
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getMapUC, sessionRepo, combatRepo, feedbackRepo)
+	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getMapUC, getAchievementsUC, getSpellsUC, generateImageUC, sessionRepo, combatRepo, feedbackRepo)
 	if err != nil {
 		logger.Fatal("Failed to create bot",
 			logger.ErrorField(err),
 		)
 	}
+	
+	// После создания бота, настраиваем TelegramNotificationService в use cases
+	// Используем API из bot для отправки уведомлений о достижениях
+	telegramNotificationService := achievementapp.NewTelegramNotificationServiceFromBot(bot)
+	addExperienceUC.SetNotificationService(telegramNotificationService)
+	handleCombatUC.SetNotificationService(telegramNotificationService)
+	logger.Info("Telegram notification service configured for achievements")
 	logger.Info("Telegram bot initialized")
 
 	// Запуск HTTP сервера для health check
@@ -368,6 +451,11 @@ func runMigrations(db *gorm.DB) error {
 		&item.Item{},
 		&quest.Quest{},
 		&feedback.Feedback{},
+		&achievement.Achievement{},
+		&achievement.PlayerAchievement{},
+		&achievement.AchievementProgress{},
+		&spell.Spell{},
+		&spell.CharacterSpell{},
 	)
 }
 

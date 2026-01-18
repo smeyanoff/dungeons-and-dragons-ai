@@ -2,19 +2,14 @@
 
 Документ для технического лидера. Все найденные проблемы и рекомендации по их устранению.
 
-**Дата последнего обновления:** 2026-01-18 (19:45)
+**Дата последнего обновления:** 2026-01-19 (00:45)
 
 **Статус сканирования:** ✅ Завершено
-- ✅ Docker образ собран успешно (dnd-bot:latest, 49.7MB)
+- ✅ Docker образ собран успешно (dnd-bot:latest)
 - ✅ Dockerfile проверен (Hadolint) - найдено 2 предупреждения
-- ✅ Go код просканирован (Gosec) - найдено 5 проблем (3 HIGH, 2 LOW)
-- ✅ Docker образы просканированы (Trivy) - уязвимостей не найдено (19:45)
-
-**Статус сканирования:** ✅ Завершено
-- ✅ Docker образ собран успешно
-- ✅ Dockerfile проверен (Hadolint)
-- ✅ Go код просканирован (Gosec)
-- ✅ Docker образы просканированы (Trivy)
+- ✅ Go код просканирован (Gosec) - найдено **9 проблем** (3 HIGH, 3 MEDIUM, 2 LOW)
+- ✅ Docker образы просканированы (Trivy) - **0 уязвимостей HIGH/CRITICAL**
+- ⚠️ Trivy предупреждение: Alpine 3.19.9 больше не поддерживается
 
 ---
 
@@ -85,7 +80,7 @@ RUN apk --no-cache add ca-certificates=20240226-r0 tzdata=2024a-r0 wget=1.21.4-r
 
 ---
 
-### 4. Gosec: Integer overflow conversions (CWE-190) - Найдено 2 проблемы
+### 4. Gosec: Integer overflow conversions (CWE-190) - HIGH severity
 
 **Файлы:** 
 - `internal/game/domain/dice/dice.go:139` - uint64 -> int conversion
@@ -112,7 +107,7 @@ backoff := initialBackoff * time.Duration(1<<uint(attempt-1))  // int -> uint м
 
 ---
 
-### 5. Gosec: Weak random number generator (CWE-338)
+### 5. Gosec: Weak random number generator (CWE-338) - HIGH severity
 
 **Файл:** `internal/game/application/character/create_character.go:108`
 
@@ -136,7 +131,56 @@ import "crypto/rand"
 
 ---
 
-### 6. Trivy: Alpine 3.19.9 больше не поддерживается
+### 6. Gosec: Weak cryptographic primitive (MD5) - MEDIUM severity
+
+**Файлы:**
+- `internal/game/application/image/generate_image.go:5, 75` - Использование MD5 для хэширования
+
+**Проблема:** Использование слабого криптографического примитива MD5:
+```go
+import "crypto/md5"
+hash := md5.Sum([]byte(req.UserPrompt))
+```
+
+**Риск:** MEDIUM - MD5 считается криптографически небезопасным для целей безопасности. Для генерации имени файла это менее критично, но не рекомендуется.
+
+**Решение:**
+```go
+import "crypto/sha256"
+hash := sha256.Sum256([]byte(req.UserPrompt))
+// Или использовать более короткий хэш: hash[:8] для имени файла
+```
+
+**Статус:** ⚠️ Требует исправления (низкий приоритет для имени файла)
+
+---
+
+### 7. Gosec: Слабые права доступа к файлам - MEDIUM severity
+
+**Файл:** `internal/game/application/image/image_storage.go:30, 43`
+
+**Проблема:** Использование слишком открытых прав доступа:
+```go
+// Строка 30: Директория с правами 0755
+os.MkdirAll(basePath, 0755)  // Рекомендуется 0750 или менее
+
+// Строка 43: Файл с правами 0644
+os.WriteFile(filePath, imageData, 0644)  // Рекомендуется 0600 или менее
+```
+
+**Риск:** MEDIUM - Открытые права доступа могут позволить неавторизованным пользователям читать файлы.
+
+**Решение:**
+```go
+os.MkdirAll(basePath, 0750)  // Только владелец и группа
+os.WriteFile(filePath, imageData, 0600)  // Только владелец
+```
+
+**Статус:** ⚠️ Требует исправления (низкий приоритет)
+
+---
+
+### 8. Trivy: Alpine 3.19.9 больше не поддерживается
 
 **Проблема:** При сканировании Trivy выдал предупреждение:
 ```
@@ -156,18 +200,18 @@ WARN The vulnerability detection may be insufficient because security updates ar
 
 ---
 
-### 7. Gosec: Необработанные ошибки (CWE-703) - Найдено 2 проблемы
+### 9. Gosec: Необработанные ошибки (CWE-703) - LOW severity
 
 **Файлы:**
 - `pkg/gigachat/client.go:60` - Ошибка закрытия Body не обрабатывается
-- `internal/game/application/combat/handle_combat.go:82` - Ошибка сохранения не обрабатывается
+- `internal/game/application/combat/handle_combat.go:96` - Ошибка сохранения не обрабатывается
 
 **Проблема:** Игнорирование ошибок может привести к утечкам ресурсов или потере данных:
 ```go
 // client.go:60
 resp.Body.Close() // Закрываем предыдущий ответ - ошибка игнорируется
 
-// handle_combat.go:82
+// handle_combat.go:96
 uc.combatRepo.Save(ctx, activeCombat) // Ошибка сохранения игнорируется
 ```
 
@@ -255,25 +299,27 @@ uc.combatRepo.Save(ctx, activeCombat) // Ошибка сохранения иг�
 | Инструмент | Статус | Найдено проблем |
 |-----------|--------|----------------|
 | **Hadolint** (Dockerfile) | ✅ Завершено | 2 предупреждения (версии пакетов) |
-| **Gosec** (Go код) | ✅ Завершено | 5 проблем (3 HIGH, 2 LOW) |
-| **Trivy** (Docker образы) | ✅ Завершено | 0 уязвимостей |
-| **Docker build** | ✅ Успешно | Образ собран (50MB) |
+| **Gosec** (Go код) | ✅ Завершено | **9 проблем** (3 HIGH, 3 MEDIUM, 2 LOW) |
+| **Trivy** (Docker образы) | ✅ Завершено | **0 уязвимостей HIGH/CRITICAL** ⚠️ Alpine 3.19.9 не поддерживается |
+| **Docker build** | ✅ Успешно | Образ собран |
 
 ### Статистика проблем
 
 | Категория | Количество | Статус |
 |-----------|------------|--------|
 | 🔴 Критические | 0 | ✅ Все исправлены |
-| 🟡 Средние | 6 | ⚠️ 3 требуют исправления, 2 частично решены, 1 предупреждение |
+| 🟡 Средние | 9 | ⚠️ 6 требуют исправления (3 HIGH, 3 MEDIUM), 2 частично решены, 1 предупреждение |
 | 🟢 Низкие / Рекомендации | 4 | 📋 К рекомендациям |
 | ✅ Уже решено | 5 | ✅ Исправлено |
 
-**Последнее сканирование:** 2026-01-18 19:45
-- ✅ Trivy: 0 уязвимостей HIGH/CRITICAL в образе `dnd-bot:latest`
+**Последнее сканирование:** 2026-01-19 00:45
+- ✅ Trivy: **0 уязвимостей HIGH/CRITICAL** в образе `dnd-bot:latest`
 - ⚠️ Trivy: Предупреждение о неподдерживаемой версии Alpine 3.19.9
 - ⚠️ Hadolint: 2 предупреждения (незафиксированные версии пакетов)
-- ⚠️ Gosec: 3 проблемы HIGH severity (integer overflow, weak RNG)
-- ⚠️ Gosec: 2 проблемы LOW severity (необработанные ошибки)
+- ⚠️ Gosec: **9 проблем найдено:**
+  - 3 HIGH: integer overflow (2 места), weak RNG (1 место)
+  - 3 MEDIUM: MD5 usage (1 место), слабые права доступа (2 места)
+  - 2 LOW: необработанные ошибки (2 места)
 
 ---
 
@@ -284,11 +330,13 @@ uc.combatRepo.Save(ctx, activeCombat) // Ошибка сохранения иг�
 2. ✅ **ВЫПОЛНЕНО** Запустить сканирование безопасности (Hadolint, Gosec, Trivy)
 
 ### Приоритет 2 (Важно - Средний риск)
-3. ⚠️ **ТРЕБУЕТ ИСПРАВЛЕНИЯ** Исправить integer overflow conversions (2 места: dice.go:139, auth.go:153)
-4. ⚠️ **ТРЕБУЕТ ИСПРАВЛЕНИЯ** Заменить weak random number generator на crypto/rand (create_character.go:108)
-5. ⚠️ **ТРЕБУЕТ ИСПРАВЛЕНИЯ** Обработать необработанные ошибки (2 места: client.go:60, handle_combat.go:82)
-6. ⚠️ **РЕКОМЕНДУЕТСЯ** Обновить Alpine до поддерживаемой версии (3.20+) - низкий приоритет, уязвимостей не найдено
-7. 📋 Настроить автоматическое сканирование безопасности в CI/CD
+3. ⚠️ **ТРЕБУЕТ ИСПРАВЛЕНИЯ** Исправить integer overflow conversions (HIGH: dice.go:139, auth.go:153)
+4. ⚠️ **ТРЕБУЕТ ИСПРАВЛЕНИЯ** Заменить weak random number generator на crypto/rand (HIGH: create_character.go:108)
+5. ⚠️ **РЕКОМЕНДУЕТСЯ** Заменить MD5 на SHA256 (MEDIUM: generate_image.go:75)
+6. ⚠️ **РЕКОМЕНДУЕТСЯ** Ужесточить права доступа к файлам (MEDIUM: image_storage.go:30, 43)
+7. ⚠️ **РЕКОМЕНДУЕТСЯ** Обновить Alpine до поддерживаемой версии (3.20+) - низкий приоритет, уязвимостей не найдено
+8. ⚠️ Обработать необработанные ошибки (LOW: client.go:60, handle_combat.go:96)
+9. 📋 Настроить автоматическое сканирование безопасности в CI/CD
 
 ### Приоритет 3 (Желательно - Низкий риск)
 8. 📋 Провести аудит логирования на предмет чувствительных данных
@@ -343,25 +391,32 @@ make security-scan
 - ✅ Используется фиксированная версия Alpine (3.19)
 
 ### Gosec (Go код)
-- ⚠️ **Найдено 5 проблем:**
+- ⚠️ **Найдено 9 проблем:**
   - **3 HIGH severity:**
     - `dice.go:139` - Integer overflow: uint64 -> int conversion (CWE-190)
     - `auth.go:153` - Integer overflow: int -> uint conversion (CWE-190)
     - `create_character.go:108` - Weak random number generator: math/rand вместо crypto/rand (CWE-338)
+  - **3 MEDIUM severity:**
+    - `generate_image.go:5, 75` - Weak cryptographic primitive: MD5 usage (CWE-327)
+    - `image_storage.go:30` - Weak file permissions: 0755 вместо 0750 (CWE-276)
+    - `image_storage.go:43` - Weak file permissions: 0644 вместо 0600 (CWE-276)
   - **2 LOW severity:**
     - `client.go:60` - Необработанная ошибка при закрытии Body (CWE-703)
-    - `handle_combat.go:82` - Необработанная ошибка при сохранении (CWE-703)
+    - `handle_combat.go:96` - Необработанная ошибка при сохранении (CWE-703)
 - ✅ Большинство кода безопасно, найдены только проблемы в специфичных местах
 
 ### Общий статус безопасности
-- ✅ **Образ готов к production** с точки зрения уязвимостей
-- ⚠️ **Требуются исправления** в коде (integer overflow, weak RNG)
+- ✅ **Образ готов к production** с точки зрения уязвимостей Docker образа
+- ⚠️ **Требуются исправления** в коде (3 HIGH, 3 MEDIUM, 2 LOW)
 - ⚠️ **Рекомендуется обновление** Alpine до поддерживаемой версии
 
 ---
 
-**Следующие шаги:**
-1. Исправить integer overflow conversions в qdrant.go и auth.go
-2. Заменить math/rand на crypto/rand в dice.go
-3. Обновить Alpine до версии 3.19+ (или более новой поддерживаемой)
-4. Настроить автоматическое сканирование в CI/CD pipeline
+**Следующие шаги (приоритет):**
+1. **HIGH:** Исправить integer overflow conversions (dice.go:139, auth.go:153)
+2. **HIGH:** Заменить math/rand на crypto/rand (create_character.go:108)
+3. **MEDIUM:** Заменить MD5 на SHA256 (generate_image.go:75)
+4. **MEDIUM:** Ужесточить права доступа к файлам (image_storage.go:30, 43)
+5. **LOW:** Обработать необработанные ошибки (client.go:60, handle_combat.go:96)
+6. Обновить Alpine до поддерживаемой версии (3.20+)
+7. Настроить автоматическое сканирование в CI/CD pipeline

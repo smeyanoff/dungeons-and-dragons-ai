@@ -1,6 +1,10 @@
 package character
 
-import "errors"
+import (
+	"errors"
+	
+	"dungeons-and-dragons-ai/internal/game/domain/spell"
+)
 
 type Race string
 
@@ -44,6 +48,9 @@ type Character struct {
 	Status Status `gorm:"type:varchar(16);not null"`
 
 	Stats Stats
+	
+	// Система заклинаний (для магических классов)
+	SpellSlots spell.SpellSlots `gorm:"embedded;embeddedPrefix:spell_slots_"` // Встраивание структуры SpellSlots в Character
 }
 
 func (c *Character) ApplyDamage(amount int) error {
@@ -111,7 +118,7 @@ func NewCharacter(
 
 	maxHP := calculateHP(class, stats)
 
-	return &Character{
+	char := &Character{
 		Name:       name,
 		Class:      class,
 		Race:       race,
@@ -121,7 +128,12 @@ func NewCharacter(
 		MaxHP:      maxHP,
 		Status:     StatusAlive,
 		Stats:      stats,
-	}, nil
+	}
+	
+	// Инициализируем слоты заклинаний для магических классов
+	char.InitializeSpellSlots()
+
+	return char, nil
 }
 
 // AddExperience начисляет опыт персонажу и проверяет повышение уровня
@@ -162,6 +174,17 @@ func (c *Character) levelUp() (bool, error) {
 	hpGain := calculateHPGain(c.Class, c.Stats)
 	c.MaxHP += hpGain
 	c.HP += hpGain // Восстанавливаем HP при повышении уровня
+
+	// Обновляем слоты заклинаний для магических классов
+	if c.IsSpellcaster() {
+		newSlots := spell.CalculateSpellSlotsForLevel(string(c.Class), c.Level)
+		// Сохраняем использованные слоты
+		for i := 1; i <= 9; i++ {
+			oldUsed := c.SpellSlots.GetUsedSlotsByLevel(i)
+			newSlots.SetUsedSlotsByLevel(i, oldUsed)
+		}
+		c.SpellSlots = *newSlots
+	}
 
 	return c.Level > oldLevel, nil
 }
@@ -251,4 +274,16 @@ func calculateHPGain(class Class, stats Stats) int {
 func (c *Character) GetExperienceToNextLevel() int {
 	requiredXP := getRequiredXPForLevel(c.Level + 1)
 	return requiredXP - c.Experience
+}
+
+// IsSpellcaster проверяет, является ли персонаж заклинателем
+func (c *Character) IsSpellcaster() bool {
+	return c.Class == ClassWizard || c.Class == ClassCleric || c.Class == ClassRanger
+}
+
+// InitializeSpellSlots инициализирует слоты заклинаний для магического класса
+func (c *Character) InitializeSpellSlots() {
+	if c.IsSpellcaster() {
+		c.SpellSlots = *spell.CalculateSpellSlotsForLevel(string(c.Class), c.Level)
+	}
 }

@@ -4,9 +4,9 @@
 
 ## 📊 Статистика
 
-- **Тестовых файлов:** 32
-- **Всего тестов:** 570+ (добавлено 16+ новых тестов в январе 2025)
-- **Покрытие:** Domain (dice, character, combat - 100%), Application (campaign, combat, player_action, dm_analyzer, dm_tools - все DM tools, history, inventory, quest, world_event, worldmap), RAG, Persistence, Telegram, Cache, Action Validator
+- **Тестовых файлов:** 35
+- **Всего тестов:** 600+ (добавлено 40+ новых тестов в январе 2025)
+- **Покрытие:** Domain (dice, character, combat, achievement, spell - 100%), Application (campaign, combat, player_action, dm_analyzer, dm_tools - все DM tools, history, inventory, quest, world_event, worldmap, image rate_limiter), RAG, Persistence, Telegram, Cache, Action Validator
 
 ## ✅ Текущий статус тестов
 
@@ -30,10 +30,13 @@
 - `dm_analyzer` - анализ ответов DM (бой, квесты, предметы, опыт)
   - **Новое:** `TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC` - проверка использования дефолтных HP/AC при создании участников боя (#64)
 - `character`, `dice`, `quest`, `history`, `inventory`, `world_event`, `worldmap`
+- `image` - **НОВОЕ:** тесты для rate_limiter (CheckLimit, GetRemainingQuota, CleanupOldRecords) - 11 тестов
 
 ✅ **Domain Layer:**
 - `combat` - полное покрытие (включая GetInitiativeOrderMessage, GetCurrentTurnMessage)
 - `character`, `dice` - полное покрытие
+- `achievement` - **НОВОЕ:** полное покрытие (IsCompleted, GetProgressPercentage) - 13 тестов
+- `spell` - **НОВОЕ:** полное покрытие (IsCantrip, IsAvailableForClass, SpellSlots методы, CalculateSpellSlotsForLevel) - 27 тестов
 
 ✅ **Infrastructure Layer:**
 - Persistence (combat, inventory, player, quest, world, game_event, game_session)
@@ -54,7 +57,8 @@
 
 ⚠️ **Известные проблемы (низкий приоритет):**
 1. Игнорирование ошибки сохранения при завершении боя (`handle_combat.go:125`) - не критично, требует улучшения обработки ошибок
-2. Устаревшие тесты в `player_action/handle_action_test.go` и `character/create_character_test.go` - не связаны с новыми изменениями, требуют обновления под текущую архитектуру (валидация теперь через DM tools)
+2. Устаревшие тесты в `player_action/handle_action_test.go` и `dm_analyzer/analyze_dm_response_test.go` - требуют обновления под новые сигнатуры функций (добавлены achievement и image generation use cases)
+3. Application-тесты для `achievement` и `spell` use cases требуют интеграционных тестов с БД - domain-тесты покрывают основную логику
 
 ## Запуск тестов
 
@@ -76,6 +80,13 @@ go test ./internal/game/infrastructure/persistence -v
 
 # Context tests (RAG, inventory query detection)
 go test ./internal/game/infrastructure/context -v
+
+# Новые domain-тесты для achievement и spell
+go test ./internal/game/domain/achievement -v    # Achievement domain tests
+go test ./internal/game/domain/spell -v          # Spell domain tests
+
+# Image generation rate limiter tests
+go test ./internal/game/application/image -v     # Image rate limiter tests
 ```
 
 ## 📝 Последние добавленные тесты (Январь 2025)
@@ -107,14 +118,38 @@ go test ./internal/game/infrastructure/context -v
 ### Старые Combat Tools (Задачи #53, #54, #55, #56)
 ✅ `CheckCombatStatusTool`, `PerformCombatAttackTool`, `ApplyDamageTool` - 18 тестов
 
+### Тесты для новой функциональности - Система достижений и магии (Задачи #26, #45)
+✅ **Добавлено:** Domain-тесты для последнего реализованного функционала (Январь 2025)
+
+**Достижения (achievement):**
+- `TestAchievement_IsCompleted` - 5 тестов проверки выполнения достижений (значение равно/больше/меньше требования, нулевое требование)
+- `TestAchievement_GetProgressPercentage` - 8 тестов расчета процента прогресса (0%, 50%, 100%, перевыполнение, граничные случаи)
+
+**Заклинания (spell):**
+- `TestSpell_IsCantrip` - 3 теста проверки заговоров (уровень 0)
+- `TestSpell_IsAvailableForClass` - 7 тестов проверки доступности заклинаний для классов (wizard, cleric, ranger, немагические классы)
+- `TestSpellSlots_GetSlotsByLevel` - 9 тестов получения максимальных слотов по уровням
+- `TestSpellSlots_GetUsedSlotsByLevel` - 5 тестов получения использованных слотов
+- `TestSpellSlots_UseSpellSlot` - 4 теста использования слотов заклинаний
+- `TestSpellSlots_RestoreSpellSlots` - тест восстановления всех слотов
+- `TestCalculateSpellSlotsForLevel` - 9 тестов расчета слотов для разных классов и уровней (wizard, cleric, ranger, немагические)
+
+**Генерация изображений (image rate_limiter):**
+- `TestInMemoryRateLimiter_CheckLimit` - 6 тестов проверки лимита генерации (нет записей, в пределах лимита, на лимите, превышение)
+- `TestInMemoryRateLimiter_GetRemainingQuota` - 4 теста получения оставшейся квоты
+- `TestInMemoryRateLimiter_DifferentUsers` - тест изоляции лимитов для разных пользователей
+- `TestInMemoryRateLimiter_CleanupOldRecords` - тест очистки старых записей (старше 7 дней)
+
 ## Приоритетные задачи
 
 ✅ **Все критичные задачи выполнены**
 
 📋 **Backlog:**
+- Интеграционные тесты для `GetAchievementsUseCase` и `GetSpellsUseCase` (требуют БД, сейчас есть только domain-тесты)
 - Интеграционные тесты (БД, Qdrant, Telegram API)
 - End-to-end тесты полного цикла команд бота
 - Тесты для `extractCombatToolMessage` и форматирования результатов combat tools
+- Исправление устаревших тестов в `player_action` и `dm_analyzer` (обновление сигнатур)
 
 ---
 

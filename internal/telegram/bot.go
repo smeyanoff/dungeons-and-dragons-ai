@@ -3,17 +3,21 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
+	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
 	"dungeons-and-dragons-ai/internal/game/application/dice"
+	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	"dungeons-and-dragons-ai/internal/game/application/history"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
+	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	mapapp 	"dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
@@ -43,6 +47,9 @@ type Bot struct {
 	rollDiceUC        *dice.RollDiceUseCase
 	getQuestsUC       *questapp.GetQuestsUseCase
 	getMapUC          *mapapp.GetMapUseCase
+	getAchievementsUC *achievementapp.GetAchievementsUseCase
+	getSpellsUC       *spellapp.GetSpellsUseCase
+	generateImageUC   *imageapp.ImageGenerationUseCase
 	sessionRepo       session.Repository
 	combatRepo        CombatRepository
 	feedbackRepo      FeedbackRepository
@@ -71,6 +78,9 @@ func NewBot(
 	rollDiceUC *dice.RollDiceUseCase,
 	getQuestsUC *questapp.GetQuestsUseCase,
 	getMapUC *mapapp.GetMapUseCase,
+	getAchievementsUC *achievementapp.GetAchievementsUseCase,
+	getSpellsUC *spellapp.GetSpellsUseCase,
+	generateImageUC *imageapp.ImageGenerationUseCase,
 	sessionRepo session.Repository,
 	combatRepo CombatRepository,
 	feedbackRepo FeedbackRepository,
@@ -92,6 +102,9 @@ func NewBot(
 		rollDiceUC:        rollDiceUC,
 		getQuestsUC:       getQuestsUC,
 		getMapUC:          getMapUC,
+		getAchievementsUC: getAchievementsUC,
+		getSpellsUC:       getSpellsUC,
+		generateImageUC:   generateImageUC,
 		sessionRepo:       sessionRepo,
 		combatRepo:        combatRepo,
 		feedbackRepo:      feedbackRepo,
@@ -121,11 +134,13 @@ func (b *Bot) setupBotCommands() error {
 		{Command: "attack", Description: "Атаковать противника"},
 		{Command: "battlefield", Description: "Показать поле боя"},
 		{Command: "abilities", Description: "Способности персонажа"},
-		{Command: "spells", Description: "Заклинания персонажа"},
+		{Command: "spells", Description: "Просмотр заклинаний"},
 		{Command: "roll", Description: "Бросить кубик"},
 		{Command: "history", Description: "История игры"},
 		{Command: "quests", Description: "Активные квесты"},
 		{Command: "map", Description: "Карта мира"},
+		{Command: "achievements", Description: "Просмотр достижений"},
+		{Command: "image", Description: "Сгенерировать изображение"},
 		{Command: "flee", Description: "Попытаться выйти из боя"},
 		{Command: "feedback", Description: "Отправить отзыв о игре"},
 		{Command: "endgame", Description: "Завершить игру"},
@@ -142,6 +157,11 @@ func (b *Bot) setupBotCommands() error {
 	)
 
 	return nil
+}
+
+// GetAPI возвращает BotAPI для использования в других компонентах (например, для уведомлений)
+func (b *Bot) GetAPI() *tgbotapi.BotAPI {
+	return b.api
 }
 
 func (b *Bot) Start(ctx context.Context) error {
@@ -236,7 +256,13 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleQuests(ctx, chatID)
 	case "map":
 		return b.handleMap(ctx, chatID)
-	case "flee", "run":
+	case "achievements":
+		return b.handleAchievements(ctx, chatID, tgUserID)
+		case "spells":
+			return b.handleSpells(ctx, chatID, tgUserID)
+		case "image":
+			return b.handleImage(ctx, chatID, tgUserID, args)
+		case "flee", "run":
 		return b.handleFlee(ctx, chatID)
 	case "feedback":
 		return b.handleFeedback(ctx, chatID, args, tgUserID, from)
@@ -248,8 +274,6 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleBattlefield(ctx, chatID, args)
 	case "abilities":
 		return b.handleAbilities(ctx, chatID, args)
-	case "spells":
-		return b.handleSpells(ctx, chatID, args)
 	default:
 		msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Используйте /help для списка команд")
 		return b.sendMessage(msg)
@@ -451,6 +475,30 @@ func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, text string)
 		logger.Int64("chat_id", chatID),
 		logger.Int("response_length", len(response)),
 	)
+	
+	// Проверяем наличие маркеров изображений в ответе и отправляем их
+	imagePaths := b.extractImageMarkers(response)
+	if len(imagePaths) > 0 {
+		logger.Info("Sending generated images",
+			logger.Int64("chat_id", chatID),
+			logger.Int("image_count", len(imagePaths)),
+		)
+		for _, imagePath := range imagePaths {
+			// Удаляем маркер из текста перед отправкой
+			response = strings.ReplaceAll(response, fmt.Sprintf("[IMAGE:%s]", imagePath), "")
+			// Отправляем изображение
+			if err := b.sendPhoto(ctx, chatID, imagePath, ""); err != nil {
+				logger.Warn("Failed to send generated image",
+					logger.ErrorField(err),
+					logger.Int64("chat_id", chatID),
+					logger.String("image_path", imagePath),
+				)
+				// Не прерываем выполнение, просто логируем ошибку
+			}
+		}
+		// Очищаем пробелы и переносы строк после удаления маркеров
+		response = strings.TrimSpace(response)
+	}
 
 	// Обновляем сообщение с ответом
 	// Если ответ слишком длинный, отправляем новое сообщение вместо редактирования
@@ -1009,6 +1057,141 @@ func (b *Bot) handleMap(ctx context.Context, chatID int64) error {
 	return b.sendLongMessage(chatID, mapText)
 }
 
+func (b *Bot) handleAchievements(ctx context.Context, chatID int64, tgUserID int64) error {
+	if b.getAchievementsUC == nil {
+		msg := tgbotapi.NewMessage(chatID, "Система достижений временно недоступна.")
+		return b.sendMessage(msg)
+	}
+
+	req := achievementapp.GetAchievementsRequest{
+		ChatID:  chatID,
+		TgUserID: tgUserID,
+	}
+
+	achievementsText, err := b.getAchievementsUC.Execute(ctx, req)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении достижений: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	return b.sendLongMessage(chatID, achievementsText)
+}
+
+// handleSpells обрабатывает команду /spells для просмотра заклинаний
+func (b *Bot) handleSpells(ctx context.Context, chatID int64, tgUserID int64) error {
+	req := spellapp.GetSpellsRequest{
+		ChatID:  chatID,
+		TgUserID: tgUserID,
+	}
+
+	spellsText, err := b.getSpellsUC.Execute(ctx, req)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении заклинаний: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	return b.sendLongMessage(chatID, spellsText)
+}
+
+// handleImage обрабатывает команду /image для генерации изображений
+func (b *Bot) handleImage(ctx context.Context, chatID int64, tgUserID int64, args string) error {
+	if b.generateImageUC == nil {
+		msg := tgbotapi.NewMessage(chatID, "Генерация изображений временно недоступна.")
+		return b.sendMessage(msg)
+	}
+
+	// Если аргументы не указаны, показываем справку
+	if args == "" {
+		msg := tgbotapi.NewMessage(chatID, `🎨 Генерация изображений
+
+Используйте команду:
+/image <описание>
+
+Примеры:
+/image розовый кот
+/image древний лес с магическими рунами
+/image эльфийский воин в доспехах
+
+📝 Генерация изображений ограничена 5 изображениями в день для Free пользователей.
+Для Premium пользователей лимит снят.
+
+💡 Изображения автоматически кэшируются для повторного использования.`)
+		return b.sendMessage(msg)
+	}
+
+	// Отправляем сообщение о начале генерации
+	statusMsg := tgbotapi.NewMessage(chatID, "🎨 Генерирую изображение... Это может занять несколько секунд.")
+	if err := b.sendMessage(statusMsg); err != nil {
+		logger.Warn("Failed to send status message",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+		)
+	}
+
+	// Генерируем изображение
+	req := imageapp.GenerateImageRequest{
+		SystemPrompt:   "Ты — талантливый художник в стиле фэнтези и D&D. Создавай детализированные и атмосферные изображения.",
+		UserPrompt:     args,
+		Type:           "custom",
+		EntityID:       0,
+		ForceRegenerate: false,
+		UserID:         tgUserID,
+		SkipLimitCheck: false, // TODO: Проверять Premium статус
+	}
+
+	resp, err := b.generateImageUC.Execute(ctx, req)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при генерации изображения: %v\n\nВозможно, достигнут дневной лимит генерации (5 изображений/день).", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	// Отправляем изображение
+	if err := b.sendPhoto(ctx, chatID, resp.ImagePath, "🎨 Ваше изображение готово!"); err != nil {
+		logger.Error("Failed to send image",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+			logger.String("image_path", resp.ImagePath),
+		)
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Изображение сгенерировано, но произошла ошибка при отправке: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	return nil
+}
+
+// sendPhoto отправляет фото через Telegram Bot API
+func (b *Bot) sendPhoto(ctx context.Context, chatID int64, photoPath string, caption string) error {
+	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(photoPath))
+	photo.Caption = caption
+
+	_, err := b.api.Send(photo)
+	if err != nil {
+		return fmt.Errorf("failed to send photo: %w", err)
+	}
+
+	return nil
+}
+
+// extractImageMarkers извлекает пути к изображениям из маркеров [IMAGE:path] в тексте
+func (b *Bot) extractImageMarkers(text string) []string {
+	// Регулярное выражение для поиска маркеров [IMAGE:path]
+	re := regexp.MustCompile(`\[IMAGE:([^\]]+)\]`)
+	matches := re.FindAllStringSubmatch(text, -1)
+	
+	if len(matches) == 0 {
+		return nil
+	}
+	
+	imagePaths := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) >= 2 {
+			imagePaths = append(imagePaths, match[1])
+		}
+	}
+	
+	return imagePaths
+}
+
 // handleAttack обрабатывает команду /attack или боевое действие игрока
 // action - опциональное описание действия (например, "атакую мечом")
 // Если action пустое, используется стандартная атака
@@ -1131,12 +1314,7 @@ func (b *Bot) handleAbilities(ctx context.Context, chatID int64, args string) er
 	return b.sendLongMessage(chatID, result)
 }
 
-// handleSpells обрабатывает команду /spells для отображения заклинаний персонажа
-func (b *Bot) handleSpells(ctx context.Context, chatID int64, args string) error {
-	// Используем handleAbilities с фильтром "spells"
-	return b.handleAbilities(ctx, chatID, "spells")
-}
-
+// handleFlee обрабатывает команду /flee для выхода из боя
 func (b *Bot) handleFlee(ctx context.Context, chatID int64) error {
 	// Получаем сессию
 	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)

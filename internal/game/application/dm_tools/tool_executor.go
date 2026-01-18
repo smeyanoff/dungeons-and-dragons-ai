@@ -154,6 +154,25 @@ func FormatToolResults(results []ToolResult) string {
 	return strings.Join(parts, "\n")
 }
 
+// extractNumber безопасно извлекает число из interface{}, обрабатывая int и float64
+func extractNumber(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	default:
+		return 0
+	}
+}
+
 // formatCombatToolResult форматирует результат combat tool для лучшей читаемости
 func formatCombatToolResult(result ToolResult) string {
 	resultMap, ok := result.Result.(map[string]interface{})
@@ -169,11 +188,11 @@ func formatCombatToolResult(result ToolResult) string {
 		criticalHit, _ := resultMap["critical_hit"].(bool)
 		attackerName, _ := resultMap["attacker_name"].(string)
 		targetName, _ := resultMap["target_name"].(string)
-		attackRoll, _ := resultMap["attack_roll"].(float64)
-		ac, _ := resultMap["ac"].(float64)
-		damage, _ := resultMap["damage"].(float64)
-		targetHP, _ := resultMap["target_hp"].(float64)
-		targetMaxHP, _ := resultMap["target_max_hp"].(float64)
+		attackRoll := extractNumber(resultMap["attack_roll"])
+		ac := extractNumber(resultMap["ac"])
+		damage := extractNumber(resultMap["damage"])
+		targetHP := extractNumber(resultMap["target_hp"])
+		targetMaxHP := extractNumber(resultMap["target_max_hp"])
 		
 		if criticalHit {
 			parts = append(parts, "🎯 КРИТИЧЕСКИЙ УДАР!")

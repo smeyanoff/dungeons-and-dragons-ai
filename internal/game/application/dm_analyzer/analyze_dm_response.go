@@ -76,9 +76,43 @@ type AnalyzeDMResponseUseCase struct {
 	questRepo          QuestRepository
 	inventoryRepo      InventoryRepository
 	sessionID          uint
+	chatID             int64  // ChatID для отправки уведомлений
 	worldID            uint
 	characterID        uint   // ID персонажа игрока
+	playerID           uint   // ID игрока (для проверки достижений)
 	combatStartMessage string // Сообщение о порядке ходов при начале боя
+	checkAchievementsUC AchievementChecker // Опциональная зависимость для проверки достижений
+	notificationService NotificationService // Опциональная зависимость для отправки уведомлений
+}
+
+// AchievementChecker интерфейс для проверки достижений
+type AchievementChecker interface {
+	Execute(ctx context.Context, req CheckAchievementsRequest) ([]AchievementUnlocked, error)
+}
+
+// CheckAchievementsRequest запрос на проверку достижений
+type CheckAchievementsRequest struct {
+	PlayerID      uint
+	RequirementKey string
+	CurrentValue   int
+}
+
+// AchievementUnlocked разблокированное достижение
+type AchievementUnlocked struct {
+	Achievement Achievement
+	Message     string
+}
+
+// Achievement достижение (для упрощения зависимостей)
+type Achievement struct {
+	Code        string
+	Title       string
+	Description string
+}
+
+// NotificationService интерфейс для отправки уведомлений о достижениях (из achievement пакета)
+type NotificationService interface {
+	SendAchievementNotification(ctx context.Context, chatID int64, message string) error
 }
 
 func NewAnalyzeDMResponseUseCase(
@@ -87,8 +121,10 @@ func NewAnalyzeDMResponseUseCase(
 	questRepo QuestRepository,
 	inventoryRepo InventoryRepository,
 	sessionID uint,
+	chatID int64, // ChatID для отправки уведомлений
 	worldID uint,
 	characterID uint,
+	playerID uint, // Добавлен playerID для проверки достижений
 ) *AnalyzeDMResponseUseCase {
 	return &AnalyzeDMResponseUseCase{
 		llm:           llm,
@@ -96,9 +132,21 @@ func NewAnalyzeDMResponseUseCase(
 		questRepo:     questRepo,
 		inventoryRepo: inventoryRepo,
 		sessionID:     sessionID,
+		chatID:        chatID,
 		worldID:       worldID,
 		characterID:   characterID,
+		playerID:      playerID,
 	}
+}
+
+// SetCheckAchievementsUseCase устанавливает AchievementChecker для проверки достижений
+func (uc *AnalyzeDMResponseUseCase) SetCheckAchievementsUseCase(checkAchievementsUC AchievementChecker) {
+	uc.checkAchievementsUC = checkAchievementsUC
+}
+
+// SetNotificationService устанавливает NotificationService для отправки уведомлений
+func (uc *AnalyzeDMResponseUseCase) SetNotificationService(notificationService NotificationService) {
+	uc.notificationService = notificationService
 }
 
 // Execute анализирует ответ DM и выполняет необходимые действия
@@ -307,6 +355,34 @@ func (uc *AnalyzeDMResponseUseCase) handleCombatStart(
 	// Генерируем сообщение о порядке ходов для озвучивания DM
 	uc.combatStartMessage = newCombat.GetInitiativeOrderMessage()
 
+	// Проверяем достижения по участию в бою
+	if uc.checkAchievementsUC != nil && uc.playerID > 0 {
+		// Проверяем достижения по участию в бою (combat_participated)
+		achievementReq := CheckAchievementsRequest{
+			PlayerID:       uc.playerID,
+			RequirementKey: "combat_participated",
+			CurrentValue:   1, // Увеличиваем на 1 участие
+		}
+		
+		unlocked, err := uc.checkAchievementsUC.Execute(ctx, achievementReq)
+		if err != nil {
+			log.Printf("[DM Analyzer] Failed to check achievements after combat start: %v", err)
+		} else if len(unlocked) > 0 {
+			// Логируем и отправляем уведомления о разблокированных достижениях
+			for _, achievement := range unlocked {
+				log.Printf("[DM Analyzer] Achievement unlocked after combat start: %s (%s)", 
+					achievement.Achievement.Code, achievement.Achievement.Title)
+				
+				// Отправляем уведомление пользователю, если есть notification service
+				if uc.notificationService != nil {
+					if err := uc.notificationService.SendAchievementNotification(ctx, uc.chatID, achievement.Message); err != nil {
+						log.Printf("[DM Analyzer] Failed to send achievement notification: %v", err)
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -357,6 +433,34 @@ func (uc *AnalyzeDMResponseUseCase) handleQuestStatus(
 	// Сохраняем изменения
 	if err := uc.questRepo.Save(ctx, targetQuest); err != nil {
 		return fmt.Errorf("failed to save quest: %w", err)
+	}
+
+	// Проверяем достижения по завершению квеста
+	if uc.checkAchievementsUC != nil && uc.playerID > 0 && analysis.QuestCompleted {
+		// Проверяем достижения по завершению квестов (quests_completed)
+		achievementReq := CheckAchievementsRequest{
+			PlayerID:       uc.playerID,
+			RequirementKey: "quests_completed",
+			CurrentValue:   1, // Увеличиваем на 1 завершенный квест
+		}
+		
+		unlocked, err := uc.checkAchievementsUC.Execute(ctx, achievementReq)
+		if err != nil {
+			log.Printf("[DM Analyzer] Failed to check achievements after quest completion: %v", err)
+		} else if len(unlocked) > 0 {
+			// Логируем и отправляем уведомления о разблокированных достижениях
+			for _, achievement := range unlocked {
+				log.Printf("[DM Analyzer] Achievement unlocked after quest completion: %s (%s)", 
+					achievement.Achievement.Code, achievement.Achievement.Title)
+				
+				// Отправляем уведомление пользователю, если есть notification service
+				if uc.notificationService != nil {
+					if err := uc.notificationService.SendAchievementNotification(ctx, uc.chatID, achievement.Message); err != nil {
+						log.Printf("[DM Analyzer] Failed to send achievement notification: %v", err)
+					}
+				}
+			}
+		}
 	}
 
 	return nil

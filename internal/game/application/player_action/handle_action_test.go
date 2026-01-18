@@ -521,6 +521,9 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 				inventoryRepo,
 				addExperienceUC,
 				checkWorldEventsUC,
+				nil, // checkAchievementsUC - optional
+				nil, // notificationService - optional
+				nil, // generateImageUC - optional
 				nil, // responseCache - optional
 				nil, // actionValidator - optional
 			)
@@ -706,6 +709,9 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 				inventoryRepo,
 				addExperienceUC,
 				checkWorldEventsUC,
+				nil, // checkAchievementsUC - optional
+				nil, // notificationService - optional
+				nil, // generateImageUC - optional
 				nil, // responseCache
 				validator,
 			)
@@ -780,7 +786,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				}
 			},
 			expectedError:  false,
-			expectedResult: "", // Валидатор должен вернуть сообщение об ошибке
+			expectedResult: "",  // Валидатор должен вернуть сообщение об ошибке
 			shouldContain:  "8", // Сообщение должно содержать "8", а не "0"
 		},
 		{
@@ -860,6 +866,9 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				inventoryRepo,
 				addExperienceUC,
 				checkWorldEventsUC,
+				nil, // checkAchievementsUC - optional
+				nil, // notificationService - optional
+				nil, // generateImageUC - optional
 				nil, // responseCache
 				validator,
 			)

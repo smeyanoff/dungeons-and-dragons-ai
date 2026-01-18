@@ -4,13 +4,17 @@ import (
 	"context"
 	"fmt"
 
+	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/pkg/logger"
 )
 
 type HandleCombatUseCase struct {
-	combatRepo  CombatRepository
-	sessionRepo session.Repository
+	combatRepo          CombatRepository
+	sessionRepo         session.Repository
+	checkAchievementsUC *achievementapp.CheckAchievementsUseCase // Опциональная зависимость для проверки достижений
+	notificationService achievementapp.NotificationService        // Опциональная зависимость для отправки уведомлений
 }
 
 type CombatRepository interface {
@@ -26,6 +30,16 @@ func NewHandleCombatUseCase(
 		combatRepo:  combatRepo,
 		sessionRepo: sessionRepo,
 	}
+}
+
+// SetCheckAchievementsUseCase устанавливает CheckAchievementsUseCase для проверки достижений
+func (uc *HandleCombatUseCase) SetCheckAchievementsUseCase(checkAchievementsUC *achievementapp.CheckAchievementsUseCase) {
+	uc.checkAchievementsUC = checkAchievementsUC
+}
+
+// SetNotificationService устанавливает NotificationService для отправки уведомлений
+func (uc *HandleCombatUseCase) SetNotificationService(notificationService achievementapp.NotificationService) {
+	uc.notificationService = notificationService
 }
 
 // Execute обрабатывает боевое действие игрока
@@ -137,6 +151,51 @@ func (uc *HandleCombatUseCase) Execute(
 
 			if alivePlayers > 0 {
 				resultText += "\n\n🎉 Победа! Все враги повержены!"
+				
+				// Проверяем достижения по победам в боях
+				if uc.checkAchievementsUC != nil {
+					// Находим игрока через сессию для получения playerID
+					player := gs.GetFirstPlayer()
+					if player != nil {
+						// Упрощенное решение: передаем 1, а CheckAchievementsUseCase сам увеличит прогресс
+						// CheckAchievementsUseCase автоматически увеличивает существующий прогресс на переданное значение
+						achievementReq := achievementapp.CheckAchievementsRequest{
+							PlayerID:       player.ID,
+							RequirementKey: "combat_wins",
+							CurrentValue:   1, // Увеличиваем на 1 победу
+						}
+						
+						unlocked, err := uc.checkAchievementsUC.Execute(ctx, achievementReq)
+						if err != nil {
+							logger.Warn("Failed to check achievements after combat victory",
+								logger.ErrorField(err),
+								logger.Uint("player_id", player.ID),
+							)
+						} else if len(unlocked) > 0 {
+							// Логируем и отправляем уведомления о разблокированных достижениях
+							for _, achievement := range unlocked {
+								logger.Info("Achievement unlocked after combat victory",
+									logger.Uint("player_id", player.ID),
+									logger.String("achievement_code", achievement.Achievement.Code),
+									logger.String("achievement_title", achievement.Achievement.Title),
+								)
+								// Добавляем уведомление о разблокированном достижении в результат
+								resultText += fmt.Sprintf("\n\n🏆 %s", achievement.Message)
+								
+								// Отправляем уведомление пользователю через notification service (если есть)
+								if uc.notificationService != nil {
+									if err := uc.notificationService.SendAchievementNotification(ctx, chatID, achievement.Message); err != nil {
+										logger.Warn("Failed to send achievement notification",
+											logger.ErrorField(err),
+											logger.Uint("player_id", player.ID),
+											logger.String("achievement_code", achievement.Achievement.Code),
+										)
+									}
+								}
+							}
+						}
+					}
+				}
 			} else {
 				resultText += "\n\n💀 Поражение! Все игроки повержены!"
 			}

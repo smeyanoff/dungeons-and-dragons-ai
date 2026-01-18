@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
+	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
@@ -37,6 +39,9 @@ type HandleActionUseCase struct {
 	inventoryRepo      InventoryRepository
 	addExperienceUC    *characterapp.AddExperienceUseCase
 	checkWorldEventsUC *worldeventapp.CheckWorldEventsUseCase
+	checkAchievementsUC *achievementapp.CheckAchievementsUseCase // Для проверки достижений
+	notificationService achievementapp.NotificationService        // Для отправки уведомлений о достижениях
+	generateImageUC    *imageapp.ImageGenerationUseCase          // Для генерации изображений
 	responseCache      *dmcache.DMResponseCache
 	actionValidator    *ActionValidator
 }
@@ -132,6 +137,9 @@ func NewHandleActionUseCase(
 	inventoryRepo InventoryRepository,
 	addExperienceUC *characterapp.AddExperienceUseCase,
 	checkWorldEventsUC *worldeventapp.CheckWorldEventsUseCase,
+	checkAchievementsUC *achievementapp.CheckAchievementsUseCase,
+	notificationService achievementapp.NotificationService,
+	generateImageUC *imageapp.ImageGenerationUseCase,
 	responseCache *dmcache.DMResponseCache,
 	actionValidator *ActionValidator,
 ) *HandleActionUseCase {
@@ -146,6 +154,9 @@ func NewHandleActionUseCase(
 		inventoryRepo:      inventoryRepo,
 		addExperienceUC:    addExperienceUC,
 		checkWorldEventsUC: checkWorldEventsUC,
+		checkAchievementsUC: checkAchievementsUC,
+		notificationService: notificationService,
+		generateImageUC:    generateImageUC,
 		responseCache:      responseCache,
 		actionValidator:    actionValidator,
 	}
@@ -308,8 +319,8 @@ func (uc *HandleActionUseCase) Execute(
 			return "Персонаж не создан. Используйте /createcharacter для создания персонажа.", nil
 		}
 
-		// Создаем реестр инструментов и регистрируем их
-		toolRegistry := uc.createToolRegistry(gs, player)
+	// Создаем реестр инструментов и регистрируем их
+	toolRegistry := uc.createToolRegistry(gs, player)
 
 		// Формируем промпт для DM
 		prompt := buildDMPrompt(gameContext, playerMessage)
@@ -324,7 +335,8 @@ func (uc *HandleActionUseCase) Execute(
 		startTime := time.Now()
 		
 		// Multi-step loop: генерация → выполнение инструментов → финальная генерация
-		response, err = uc.generateWithToolsLoop(llmCtx, prompt, toolRegistry, gs.ID)
+		var imageResults []map[string]interface{}
+		response, imageResults, err = uc.generateWithToolsLoop(llmCtx, prompt, toolRegistry, gs.ID)
 		duration := time.Since(startTime)
 		if err != nil {
 			logger.Error("Failed to generate DM response with tools",
@@ -339,6 +351,24 @@ func (uc *HandleActionUseCase) Execute(
 			logger.Int("response_length", len(response)),
 			logger.Duration("duration", duration),
 		)
+		
+		// Если были сгенерированы изображения, добавляем маркеры для отправки через Telegram
+		if len(imageResults) > 0 {
+			logger.Info("Images generated during DM response",
+				logger.Uint("session_id", gs.ID),
+				logger.Int("image_count", len(imageResults)),
+			)
+			// Добавляем маркер в ответ, чтобы bot.go мог обнаружить и отправить изображения
+			imageMarkers := []string{}
+			for _, img := range imageResults {
+				if path, ok := img["image_path"].(string); ok {
+					imageMarkers = append(imageMarkers, fmt.Sprintf("\n[IMAGE:%s]", path))
+				}
+			}
+			if len(imageMarkers) > 0 {
+				response = response + strings.Join(imageMarkers, "")
+			}
+		}
 
 		// Сохраняем ответ в кэш
 		if uc.responseCache != nil {
@@ -421,9 +451,23 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		uc.questRepo,
 		uc.inventoryRepo,
 		gs.ID,
+		gs.ChatID, // Передаем chatID для отправки уведомлений
 		gs.WorldID,
 		player.CharacterID,
+		player.ID, // Передаем playerID для проверки достижений
 	)
+	
+	// Настраиваем проверку достижений и уведомления в AnalyzeDMResponseUseCase
+	if uc.checkAchievementsUC != nil {
+		// Создаем адаптер для передачи CheckAchievementsUseCase в dm_analyzer
+		achievementChecker := &achievementCheckerAdapter{checkAchievementsUC: uc.checkAchievementsUC}
+		analyzer.SetCheckAchievementsUseCase(achievementChecker)
+		
+		// Настраиваем notification service для отправки уведомлений о достижениях
+		// notification service будет настроен в main.go после создания bot
+		// Для этого нужно создать адаптер или передать через HandleActionUseCase
+		// Пока оставляем как есть - уведомления будут отправляться только если notification service настроен
+	}
 
 	// Анализируем ответ DM
 	analysis, err := analyzer.Execute(ctx, dmResponse)
@@ -527,12 +571,24 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 		registry.Register(dm_tools.NewApplyDamageTool(uc.combatRepo, sessionRepoAdapter, playerRepoAdapter, gs.ID, gs.ChatID))
 	}
 	
+	// Регистрируем инструмент для генерации изображений (если доступен)
+	if uc.generateImageUC != nil {
+		// Получаем userID из игрока (используем TgUserID если есть, иначе ChatID)
+		userID := gs.ChatID // По умолчанию используем ChatID
+		if player != nil && player.TgUserID > 0 {
+			userID = player.TgUserID
+		}
+		// Создаем адаптер для разрыва циклической зависимости
+		imageService := imageapp.NewImageGenerationServiceAdapter(uc.generateImageUC)
+		registry.Register(dm_tools.NewGenerateImageTool(imageService, gs.ChatID, userID))
+	}
+	
 	return registry
 }
 
 // generateWithToolsLoop реализует multi-step loop для работы с tools
 // Возвращает финальный ответ DM с явно включенными результатами combat tools
-func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt string, toolRegistry *dm_tools.ToolRegistry, sessionID uint) (string, error) {
+func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt string, toolRegistry *dm_tools.ToolRegistry, sessionID uint) (string, []map[string]interface{}, error) {
 	const maxIterations = 3 // Максимальное количество итераций для предотвращения бесконечного цикла
 	
 	allTools := toolRegistry.GetAll()
@@ -540,12 +596,14 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 	
 	// Собираем результаты combat tools для явного отображения в чате
 	var combatResults []string
+	// Собираем информацию о сгенерированных изображениях
+	var imageResults []map[string]interface{}
 	
 	for iteration := 0; iteration < maxIterations; iteration++ {
 		// Генерируем ответ с инструментами
 		llmResponse, err := uc.llm.GenerateWithTools(ctx, currentPrompt, allTools)
 		if err != nil {
-			return "", fmt.Errorf("failed to generate response with tools: %w", err)
+			return "", nil, fmt.Errorf("failed to generate response with tools: %w", err)
 		}
 		
 		// Если нет вызовов инструментов, возвращаем финальный ответ с результатами combat tools
@@ -559,10 +617,10 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 			// Добавляем результаты combat tools в начало ответа, если они есть
 			if len(combatResults) > 0 {
 				combatSection := strings.Join(combatResults, "\n\n")
-				return fmt.Sprintf("%s\n\n%s", combatSection, finalResponse), nil
+				return fmt.Sprintf("%s\n\n%s", combatSection, finalResponse), imageResults, nil
 			}
 			
-			return finalResponse, nil
+			return finalResponse, imageResults, nil
 		}
 		
 		// Выполняем вызовы инструментов
@@ -601,12 +659,13 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 			// Возвращаем ответ с собранными результатами combat tools
 			if len(combatResults) > 0 {
 				combatSection := strings.Join(combatResults, "\n\n")
-				return fmt.Sprintf("%s\n\n%s", combatSection, cleanedResponse), nil
+				return fmt.Sprintf("%s\n\n%s", combatSection, cleanedResponse), imageResults, nil
 			}
-			return cleanedResponse, nil
+			return cleanedResponse, imageResults, nil
 		}
 		
 		// Извлекаем результаты combat tools для явного отображения
+		// Извлекаем результаты generate_image tool для отправки изображений
 		for _, result := range results {
 			if result.Success && (result.ToolName == "perform_combat_attack" || 
 				result.ToolName == "apply_damage" || 
@@ -614,6 +673,24 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 				combatMsg := extractCombatToolMessage(result)
 				if combatMsg != "" {
 					combatResults = append(combatResults, combatMsg)
+				}
+			}
+			
+			// Извлекаем результаты generate_image tool для отправки изображений
+			if result.Success && result.ToolName == "generate_image" {
+				if resultMap, ok := result.Result.(map[string]interface{}); ok {
+					if imagePath, ok := resultMap["image_path"].(string); ok && imagePath != "" {
+						imageInfo := map[string]interface{}{
+							"image_path": imagePath,
+						}
+						if desc, ok := resultMap["description"].(string); ok {
+							imageInfo["description"] = desc
+						}
+						if msg, ok := resultMap["message"].(string); ok {
+							imageInfo["message"] = msg
+						}
+						imageResults = append(imageResults, imageInfo)
+					}
 				}
 			}
 		}
@@ -653,7 +730,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 	// Если достигнут максимум итераций, возвращаем последний ответ без tool calls
 	llmResponse, err := uc.llm.Generate(ctx, currentPrompt)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate final response: %w", err)
+		return "", imageResults, fmt.Errorf("failed to generate final response: %w", err)
 	}
 	
 	cleanedResponse := llmResponse
@@ -664,10 +741,29 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 	// Добавляем результаты combat tools в начало ответа, если они есть
 	if len(combatResults) > 0 {
 		combatSection := strings.Join(combatResults, "\n\n")
-		return fmt.Sprintf("%s\n\n%s", combatSection, cleanedResponse), nil
+		return fmt.Sprintf("%s\n\n%s", combatSection, cleanedResponse), imageResults, nil
 	}
 	
-	return cleanedResponse, nil
+	return cleanedResponse, imageResults, nil
+}
+
+// extractNumber безопасно извлекает число из interface{}, обрабатывая int и float64
+func extractNumber(v interface{}) float64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case int:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case float64:
+		return val
+	case float32:
+		return float64(val)
+	default:
+		return 0
+	}
 }
 
 // extractCombatToolMessage извлекает читаемое сообщение из результата combat tool для явного отображения в чате
@@ -685,11 +781,11 @@ func extractCombatToolMessage(result dm_tools.ToolResult) string {
 		criticalHit, _ := resultMap["critical_hit"].(bool)
 		attackerName, _ := resultMap["attacker_name"].(string)
 		targetName, _ := resultMap["target_name"].(string)
-		attackRoll, _ := resultMap["attack_roll"].(float64)
-		ac, _ := resultMap["ac"].(float64)
-		damage, _ := resultMap["damage"].(float64)
-		targetHP, _ := resultMap["target_hp"].(float64)
-		targetMaxHP, _ := resultMap["target_max_hp"].(float64)
+		attackRoll := extractNumber(resultMap["attack_roll"])
+		ac := extractNumber(resultMap["ac"])
+		damage := extractNumber(resultMap["damage"])
+		targetHP := extractNumber(resultMap["target_hp"])
+		targetMaxHP := extractNumber(resultMap["target_max_hp"])
 		
 		if criticalHit {
 			parts = append(parts, "🎯 КРИТИЧЕСКИЙ УДАР!")
@@ -745,11 +841,11 @@ func extractCombatToolMessage(result dm_tools.ToolResult) string {
 		criticalHit, _ := resultMap["critical_hit"].(bool)
 		attackerName, _ := resultMap["attacker_name"].(string)
 		targetName, _ := resultMap["target_name"].(string)
-		attackRoll, _ := resultMap["attack_roll"].(float64)
-		ac, _ := resultMap["ac"].(float64)
-		damage, _ := resultMap["damage"].(float64)
-		targetHP, _ := resultMap["target_hp"].(float64)
-		targetMaxHP, _ := resultMap["target_max_hp"].(float64)
+		attackRoll := extractNumber(resultMap["attack_roll"])
+		ac := extractNumber(resultMap["ac"])
+		damage := extractNumber(resultMap["damage"])
+		targetHP := extractNumber(resultMap["target_hp"])
+		targetMaxHP := extractNumber(resultMap["target_max_hp"])
 
 		if criticalHit {
 			parts = append(parts, "🎯 КРИТИЧЕСКИЙ УДАР!")
@@ -778,5 +874,41 @@ func extractCombatToolMessage(result dm_tools.ToolResult) string {
 		return strings.Join(parts, "\n")
 	}
 	return ""
+}
+
+// achievementCheckerAdapter адаптирует achievementapp.CheckAchievementsUseCase к dm_analyzer.AchievementChecker
+type achievementCheckerAdapter struct {
+	checkAchievementsUC *achievementapp.CheckAchievementsUseCase
+}
+
+func (a *achievementCheckerAdapter) Execute(
+	ctx context.Context,
+	req dm_analyzer.CheckAchievementsRequest,
+) ([]dm_analyzer.AchievementUnlocked, error) {
+	achievementReq := achievementapp.CheckAchievementsRequest{
+		PlayerID:       req.PlayerID,
+		RequirementKey: req.RequirementKey,
+		CurrentValue:   req.CurrentValue,
+	}
+	
+	unlocked, err := a.checkAchievementsUC.Execute(ctx, achievementReq)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Конвертируем в формат dm_analyzer
+	result := make([]dm_analyzer.AchievementUnlocked, len(unlocked))
+	for i, u := range unlocked {
+		result[i] = dm_analyzer.AchievementUnlocked{
+			Achievement: dm_analyzer.Achievement{
+				Code:        u.Achievement.Code,
+				Title:       u.Achievement.Title,
+				Description: u.Achievement.Description,
+			},
+			Message: u.Message,
+		}
+	}
+	
+	return result, nil
 }
 
