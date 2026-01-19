@@ -372,7 +372,9 @@ func TestGenerateStats(t *testing.T) {
 		t.Error("charisma should be generated")
 	}
 
-	// Характеристики должны быть в разумных пределах (3-18 для 4d6 drop lowest)
+	// Характеристики должны быть в разумных пределах
+	// Минимум 8 (стандарт D&D 5e для предотвращения критически слабых персонажей)
+	// Максимум 18 (максимум для 4d6 drop lowest)
 	allStats := []int{
 		stats.Strength,
 		stats.Dexterity,
@@ -383,8 +385,8 @@ func TestGenerateStats(t *testing.T) {
 	}
 
 	for i, stat := range allStats {
-		if stat < 3 || stat > 18 {
-			t.Errorf("stat %d out of range: %d (expected 3-18)", i, stat)
+		if stat < 8 || stat > 18 {
+			t.Errorf("stat %d out of range: %d (expected 8-18, minimum 8 to prevent critically weak characters)", i, stat)
 		}
 	}
 }

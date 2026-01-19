@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
+	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	"dungeons-and-dragons-ai/internal/game/domain/quest"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/pkg/logger"
 )
@@ -15,6 +17,19 @@ type HandleCombatUseCase struct {
 	sessionRepo         session.Repository
 	checkAchievementsUC *achievementapp.CheckAchievementsUseCase // Опциональная зависимость для проверки достижений
 	notificationService achievementapp.NotificationService        // Опциональная зависимость для отправки уведомлений
+	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase // Опциональная зависимость для проверки ежедневных заданий
+	updateRatingUC      RatingUpdater                             // Опциональная зависимость для обновления рейтингов
+}
+
+// RatingUpdater интерфейс для обновления рейтингов
+type RatingUpdater interface {
+	Execute(ctx context.Context, req RatingUpdateRequest) error
+}
+
+// RatingUpdateRequest запрос на обновление рейтинга
+type RatingUpdateRequest struct {
+	TgUserID int64
+	ChatID   int64
 }
 
 type CombatRepository interface {
@@ -40,6 +55,16 @@ func (uc *HandleCombatUseCase) SetCheckAchievementsUseCase(checkAchievementsUC *
 // SetNotificationService устанавливает NotificationService для отправки уведомлений
 func (uc *HandleCombatUseCase) SetNotificationService(notificationService achievementapp.NotificationService) {
 	uc.notificationService = notificationService
+}
+
+// SetCheckDailyProgressUseCase устанавливает CheckDailyQuestProgressUseCase для проверки ежедневных заданий
+func (uc *HandleCombatUseCase) SetCheckDailyProgressUseCase(checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase) {
+	uc.checkDailyProgressUC = checkDailyProgressUC
+}
+
+// SetRatingUpdater устанавливает RatingUpdater для обновления рейтингов
+func (uc *HandleCombatUseCase) SetRatingUpdater(updateRatingUC RatingUpdater) {
+	uc.updateRatingUC = updateRatingUC
 }
 
 // Execute обрабатывает боевое действие игрока
@@ -158,11 +183,11 @@ func (uc *HandleCombatUseCase) Execute(
 			if alivePlayers > 0 {
 				resultText += "\n\n🎉 Победа! Все враги повержены!"
 				
-				// Проверяем достижения по победам в боях
-				if uc.checkAchievementsUC != nil {
-					// Находим игрока через сессию для получения playerID
-					player := gs.GetFirstPlayer()
-					if player != nil {
+				// Находим игрока через сессию для получения playerID и TgUserID
+				player := gs.GetFirstPlayer()
+				if player != nil {
+					// Проверяем достижения по победам в боях
+					if uc.checkAchievementsUC != nil {
 						// Упрощенное решение: передаем 1, а CheckAchievementsUseCase сам увеличит прогресс
 						// CheckAchievementsUseCase автоматически увеличивает существующий прогресс на переданное значение
 						achievementReq := achievementapp.CheckAchievementsRequest{
@@ -199,6 +224,44 @@ func (uc *HandleCombatUseCase) Execute(
 									}
 								}
 							}
+						}
+					}
+					
+					// Проверяем прогресс ежедневных заданий по победам в боях
+					if uc.checkDailyProgressUC != nil {
+						dailyProgressReq := questapp.CheckProgressRequest{
+							ChatID:    chatID,
+							TgUserID:  player.TgUserID,
+							QuestType: quest.DailyQuestTypeWinCombat,
+							Increment: 1, // Увеличиваем прогресс на 1 победу
+						}
+						
+						if err := uc.checkDailyProgressUC.Execute(ctx, dailyProgressReq); err != nil {
+							logger.Warn("Failed to check daily quest progress after combat victory",
+								logger.ErrorField(err),
+								logger.Uint("player_id", player.ID),
+								logger.Int64("tg_user_id", player.TgUserID),
+							)
+						} else {
+							logger.Debug("Daily quest progress checked after combat victory",
+								logger.Uint("player_id", player.ID),
+								logger.Int64("tg_user_id", player.TgUserID),
+							)
+						}
+					}
+					
+					// Обновляем рейтинг игрока после победы в бою
+					if uc.updateRatingUC != nil {
+						ratingReq := RatingUpdateRequest{
+							TgUserID: player.TgUserID,
+							ChatID:   chatID,
+						}
+						if err := uc.updateRatingUC.Execute(ctx, ratingReq); err != nil {
+							logger.Warn("Failed to update rating after combat victory",
+								logger.ErrorField(err),
+								logger.Uint("player_id", player.ID),
+								logger.Int64("tg_user_id", player.TgUserID),
+							)
 						}
 					}
 				}

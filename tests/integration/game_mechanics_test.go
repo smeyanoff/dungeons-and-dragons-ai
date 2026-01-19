@@ -18,6 +18,7 @@ import (
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
+	ratingapp "dungeons-and-dragons-ai/internal/game/application/rating"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
@@ -26,6 +27,7 @@ import (
 	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/rating"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	llminfrastructure "dungeons-and-dragons-ai/internal/llm/infrastructure"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
@@ -61,6 +63,9 @@ type testConfig struct {
 	getAchievementsUC      *achievementapp.GetAchievementsUseCase
 	getSpellsUC           *spellapp.GetSpellsUseCase
 	useSpellUC            *spellapp.UseSpellUseCase
+	getLeaderboardUC      *ratingapp.GetLeaderboardUseCase
+	updateRatingUC        *ratingapp.UpdateRatingUseCase
+	addExperienceUC       *characterapp.AddExperienceUseCase
 	sessionRepo           session.Repository
 }
 
@@ -181,6 +186,7 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	achievementRepo := persistence.NewAchievementRepository(db)
 	spellRepo := persistence.NewSpellRepository(db)
 	subscriptionRepo := persistence.NewSubscriptionRepository(db)
+	ratingRepo := persistence.NewRatingRepository(db)
 
 	// Инициализация use cases
 	checkLimitsUC := subscriptionapp.NewCheckLimitsUseCase(subscriptionRepo, sessionRepo, sessionRepo, eventRepo, fallbackLimiter)
@@ -204,13 +210,30 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	completeDailyQuestUC := questapp.NewCompleteDailyQuestUseCase(sessionRepo, dailyQuestRepo, playerRepo, addExperienceUC)
 	checkDailyProgressUC := questapp.NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeDailyQuestUC)
 
+	// Инициализация рейтингов и лидербордов
+	getLeaderboardUC := ratingapp.NewGetLeaderboardUseCase(ratingRepo)
+	// Создаем адаптер для AchievementRepository для использования в rating пакете
+	achievementRepoAdapter := &ratingAchievementRepoAdapter{repo: achievementRepo}
+	updateRatingUC := ratingapp.NewUpdateRatingUseCase(ratingRepo, sessionRepo, playerRepo, achievementRepoAdapter)
+	
+	// Создаем getSubscriptionUC для handleActionUC
+	getSubscriptionUC := subscriptionapp.NewGetSubscriptionUseCase(subscriptionRepo)
+
 	// Адаптер для daily quest progress (как в main.go)
 	dailyQuestProgressAdapter := &dailyQuestProgressAdapterForPlayerAction{uc: checkDailyProgressUC}
+	
+	// Адаптер для RatingUpdater из updateRatingUC для player_action
+	ratingUpdaterAdapterForPlayerAction := &ratingUpdaterAdapterForPlayerAction{uc: updateRatingUC}
+	
+	// Настраиваем обновление рейтингов при получении опыта
+	ratingUpdaterAdapterForCharacter := &ratingUpdaterAdapter{uc: updateRatingUC}
+	addExperienceUC.SetRatingUpdater(ratingUpdaterAdapterForCharacter)
+	
 	handleActionUC := player_action.NewHandleActionUseCase(
 		llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo,
 		inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC,
 		notificationService, generateImageUC, useSpellUC, responseCache, actionValidator,
-		dailyQuestProgressAdapter,
+		dailyQuestProgressAdapter, getSubscriptionUC, ratingUpdaterAdapterForPlayerAction,
 	)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
@@ -218,6 +241,7 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	addItemUC := inventoryapp.NewAddItemUseCase(sessionRepo, inventoryRepo)
 	handleCombatUC := combatapp.NewHandleCombatUseCase(combatRepo, sessionRepo)
 	handleCombatUC.SetCheckAchievementsUseCase(checkAchievementsUC)
+	handleCombatUC.SetCheckDailyProgressUseCase(checkDailyProgressUC)
 	rollDiceUC := dice.NewRollDiceUseCase()
 	getQuestsUC := questapp.NewGetQuestsUseCase(sessionRepo, questRepo)
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
@@ -259,8 +283,58 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 		getAchievementsUC:    getAchievementsUC,
 		getSpellsUC:          getSpellsUC,
 		useSpellUC:           useSpellUC,
+		getLeaderboardUC:     getLeaderboardUC,
+		updateRatingUC:       updateRatingUC,
+		addExperienceUC:    addExperienceUC,
 		sessionRepo:          sessionRepo,
 	}
+}
+
+// ratingAchievementRepoAdapter адаптирует achievementRepo к интерфейсу rating.AchievementRepository
+type ratingAchievementRepoAdapter struct {
+	repo *persistence.AchievementRepository
+}
+
+func (a *ratingAchievementRepoAdapter) GetAchievementProgress(ctx context.Context, playerID uint, achievementID uint) (*ratingapp.AchievementProgress, error) {
+	progress, err := a.repo.GetAchievementProgress(ctx, playerID, achievementID)
+	if err != nil {
+		return nil, err
+	}
+	return &ratingapp.AchievementProgress{
+		PlayerID:     progress.PlayerID,
+		AchievementID: progress.AchievementID,
+		CurrentValue: progress.CurrentValue,
+	}, nil
+}
+
+func (a *ratingAchievementRepoAdapter) GetAchievementProgressByRequirementKey(ctx context.Context, playerID uint, requirementKey string) (int, error) {
+	return a.repo.GetAchievementProgressByRequirementKey(ctx, playerID, requirementKey)
+}
+
+// ratingUpdaterAdapter адаптирует updateRatingUC к интерфейсу characterapp.RatingUpdater
+type ratingUpdaterAdapter struct {
+	uc *ratingapp.UpdateRatingUseCase
+}
+
+func (a *ratingUpdaterAdapter) Execute(ctx context.Context, req characterapp.RatingUpdateRequest) error {
+	ratingReq := ratingapp.UpdateRatingRequest{
+		TgUserID: req.TgUserID,
+		ChatID:   req.ChatID,
+	}
+	return a.uc.Execute(ctx, ratingReq)
+}
+
+// ratingUpdaterAdapterForPlayerAction адаптирует updateRatingUC к интерфейсу player_action.RatingUpdater
+type ratingUpdaterAdapterForPlayerAction struct {
+	uc *ratingapp.UpdateRatingUseCase
+}
+
+func (a *ratingUpdaterAdapterForPlayerAction) Execute(ctx context.Context, req player_action.RatingUpdateRequest) error {
+	ratingReq := ratingapp.UpdateRatingRequest{
+		TgUserID: req.TgUserID,
+		ChatID:   req.ChatID,
+	}
+	return a.uc.Execute(ctx, ratingReq)
 }
 
 // dailyQuestProgressAdapterForPlayerAction адаптирует questapp.CheckDailyQuestProgressUseCase к интерфейсу player_action.DailyQuestProgressChecker
@@ -760,7 +834,632 @@ func TestDiceRolling(t *testing.T) {
 	}
 }
 
+// TestRatingSystem тестирует систему рейтингов и лидербордов
+func TestRatingSystem(t *testing.T) {
+	cfg := setupIntegrationTest(t)
+	defer cleanupTest(t, cfg)
+
+	ctx := cfg.ctx
+	chatID := cfg.chatID
+	tgUserID := cfg.tgUserID
+
+	var problems []string
+	var llmFeedback []string
+
+	// Создаем игру и персонажа
+	world, err := cfg.initCampaignUC.Execute(ctx, "тест рейтингов")
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось создать игру: %v", err))
+		t.Fatalf("Не удалось создать игру: %v", err)
+	}
+
+	gs := &session.GameSession{
+		ChatID:  chatID,
+		State:   session.StateActive,
+		World:   *world,
+		WorldID: world.ID,
+	}
+	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось сохранить сессию: %v", err))
+		t.Fatalf("Не удалось сохранить сессию: %v", err)
+	}
+
+	req := characterapp.CreateCharacterRequest{
+		ChatID: chatID,
+		Name:   "РейтинговыйГерой",
+		Race:   character.RaceHuman,
+		Class:  character.ClassFighter,
+	}
+	player, err := cfg.createCharacterUC.Execute(ctx, req)
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось создать персонажа: %v", err))
+		t.Fatalf("Не удалось создать персонажа: %v", err)
+	}
+
+	initialLevel := player.Character.Level
+	initialXP := player.Character.Experience
+
+	t.Logf("✅ Персонаж создан: уровень=%d, опыт=%d", initialLevel, initialXP)
+
+	// Шаг 1: Получение опыта и проверка обновления рейтинга
+	t.Run("Получение опыта и обновление рейтинга", func(t *testing.T) {
+		// Добавляем опыт
+		addXPReq := characterapp.AddExperienceRequest{
+			ChatID: chatID,
+			Amount: 500,
+			Reason: "test",
+		}
+		playerAfterXP, leveledUp, err := cfg.addExperienceUC.Execute(ctx, addXPReq)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось добавить опыт: %v", err))
+			t.Fatalf("Не удалось добавить опыт: %v", err)
+		}
+		if playerAfterXP == nil {
+			problems = append(problems, "Игрок не возвращен после добавления опыта")
+			t.Fatal("Игрок не возвращен")
+		}
+
+		t.Logf("✅ Опыт добавлен: leveledUp=%v, новый опыт=%d", leveledUp, playerAfterXP.Character.Experience)
+
+		// Обновляем рейтинг
+		updateReq := ratingapp.UpdateRatingRequest{
+			TgUserID: tgUserID,
+			ChatID:   chatID,
+		}
+		if err := cfg.updateRatingUC.Execute(ctx, updateReq); err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось обновить рейтинг: %v", err))
+			t.Fatalf("Не удалось обновить рейтинг: %v", err)
+		}
+
+		// Проверяем лидерборд по опыту
+		leaderboardReq := ratingapp.GetLeaderboardRequest{
+			MetricType: rating.MetricTypeExperience,
+			Limit:      10,
+			TgUserID:   tgUserID,
+		}
+		leaderboardResp, err := cfg.getLeaderboardUC.Execute(ctx, leaderboardReq)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить лидерборд: %v", err))
+			t.Fatalf("Не удалось получить лидерборд: %v", err)
+		}
+
+		if leaderboardResp == nil {
+			problems = append(problems, "Лидерборд пуст")
+			t.Fatal("Лидерборд пуст")
+		}
+
+		t.Logf("✅ Лидерборд получен: метрика=%s, записей=%d, ранг пользователя=%d",
+			leaderboardResp.MetricType, len(leaderboardResp.Entries), leaderboardResp.UserRank)
+
+		// Проверяем, что пользователь в лидерборде или имеет рейтинг
+		if len(leaderboardResp.Entries) == 0 && leaderboardResp.UserRating == 0 {
+			llmFeedback = append(llmFeedback, "Пользователь не появился в лидерборде после получения опыта")
+		}
+	})
+
+	// Шаг 2: Проверка лидербордов по разным метрикам
+	t.Run("Проверка лидербордов по разным метрикам", func(t *testing.T) {
+		metrics := []rating.RatingMetricType{
+			rating.MetricTypeLevel,
+			rating.MetricTypeExperience,
+			rating.MetricTypeCombatWins,
+			rating.MetricTypeQuestsCompleted,
+			rating.MetricTypeTotalRating,
+		}
+
+		for _, metricType := range metrics {
+			req := ratingapp.GetLeaderboardRequest{
+				MetricType: metricType,
+				Limit:      10,
+				TgUserID:   tgUserID,
+			}
+			resp, err := cfg.getLeaderboardUC.Execute(ctx, req)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("Не удалось получить лидерборд по метрике %s: %v", metricType, err))
+				t.Errorf("Не удалось получить лидерборд по метрике %s: %v", metricType, err)
+				continue
+			}
+
+			if resp == nil {
+				problems = append(problems, fmt.Sprintf("Лидерборд по метрике %s пуст", metricType))
+				t.Errorf("Лидерборд по метрике %s пуст", metricType)
+				continue
+			}
+
+			t.Logf("✅ Лидерборд по метрике %s: записей=%d", metricType, len(resp.Entries))
+		}
+	})
+
+	// Записываем найденные проблемы
+	if len(problems) > 0 {
+		writeToTestingReport(problems)
+	}
+	if len(llmFeedback) > 0 {
+		writeToFeedback(llmFeedback)
+	}
+}
+
+// TestCombatFlow_WithLLM тестирует полный поток боя с реальными ответами LLM
+func TestCombatFlow_WithLLM(t *testing.T) {
+	cfg := setupIntegrationTest(t)
+	defer cleanupTest(t, cfg)
+
+	ctx := cfg.ctx
+	chatID := cfg.chatID
+
+	var problems []string
+	var llmFeedback []string
+
+	// Создаем игру и персонажа
+	world, err := cfg.initCampaignUC.Execute(ctx, "боевое фэнтези с гоблинами")
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось создать игру: %v", err))
+		t.Fatalf("Не удалось создать игру: %v", err)
+	}
+
+	gs := &session.GameSession{
+		ChatID:  chatID,
+		State:   session.StateActive,
+		World:   *world,
+		WorldID: world.ID,
+	}
+	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось сохранить сессию: %v", err))
+		t.Fatalf("Не удалось сохранить сессию: %v", err)
+	}
+
+	req := characterapp.CreateCharacterRequest{
+		ChatID: chatID,
+		Name:   "ВоинБой",
+		Race:   character.RaceHuman,
+		Class:  character.ClassFighter,
+	}
+	player, err := cfg.createCharacterUC.Execute(ctx, req)
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось создать персонажа: %v", err))
+		t.Fatalf("Не удалось создать персонажа: %v", err)
+	}
+
+	initialHP := player.Character.HP
+	t.Logf("✅ Персонаж создан: %s, HP=%d, MaxHP=%d", player.Character.Name, initialHP, player.Character.MaxHP)
+
+	// Шаг 1: Инициация боя через действие с реальным LLM
+	t.Run("Инициация боя через действие", func(t *testing.T) {
+		response, err := cfg.handleActionUC.Execute(ctx, chatID, "Вижу гоблина и атакую его мечом")
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось обработать боевое действие: %v", err))
+			t.Fatalf("Не удалось обработать боевое действие: %v", err)
+		}
+		if response == "" {
+			problems = append(problems, "Ответ DM пуст при инициации боя")
+			t.Fatal("Ответ DM пуст")
+		}
+
+		// Проверяем, что ответ содержит боевые элементы
+		responseLower := strings.ToLower(response)
+		hasCombatKeywords := strings.Contains(responseLower, "бой") ||
+			strings.Contains(responseLower, "атака") ||
+			strings.Contains(responseLower, "урон") ||
+			strings.Contains(responseLower, "гоблин") ||
+			strings.Contains(responseLower, "hit") ||
+			strings.Contains(responseLower, "damage")
+
+		if !hasCombatKeywords {
+			llmFeedback = append(llmFeedback, fmt.Sprintf("Ответ DM при инициации боя не содержит боевых элементов: %s", response[:200]))
+		}
+
+		t.Logf("✅ DM ответил на боевое действие: %s...", response[:min(300, len(response))])
+	})
+
+	// Шаг 2: Проверка активного боя
+	t.Run("Проверка активного боя", func(t *testing.T) {
+		gs, err := cfg.sessionRepo.GetByChatID(ctx, chatID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить сессию: %v", err))
+			return
+		}
+
+		combatRepo := persistence.NewCombatRepository(cfg.db)
+		combat, err := combatRepo.GetActiveBySessionID(ctx, gs.ID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Ошибка при получении боя: %v", err))
+			return
+		}
+
+		if combat != nil {
+			t.Logf("✅ Активный бой найден: участников=%d, текущий ход=%d", len(combat.Participants), combat.CurrentTurn)
+
+			// Проверяем, что есть участники
+			if len(combat.Participants) == 0 {
+				problems = append(problems, "Бой создан без участников")
+			}
+
+			// Проверяем порядок ходов
+			if combat.CurrentTurn < 0 || combat.CurrentTurn >= len(combat.Participants) {
+				problems = append(problems, fmt.Sprintf("Некорректный индекс текущего хода: %d (участников: %d)", combat.CurrentTurn, len(combat.Participants)))
+			}
+		} else {
+			t.Logf("⚠️ Активный бой не найден (может быть бой еще не начался или уже завершен)")
+		}
+	})
+
+	// Шаг 3: Выполнение атак в бою
+	t.Run("Выполнение атак в бою", func(t *testing.T) {
+		gs, err := cfg.sessionRepo.GetByChatID(ctx, chatID)
+		if err != nil {
+			t.Logf("⚠️ Не удалось получить сессию: %v", err)
+			return
+		}
+
+		combatRepo := persistence.NewCombatRepository(cfg.db)
+		combat, err := combatRepo.GetActiveBySessionID(ctx, gs.ID)
+		if err != nil {
+			t.Logf("⚠️ Ошибка при получении боя: %v", err)
+			return
+		}
+
+		if combat != nil {
+			// Пытаемся атаковать
+			result, err := cfg.handleCombatUC.Execute(ctx, chatID, "атакую гоблина")
+			if err != nil {
+				t.Logf("⚠️ Не удалось атаковать: %v (может быть нет активного боя или бой завершен)", err)
+			} else {
+				if result == "" {
+					problems = append(problems, "Результат атаки пуст")
+				} else {
+					t.Logf("✅ Результат атаки: %s", result)
+				}
+			}
+		}
+	})
+
+	// Записываем найденные проблемы
+	if len(problems) > 0 {
+		writeToTestingReport(problems)
+	}
+	if len(llmFeedback) > 0 {
+		writeToFeedback(llmFeedback)
+	}
+}
+
+// TestDailyQuests_Complete тестирует выполнение всех трех типов ежедневных заданий
+func TestDailyQuests_Complete(t *testing.T) {
+	cfg := setupIntegrationTest(t)
+	defer cleanupTest(t, cfg)
+
+	ctx := cfg.ctx
+	chatID := cfg.chatID
+	tgUserID := cfg.tgUserID
+
+	var problems []string
+
+	// Создаем игру и персонажа
+	world, err := cfg.initCampaignUC.Execute(ctx, "тест ежедневных заданий")
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось создать игру: %v", err))
+		t.Fatalf("Не удалось создать игру: %v", err)
+	}
+
+	gs := &session.GameSession{
+		ChatID:  chatID,
+		State:   session.StateActive,
+		World:   *world,
+		WorldID: world.ID,
+	}
+	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось сохранить сессию: %v", err))
+		t.Fatalf("Не удалось сохранить сессию: %v", err)
+	}
+
+	req := characterapp.CreateCharacterRequest{
+		ChatID: chatID,
+		Name:   "КвестГерой",
+		Race:   character.RaceHuman,
+		Class:  character.ClassFighter,
+	}
+	_, err = cfg.createCharacterUC.Execute(ctx, req)
+	if err != nil {
+		problems = append(problems, fmt.Sprintf("Не удалось создать персонажа: %v", err))
+		t.Fatalf("Не удалось создать персонажа: %v", err)
+	}
+
+	// Шаг 1: Получение ежедневных заданий
+	t.Run("Получение ежедневных заданий", func(t *testing.T) {
+		dailyText, err := cfg.getDailyQuestsUC.Execute(ctx, chatID, tgUserID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить ежедневные задания: %v", err))
+			t.Fatalf("Не удалось получить ежедневные задания: %v", err)
+		}
+		if dailyText == "" {
+			problems = append(problems, "Текст ежедневных заданий пуст")
+			t.Fatal("Текст ежедневных заданий пуст")
+		}
+
+		// Проверяем наличие всех трех типов заданий
+		textLower := strings.ToLower(dailyText)
+		hasExploreQuest := strings.Contains(textLower, "исследовать локацию") || strings.Contains(textLower, "локация")
+		hasQuestQuest := strings.Contains(textLower, "завершить квест") || strings.Contains(textLower, "квест")
+		hasCombatQuest := strings.Contains(textLower, "победить в бою") || strings.Contains(textLower, "бой")
+
+		if !hasExploreQuest {
+			problems = append(problems, "Ежедневные задания не содержат задание на исследование локации")
+		}
+		if !hasQuestQuest {
+			problems = append(problems, "Ежедневные задания не содержат задание на завершение квеста")
+		}
+		if !hasCombatQuest {
+			problems = append(problems, "Ежедневные задания не содержат задание на победу в бою")
+		}
+
+		t.Logf("✅ Ежедневные задания получены: %s", dailyText)
+	})
+
+	// Шаг 2: Выполнение задания на исследование локации
+	t.Run("Выполнение задания на исследование локации", func(t *testing.T) {
+		// Выполняем действие, которое должно обновить прогресс
+		_, err := cfg.handleActionUC.Execute(ctx, chatID, "Исследую комнату, осматриваю все детали")
+		if err != nil {
+			t.Logf("⚠️ Действие обработано с ошибкой: %v", err)
+		}
+
+		// Проверяем прогресс через getDailyQuestsUC
+		dailyText, err := cfg.getDailyQuestsUC.Execute(ctx, chatID, tgUserID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить ежедневные задания после действия: %v", err))
+		} else {
+			t.Logf("✅ Ежедневные задания после исследования: %s", dailyText)
+		}
+	})
+
+	// Шаг 3: Выполнение задания на победу в бою
+	t.Run("Выполнение задания на победу в бою", func(t *testing.T) {
+		// Пытаемся начать бой
+		_, err := cfg.handleActionUC.Execute(ctx, chatID, "Атакую врага")
+		if err != nil {
+			t.Logf("⚠️ Не удалось начать бой: %v", err)
+		}
+
+		// Проверяем прогресс после боя (если бой начался и завершился)
+		dailyText, err := cfg.getDailyQuestsUC.Execute(ctx, chatID, tgUserID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить ежедневные задания после боя: %v", err))
+		} else {
+			t.Logf("✅ Ежедневные задания после боя: %s", dailyText)
+		}
+	})
+
+	// Записываем найденные проблемы
+	if len(problems) > 0 {
+		writeToTestingReport(problems)
+	}
+}
+
+// TestFullGameplayScenario тестирует полный игровой сценарий с реальными ответами LLM
+func TestFullGameplayScenario(t *testing.T) {
+	cfg := setupIntegrationTest(t)
+	defer cleanupTest(t, cfg)
+
+	ctx := cfg.ctx
+	chatID := cfg.chatID
+	tgUserID := cfg.tgUserID
+
+	var problems []string
+	var llmFeedback []string
+
+	// Шаг 1: Создание новой игры
+	t.Run("1. Создание новой игры", func(t *testing.T) {
+		world, err := cfg.initCampaignUC.Execute(ctx, "классическое фэнтези с магией и драконами")
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось создать игру: %v", err))
+			t.Fatalf("Не удалось создать игру: %v", err)
+		}
+		if world == nil || len(world.Locations) == 0 {
+			problems = append(problems, "Мир создан без локаций")
+			t.Fatal("Мир создан без локаций")
+		}
+
+		gs := &session.GameSession{
+			ChatID:  chatID,
+			State:   session.StateActive,
+			World:   *world,
+			WorldID: world.ID,
+		}
+		if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось сохранить сессию: %v", err))
+			t.Fatalf("Не удалось сохранить сессию: %v", err)
+		}
+
+		t.Logf("✅ Игра создана: мир ID=%d, локаций=%d", world.ID, len(world.Locations))
+	})
+
+	// Шаг 2: Создание персонажа
+	t.Run("2. Создание персонажа", func(t *testing.T) {
+		req := characterapp.CreateCharacterRequest{
+			ChatID: chatID,
+			Name:   "ТестовыйГерой",
+			Race:   character.RaceElf,
+			Class:  character.ClassWizard,
+		}
+
+		player, err := cfg.createCharacterUC.Execute(ctx, req)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось создать персонажа: %v", err))
+			t.Fatalf("Не удалось создать персонажа: %v", err)
+		}
+		if player == nil || player.Character.Stats.Strength == 0 {
+			problems = append(problems, "Персонаж создан без характеристик")
+			t.Error("Персонаж создан без характеристик")
+		}
+
+		t.Logf("✅ Персонаж создан: %s (%s %s), HP=%d", player.Character.Name, player.Character.Race, player.Character.Class, player.Character.HP)
+	})
+
+	// Шаг 3: Игровые действия с реальным LLM
+	t.Run("3. Игровые действия", func(t *testing.T) {
+		actions := []string{
+			"Осматриваю комнату, в которой нахожусь",
+			"Ищу предметы в комнате",
+			"Изучаю картины на стенах",
+		}
+
+		for i, action := range actions {
+			response, err := cfg.handleActionUC.Execute(ctx, chatID, action)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("Не удалось обработать действие '%s': %v", action, err))
+				t.Errorf("Не удалось обработать действие: %v", err)
+				continue
+			}
+
+			if response == "" {
+				problems = append(problems, fmt.Sprintf("Ответ DM пуст для действия '%s'", action))
+				t.Errorf("Ответ DM пуст")
+				continue
+			}
+
+			if len(response) < 50 {
+				llmFeedback = append(llmFeedback, fmt.Sprintf("Ответ DM слишком короткий для действия '%s' (%d символов): %s", action, len(response), response))
+			}
+
+			t.Logf("✅ Действие %d: %s...", i+1, response[:min(200, len(response))])
+		}
+	})
+
+	// Шаг 4: Просмотр всех систем
+	t.Run("4. Просмотр систем игры", func(t *testing.T) {
+		// Инвентарь
+		inventoryText, err := cfg.getInventoryUC.Execute(ctx, chatID, tgUserID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить инвентарь: %v", err))
+		} else {
+			t.Logf("✅ Инвентарь: %s", inventoryText[:min(100, len(inventoryText))])
+		}
+
+		// Ежедневные задания
+		dailyText, err := cfg.getDailyQuestsUC.Execute(ctx, chatID, tgUserID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить ежедневные задания: %v", err))
+		} else {
+			t.Logf("✅ Ежедневные задания: %s", dailyText[:min(100, len(dailyText))])
+		}
+
+		// Квесты
+		questsText, err := cfg.getQuestsUC.Execute(ctx, chatID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить квесты: %v", err))
+		} else if questsText != "" {
+			t.Logf("✅ Квесты: %s", questsText[:min(100, len(questsText))])
+		}
+
+		// Достижения
+		achievementsReq := achievementapp.GetAchievementsRequest{
+			ChatID:   chatID,
+			TgUserID: tgUserID,
+		}
+		achievementsText, err := cfg.getAchievementsUC.Execute(ctx, achievementsReq)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить достижения: %v", err))
+		} else {
+			t.Logf("✅ Достижения: %s", achievementsText[:min(100, len(achievementsText))])
+		}
+
+		// Заклинания
+		spellsReq := spellapp.GetSpellsRequest{
+			ChatID:   chatID,
+			TgUserID: tgUserID,
+		}
+		spellsText, err := cfg.getSpellsUC.Execute(ctx, spellsReq)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить заклинания: %v", err))
+		} else {
+			t.Logf("✅ Заклинания: %s", spellsText[:min(100, len(spellsText))])
+		}
+
+		// Карта
+		mapText, err := cfg.getMapUC.Execute(ctx, chatID)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить карту: %v", err))
+		} else {
+			t.Logf("✅ Карта: %s", mapText[:min(100, len(mapText))])
+		}
+
+		// История
+		historyText, err := cfg.getHistoryUC.Execute(ctx, chatID, 10)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("Не удалось получить историю: %v", err))
+		} else {
+			t.Logf("✅ История: %s", historyText[:min(100, len(historyText))])
+		}
+	})
+
+	// Записываем найденные проблемы
+	if len(problems) > 0 {
+		writeToTestingReport(problems)
+	}
+	if len(llmFeedback) > 0 {
+		writeToFeedback(llmFeedback)
+	}
+}
+
+// Функции записи в отчеты
+
+func writeToTestingReport(problems []string) {
+	reportPath := "TESTING_REPORT.md"
+
+	// Читаем существующий отчет
+	existingContent := ""
+	if data, err := os.ReadFile(reportPath); err == nil {
+		existingContent = string(data)
+	}
+
+	// Добавляем новые проблемы
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	newSection := fmt.Sprintf("\n## Проблемы, найденные при интеграционном тестировании (%s)\n\n", timestamp)
+
+	for i, problem := range problems {
+		newSection += fmt.Sprintf("%d. %s\n", i+1, problem)
+	}
+	newSection += "\n---\n"
+
+	// Записываем обновленный отчет
+	updatedContent := existingContent + newSection
+	if err := os.WriteFile(reportPath, []byte(updatedContent), 0644); err != nil {
+		fmt.Printf("⚠️ Не удалось записать в TESTING_REPORT.md: %v\n", err)
+	}
+}
+
+func writeToFeedback(feedback []string) {
+	feedbackPath := "FEEDBACK.md"
+
+	// Читаем существующий файл
+	existingContent := ""
+	if data, err := os.ReadFile(feedbackPath); err == nil {
+		existingContent = string(data)
+	}
+
+	// Добавляем новую обратную связь
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	newSection := fmt.Sprintf("\n## Обратная связь от интеграционных тестов (%s)\n\n", timestamp)
+
+	for i, item := range feedback {
+		newSection += fmt.Sprintf("%d. %s\n", i+1, item)
+	}
+	newSection += "\n---\n"
+
+	// Записываем обновленный файл
+	updatedContent := existingContent + newSection
+	if err := os.WriteFile(feedbackPath, []byte(updatedContent), 0644); err != nil {
+		fmt.Printf("⚠️ Не удалось записать в FEEDBACK.md: %v\n", err)
+	}
+}
+
 // Вспомогательные функции
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 func isContainersRunning(t *testing.T) bool {
 	// Проверяем подключение к БД через gorm

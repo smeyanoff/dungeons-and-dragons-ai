@@ -281,17 +281,6 @@ func (uc *UseSpellUseCase) Execute(ctx context.Context, req UseSpellRequest) (*U
 			}
 		}
 
-		// Сохраняем состояние боя
-		if err := uc.combatRepo.Save(ctx, activeCombat); err != nil {
-			logger.Error("UseSpellUseCase: failed to save combat",
-				logger.ErrorField(err),
-			)
-			// Не возвращаем ошибку - эффекты уже применены
-		}
-
-		// Переходим к следующему ходу после использования заклинания
-		activeCombat.NextTurn()
-
 		// Синхронизируем HP игрока с БД (если цель - игрок)
 		if combatTargetParticipant.IsPlayer {
 			// Обновляем HP персонажа из боевого участника
@@ -299,11 +288,14 @@ func (uc *UseSpellUseCase) Execute(ctx context.Context, req UseSpellRequest) (*U
 			player.Character.Status = combatTargetParticipant.Character.Status
 		}
 
-		// Сохраняем состояние боя после перехода хода
+		// Сохраняем состояние боя
+		// Примечание: переход хода (NextTurn()) выполняется в handle_action.go после обработки действия игрока
+		// Это предотвращает двойной переход хода и обеспечивает правильную последовательность ходов
 		if err := uc.combatRepo.Save(ctx, activeCombat); err != nil {
-			logger.Error("UseSpellUseCase: failed to save combat after turn transition",
+			logger.Error("UseSpellUseCase: failed to save combat",
 				logger.ErrorField(err),
 			)
+			// Не возвращаем ошибку - эффекты уже применены
 		}
 	} else {
 		// Вне боя - применяем лечение к персонажу напрямую
@@ -351,9 +343,8 @@ func (uc *UseSpellUseCase) Execute(ctx context.Context, req UseSpellRequest) (*U
 		}
 	}
 
-	if inCombat {
-		messageParts = append(messageParts, "\n⚔️ Ход перешел к следующему участнику боя.")
-	}
+	// Примечание: сообщение о переходе хода не добавляем здесь,
+	// так как переход хода выполняется в handle_action.go после обработки действия игрока
 
 	if foundSpell.Effect != "" {
 		messageParts = append(messageParts, fmt.Sprintf("\n%s", foundSpell.Effect))

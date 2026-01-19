@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/pkg/logger"
 )
@@ -106,16 +108,23 @@ func (t *GetCharacterStatsTool) Execute(ctx context.Context, args map[string]int
 	return result, nil
 }
 
+// EventRepository интерфейс для работы с событиями игры
+type EventRepository interface {
+	GetBySessionID(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)
+}
+
 // RequestAbilityCheckTool позволяет DM запросить проверку характеристики у игрока
 type RequestAbilityCheckTool struct {
 	sessionRepo SessionRepository
+	eventRepo   EventRepository
 	chatID      int64
 }
 
 // NewRequestAbilityCheckTool создает новый инструмент для запроса проверки характеристики
-func NewRequestAbilityCheckTool(sessionRepo SessionRepository, chatID int64) *RequestAbilityCheckTool {
+func NewRequestAbilityCheckTool(sessionRepo SessionRepository, eventRepo EventRepository, chatID int64) *RequestAbilityCheckTool {
 	return &RequestAbilityCheckTool{
 		sessionRepo: sessionRepo,
+		eventRepo:   eventRepo,
 		chatID:      chatID,
 	}
 }
@@ -127,9 +136,14 @@ func (t *RequestAbilityCheckTool) Name() string {
 func (t *RequestAbilityCheckTool) Description() string {
 	return `Запросить проверку характеристики у игрока. Возвращает информацию о характеристике и модификаторе игрока для данной проверки.
 
+⚠️ КРИТИЧЕСКИ ВАЖНО: 
+- Параметр 'dc' (Difficulty Class) ОБЯЗАТЕЛЕН для правильной оценки результата проверки. БЕЗ DC невозможно определить успех/провал проверки.
+- После вызова этого инструмента ОБЯЗАТЕЛЬНО попроси игрока бросить кубик d20 (команда /roll d20).
+- После броска игрока ОБЯЗАТЕЛЬНО используй инструмент 'evaluate_check' для определения успеха/провала.
+
 Параметры:
 - ability: характеристика для проверки ("strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma")
-- dc (опционально): сложность проверки (Difficulty Class). Если указана, tool вернет информацию о шансе успеха.
+- dc (ОБЯЗАТЕЛЬНО): сложность проверки (Difficulty Class). Должна быть указана для правильной оценки результата.
 
 Используй этот инструмент, когда описываешь ситуацию, требующую проверки характеристики (например, "проверка силы для открытия двери", "проверка ловкости для уклонения").`
 }
@@ -144,12 +158,12 @@ func (t *RequestAbilityCheckTool) Parameters() json.RawMessage {
 		},
 		"dc": {
 			Type:        "integer",
-			Description: "Сложность проверки (Difficulty Class, опционально)",
-			Required:    false,
+			Description: "Сложность проверки (Difficulty Class). ОБЯЗАТЕЛЬНО укажи DC для правильной оценки результата (10-легко, 13-средне, 16-сложно, 19-очень сложно)",
+			Required:    true,
 		},
 	}
 
-	return BuildJSONSchema(properties, []string{"ability"})
+	return BuildJSONSchema(properties, []string{"ability", "dc"})
 }
 
 func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -163,11 +177,18 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 		return nil, fmt.Errorf("ability is required and must be a string")
 	}
 
+	// DC теперь обязательный параметр
 	dc := 0
 	if dcVal, ok := args["dc"].(float64); ok {
 		dc = int(dcVal)
 	} else if dcVal, ok := args["dc"].(int); ok {
 		dc = dcVal
+	} else {
+		return nil, fmt.Errorf("dc is required and must be an integer (Difficulty Class for the ability check)")
+	}
+
+	if dc <= 0 || dc > 30 {
+		return nil, fmt.Errorf("dc must be between 1 and 30 (typical range: 10-20)")
 	}
 
 	// Получаем сессию
@@ -227,6 +248,64 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 
 	// Вычисляем модификатор
 	modifier := calculateModifier(abilityValue)
+
+	// Проверяем, не была ли уже выполнена проверка этой характеристики
+	// В D&D проверка навыка обычно выполняется только один раз - если провалена, нужно попробовать другой подход
+	if t.eventRepo != nil {
+		recentEvents, err := t.eventRepo.GetBySessionID(ctx, gs.ID, 50) // Проверяем последние 50 событий для поиска предыдущих проверок
+		if err == nil && len(recentEvents) > 0 {
+			// Ищем предыдущие проверки той же характеристики
+			// Проверяем события на наличие результатов evaluate_check
+			for i := len(recentEvents) - 1; i >= 0; i-- {
+				evt := recentEvents[i]
+				
+				// Ищем в содержимом события упоминания о проверке этой характеристики
+				// Проверяем, есть ли в событии результат evaluate_check для этой характеристики
+				content := strings.ToLower(evt.Content)
+				// Проверяем, является ли это сообщением от DM (не от игрока)
+				if evt.AuthorType == event.AuthorTypeDM {
+					// Ищем упоминания характеристики и результата проверки
+					hasAbility := strings.Contains(content, abilityStr) || 
+					              strings.Contains(content, strings.ToLower(abilityName)) ||
+					              (abilityStr == "wisdom" && (strings.Contains(content, "мудрост") || strings.Contains(content, "восприяти"))) ||
+					              (abilityStr == "intelligence" && (strings.Contains(content, "интеллект") || strings.Contains(content, "разобрать") || strings.Contains(content, "прочитать"))) ||
+					              (abilityStr == "dexterity" && strings.Contains(content, "ловкост")) ||
+					              (abilityStr == "strength" && strings.Contains(content, "сил")) ||
+					              (abilityStr == "constitution" && strings.Contains(content, "телосложени")) ||
+					              (abilityStr == "charisma" && strings.Contains(content, "харизм"))
+					
+					// Проверяем, есть ли в событии результат проверки (успех или провал)
+					// Также проверяем контекстные слова, указывающие на выполненную проверку
+					hasResult := strings.Contains(content, "успех") || strings.Contains(content, "провал") || 
+					             strings.Contains(content, "success") || strings.Contains(content, "failure") ||
+					             strings.Contains(content, "✅") || strings.Contains(content, "❌") ||
+					             strings.Contains(content, "прошел проверку") || strings.Contains(content, "провалил проверку") ||
+					             strings.Contains(content, "разобрать") || strings.Contains(content, "прочитать") || 
+					             strings.Contains(content, "сосредоточиться") || strings.Contains(content, "изучить") ||
+					             strings.Contains(content, "записи") || strings.Contains(content, "дневник") ||
+					             strings.Contains(content, "свиток") || strings.Contains(content, "текст") ||
+					             strings.Contains(content, "бросок") && (strings.Contains(content, "d20") || strings.Contains(content, "кубик"))
+					
+					if hasAbility && hasResult {
+						// Найдена предыдущая проверка той же характеристики
+						result := map[string]interface{}{
+							"ability":         abilityStr,
+							"ability_name":    abilityName,
+							"ability_value":   abilityValue,
+							"modifier":        modifier,
+							"character_name":  char.Name,
+							"already_checked": true,
+							"warning":         fmt.Sprintf("Проверка %s уже была выполнена. В D&D проверка навыка выполняется только один раз - если она провалена, нужно попробовать другой подход (например, использовать другой навык, найти дополнительную информацию, попросить помощи у NPC). Сообщи игроку, что он уже пытался выполнить эту проверку, и предложи попробовать другой подход.", abilityName),
+						}
+						if dc > 0 {
+							result["dc"] = dc
+						}
+						return result, nil
+					}
+				}
+			}
+		}
+	}
 
 	// Формируем результат
 	result := map[string]interface{}{

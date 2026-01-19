@@ -8,26 +8,34 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
 	"dungeons-and-dragons-ai/internal/game/application/dice"
-	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
+	dm_tools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/application/history"
+	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
+	ratingapp "dungeons-and-dragons-ai/internal/game/application/rating"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
-	"dungeons-and-dragons-ai/internal/game/domain/subscription"
-	mapapp 	"dungeons-and-dragons-ai/internal/game/application/worldmap"
+	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/feedback"
+	"dungeons-and-dragons-ai/internal/game/domain/rating"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/subscription"
+	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 	"dungeons-and-dragons-ai/pkg/logger"
+
+	"github.com/google/uuid"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -40,40 +48,66 @@ const (
 )
 
 type Bot struct {
-	api               *tgbotapi.BotAPI
-	initCampaignUC    *campaign.InitCampaignUseCase
-	handleActionUC    *player_action.HandleActionUseCase
-	createCharacterUC *characterapp.CreateCharacterUseCase
-	getHistoryUC      *history.GetHistoryUseCase
-	getInventoryUC    *inventoryapp.GetInventoryUseCase
-	addItemUC         *inventoryapp.AddItemUseCase
-	handleCombatUC    *combatapp.HandleCombatUseCase
-	rollDiceUC        *dice.RollDiceUseCase
-	getQuestsUC       *questapp.GetQuestsUseCase
-	getDailyQuestsUC  *questapp.GetDailyQuestsUseCase
+	api                  *tgbotapi.BotAPI
+	initCampaignUC       *campaign.InitCampaignUseCase
+	handleActionUC       *player_action.HandleActionUseCase
+	createCharacterUC    *characterapp.CreateCharacterUseCase
+	getHistoryUC         *history.GetHistoryUseCase
+	getInventoryUC       *inventoryapp.GetInventoryUseCase
+	addItemUC            *inventoryapp.AddItemUseCase
+	handleCombatUC       *combatapp.HandleCombatUseCase
+	rollDiceUC           *dice.RollDiceUseCase
+	getQuestsUC          *questapp.GetQuestsUseCase
+	getDailyQuestsUC     *questapp.GetDailyQuestsUseCase
 	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase
-	getMapUC          *mapapp.GetMapUseCase
-	getAchievementsUC *achievementapp.GetAchievementsUseCase
-	getSpellsUC       *spellapp.GetSpellsUseCase
-	useSpellUC        *spellapp.UseSpellUseCase
-	generateImageUC   *imageapp.ImageGenerationUseCase
-	getSubscriptionUC *subscriptionapp.GetSubscriptionUseCase
-	checkLimitsUC     *subscriptionapp.CheckLimitsUseCase
-	sessionRepo       session.Repository
-	combatRepo        CombatRepository
-	feedbackRepo      FeedbackRepository
-	
+	getMapUC             *mapapp.GetMapUseCase
+	getAchievementsUC    *achievementapp.GetAchievementsUseCase
+	getSpellsUC          *spellapp.GetSpellsUseCase
+	useSpellUC           *spellapp.UseSpellUseCase
+	generateImageUC      *imageapp.ImageGenerationUseCase
+	getSubscriptionUC    *subscriptionapp.GetSubscriptionUseCase
+	checkLimitsUC        *subscriptionapp.CheckLimitsUseCase
+	getLeaderboardUC     *ratingapp.GetLeaderboardUseCase
+	updateRatingUC       *ratingapp.UpdateRatingUseCase
+	sessionRepo          session.Repository
+	combatRepo           CombatRepository
+	feedbackRepo         FeedbackRepository
+	eventRepo            EventRepository // Для сохранения результатов бросков в историю
+	indexDocUC           IndexDocumentUseCase // Для индексации результатов бросков в RAG
+
 	// Для улучшенной обработки ошибок Telegram API
-	errorCount        int      // Счетчик последовательных ошибок
-	errorCountMu       sync.Mutex
-	lastErrorTime      time.Time
-	circuitOpen        bool     // Circuit breaker состояние
-	circuitOpenMu      sync.RWMutex
+	errorCount    int // Счетчик последовательных ошибок
+	errorCountMu  sync.Mutex
+	lastErrorTime time.Time
+	circuitOpen   bool // Circuit breaker состояние
+	circuitOpenMu sync.RWMutex
+
+	// Состояние диалога feedback (chatID -> состояние)
+	feedbackState map[int64]*FeedbackDialogState
+	feedbackStateMu sync.RWMutex
+}
+
+// FeedbackDialogState состояние диалога feedback
+type FeedbackDialogState struct {
+	Type     feedback.FeedbackType
+	Category feedback.FeedbackCategory
+	UserID   int64
+	From     *tgbotapi.User
 }
 
 // FeedbackRepository интерфейс для работы с фидбеком
 type FeedbackRepository interface {
 	Save(ctx context.Context, fb *feedback.Feedback) error
+}
+
+// EventRepository интерфейс для работы с событиями игры
+type EventRepository interface {
+	Save(ctx context.Context, e *event.StoryEvent) error
+}
+
+// IndexDocumentUseCase интерфейс для индексации документов в RAG
+type IndexDocumentUseCase interface {
+	Execute(ctx context.Context, doc ragdomain.Document) error
 }
 
 // CombatRepository интерфейс для работы с боем
@@ -102,9 +136,13 @@ func NewBot(
 	generateImageUC *imageapp.ImageGenerationUseCase,
 	getSubscriptionUC *subscriptionapp.GetSubscriptionUseCase,
 	checkLimitsUC *subscriptionapp.CheckLimitsUseCase,
+	getLeaderboardUC *ratingapp.GetLeaderboardUseCase,
+	updateRatingUC *ratingapp.UpdateRatingUseCase,
 	sessionRepo session.Repository,
 	combatRepo CombatRepository,
 	feedbackRepo FeedbackRepository,
+	eventRepo EventRepository,
+	indexDocUC IndexDocumentUseCase,
 ) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -112,28 +150,33 @@ func NewBot(
 	}
 
 	bot := &Bot{
-		api:               api,
-		initCampaignUC:    initCampaignUC,
-		handleActionUC:    handleActionUC,
-		createCharacterUC: createCharacterUC,
-		getHistoryUC:      getHistoryUC,
-		getInventoryUC:    getInventoryUC,
-		addItemUC:         addItemUC,
-		handleCombatUC:    handleCombatUC,
-		rollDiceUC:        rollDiceUC,
-		getQuestsUC:       getQuestsUC,
-		getDailyQuestsUC:  getDailyQuestsUC,
+		api:                  api,
+		initCampaignUC:       initCampaignUC,
+		handleActionUC:       handleActionUC,
+		createCharacterUC:    createCharacterUC,
+		getHistoryUC:         getHistoryUC,
+		getInventoryUC:       getInventoryUC,
+		addItemUC:            addItemUC,
+		handleCombatUC:       handleCombatUC,
+		rollDiceUC:           rollDiceUC,
+		getQuestsUC:          getQuestsUC,
+		getDailyQuestsUC:     getDailyQuestsUC,
 		checkDailyProgressUC: checkDailyProgressUC,
-		getMapUC:          getMapUC,
-		getAchievementsUC: getAchievementsUC,
-		getSpellsUC:       getSpellsUC,
-		useSpellUC:        useSpellUC,
-		generateImageUC:   generateImageUC,
-		getSubscriptionUC: getSubscriptionUC,
-		checkLimitsUC:     checkLimitsUC,
-		sessionRepo:       sessionRepo,
-		combatRepo:        combatRepo,
-		feedbackRepo:      feedbackRepo,
+		getMapUC:             getMapUC,
+		getAchievementsUC:    getAchievementsUC,
+		getSpellsUC:          getSpellsUC,
+		useSpellUC:           useSpellUC,
+		generateImageUC:      generateImageUC,
+		getSubscriptionUC:    getSubscriptionUC,
+		checkLimitsUC:        checkLimitsUC,
+		getLeaderboardUC:     getLeaderboardUC,
+		updateRatingUC:       updateRatingUC,
+		sessionRepo:          sessionRepo,
+		combatRepo:           combatRepo,
+		feedbackRepo:         feedbackRepo,
+		eventRepo:            eventRepo,
+		indexDocUC:           indexDocUC,
+		feedbackState:        make(map[int64]*FeedbackDialogState),
 	}
 
 	// Настраиваем Bot Commands Menu для отображения команд в интерфейсе Telegram
@@ -170,6 +213,7 @@ func (b *Bot) setupBotCommands() error {
 		{Command: "daily", Description: "Ежедневные задания"},
 		{Command: "map", Description: "Карта мира"},
 		{Command: "achievements", Description: "Просмотр достижений"},
+		{Command: "leaderboard", Description: "Рейтинг игроков"},
 		{Command: "image", Description: "Сгенерировать изображение"},
 		{Command: "flee", Description: "Попытаться выйти из боя"},
 		{Command: "feedback", Description: "Отправить отзыв о игре"},
@@ -219,7 +263,7 @@ func (b *Bot) Start(ctx context.Context) error {
 				b.errorCount++
 				shouldLog := b.errorCount >= 3 // Логируем после 3 ошибок подряд
 				b.errorCountMu.Unlock()
-				
+
 				if shouldLog {
 					logger.Error("Error handling update (multiple consecutive errors)",
 						logger.ErrorField(err),
@@ -274,6 +318,81 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 		return b.handleCommand(ctx, chatID, update.Message.Command(), update.Message.CommandArguments(), int64(userID), update.Message.From)
 	}
 
+	// Проверяем, не является ли сообщение командой, которая не была распознана как команда
+	// (например, если пользователь написал /battlefield с пробелом или другим форматированием)
+	if strings.HasPrefix(text, "/") {
+		// Извлекаем команду и аргументы
+		parts := strings.Fields(text)
+		if len(parts) > 0 {
+			command := strings.TrimPrefix(parts[0], "/")
+			args := ""
+			if len(parts) > 1 {
+				args = strings.Join(parts[1:], " ")
+			}
+			// Проверяем, является ли это известной командой
+			if b.isKnownCommand(command) {
+				logger.Info("Command not recognized as command by Telegram, handling manually",
+					logger.String("command", command),
+					logger.String("text", text),
+					logger.Int64("chat_id", chatID),
+				)
+				return b.handleCommand(ctx, chatID, command, args, int64(userID), update.Message.From)
+			}
+		}
+	}
+
+	// Проверяем, есть ли активный диалог feedback
+	b.feedbackStateMu.RLock()
+	feedbackState, hasFeedbackDialog := b.feedbackState[chatID]
+	b.feedbackStateMu.RUnlock()
+
+	if hasFeedbackDialog && feedbackState != nil && feedbackState.Type != "" && feedbackState.Category != "" {
+		// Пользователь вводит текст для feedback
+		feedbackText := strings.TrimSpace(text)
+		if feedbackText == "" {
+			msg := tgbotapi.NewMessage(chatID, "Пожалуйста, введите текст вашего отзыва.")
+			return b.sendMessage(msg)
+		}
+
+		// Сохраняем feedback
+		err := b.saveFeedbackDirectly(ctx, chatID, int64(userID), update.Message.From, feedbackText, feedbackState.Type, feedbackState.Category)
+		
+		// Очищаем состояние диалога
+		b.feedbackStateMu.Lock()
+		delete(b.feedbackState, chatID)
+		b.feedbackStateMu.Unlock()
+
+		return err
+	}
+
+	// Проверяем, не находится ли пользователь в состоянии feedback диалога
+	b.feedbackStateMu.RLock()
+	feedbackState, inFeedbackDialog := b.feedbackState[chatID]
+	b.feedbackStateMu.RUnlock()
+	
+	if inFeedbackDialog && feedbackState != nil && feedbackState.Type != "" && feedbackState.Category != "" {
+		// Пользователь вводит текст для feedback
+		feedbackText := strings.TrimSpace(text)
+		if feedbackText == "" {
+			msg := tgbotapi.NewMessage(chatID, "Пожалуйста, введите текст вашего отзыва.")
+			return b.sendMessage(msg)
+		}
+
+		// Сохраняем feedback
+		userFrom := feedbackState.From
+		if userFrom == nil {
+			userFrom = update.Message.From
+		}
+		err := b.saveFeedbackDirectly(ctx, chatID, int64(userID), userFrom, feedbackText, feedbackState.Type, feedbackState.Category)
+		
+		// Очищаем состояние диалога
+		b.feedbackStateMu.Lock()
+		delete(b.feedbackState, chatID)
+		b.feedbackStateMu.Unlock()
+
+		return err
+	}
+
 	// Обычные сообщения - действия игрока
 	logger.Debug("Handling player action",
 		logger.Int64("chat_id", chatID),
@@ -281,6 +400,38 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 		logger.Int("message_length", len(text)),
 	)
 	return b.handlePlayerAction(ctx, chatID, text)
+}
+
+// isKnownCommand проверяет, является ли строка известной командой
+func (b *Bot) isKnownCommand(command string) bool {
+	knownCommands := map[string]bool{
+		"start":           true,
+		"help":            true,
+		"newgame":         true,
+		"endgame":         true,
+		"createcharacter": true,
+		"character":       true,
+		"history":         true,
+		"inventory":       true,
+		"roll":            true,
+		"quests":          true,
+		"daily":           true,
+		"map":             true,
+		"achievements":    true,
+		"spells":          true,
+		"cast":            true,
+		"image":           true,
+		"subscribe":       true,
+		"subscription":    true,
+		"flee":            true,
+		"run":             true,
+		"feedback":        true,
+		"attack":          true,
+		"pickup":          true,
+		"battlefield":     true,
+		"abilities":       true,
+	}
+	return knownCommands[strings.ToLower(command)]
 }
 
 func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args string, tgUserID int64, from *tgbotapi.User) error {
@@ -311,17 +462,19 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleMap(ctx, chatID)
 	case "achievements":
 		return b.handleAchievements(ctx, chatID, tgUserID)
-		case "spells":
-			return b.handleSpells(ctx, chatID, tgUserID)
-		case "cast":
-			return b.handleCast(ctx, chatID, tgUserID, args)
-		case "image":
-			return b.handleImage(ctx, chatID, tgUserID, args)
-		case "subscribe":
-			return b.handleSubscribe(ctx, chatID, tgUserID, args)
-		case "subscription":
-			return b.handleSubscription(ctx, chatID, tgUserID)
-		case "flee", "run":
+	case "leaderboard":
+		return b.handleLeaderboard(ctx, chatID, tgUserID, args)
+	case "spells":
+		return b.handleSpells(ctx, chatID, tgUserID)
+	case "cast":
+		return b.handleCast(ctx, chatID, tgUserID, args)
+	case "image":
+		return b.handleImage(ctx, chatID, tgUserID, args)
+	case "subscribe":
+		return b.handleSubscribe(ctx, chatID, tgUserID, args)
+	case "subscription":
+		return b.handleSubscription(ctx, chatID, tgUserID)
+	case "flee", "run":
 		return b.handleFlee(ctx, chatID)
 	case "feedback":
 		return b.handleFeedback(ctx, chatID, args, tgUserID, from)
@@ -516,7 +669,7 @@ func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, text string)
 		logger.Int("message_length", len(text)),
 	)
 	response, err := b.handleActionUC.Execute(ctx, chatID, text)
-	
+
 	if err != nil {
 		logger.Error("Failed to handle player action",
 			logger.ErrorField(err),
@@ -535,7 +688,7 @@ func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, text string)
 		logger.Int64("chat_id", chatID),
 		logger.Int("response_length", len(response)),
 	)
-	
+
 	// Проверяем наличие маркеров изображений в ответе и отправляем их
 	imagePaths := b.extractImageMarkers(response)
 	if len(imagePaths) > 0 {
@@ -752,6 +905,17 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 			class := parts[2]
 			return b.handleCreateCharacterFromCallback(ctx, chatID, query, name, race, class)
 		}
+	} else if strings.HasPrefix(data, "feedback_type_") {
+		// Выбор типа feedback
+		feedbackType := strings.TrimPrefix(data, "feedback_type_")
+		return b.handleFeedbackTypeSelection(ctx, chatID, query, feedback.FeedbackType(feedbackType))
+	} else if strings.HasPrefix(data, "feedback_category_") {
+		// Выбор категории feedback
+		feedbackCategory := strings.TrimPrefix(data, "feedback_category_")
+		return b.handleFeedbackCategorySelection(ctx, chatID, query, feedback.FeedbackCategory(feedbackCategory))
+	} else if data == "feedback_cancel" {
+		// Отмена диалога feedback
+		return b.handleFeedbackCancel(ctx, chatID, query)
 	}
 
 	// Неизвестный callback
@@ -1039,16 +1203,16 @@ func (b *Bot) handleInventory(ctx context.Context, chatID int64, tgUserID int64)
 func (b *Bot) handlePickup(ctx context.Context, chatID int64, args string, tgUserID int64) error {
 	// Парсим аргументы: /pickup <предмет> [количество]
 	parts := strings.Fields(args)
-	
+
 	if len(parts) == 0 {
 		msg := tgbotapi.NewMessage(chatID, "Укажите название предмета. Формат: /pickup <предмет> [количество]\n\nПример: /pickup меч\nПример: /pickup стрела 5")
 		return b.sendMessage(msg)
 	}
-	
+
 	// Пытаемся определить количество (последняя часть)
 	quantity := 1
 	itemName := ""
-	
+
 	if len(parts) > 1 {
 		// Проверяем, является ли последняя часть числом
 		if qty, err := strconv.Atoi(parts[len(parts)-1]); err == nil && qty > 0 {
@@ -1064,34 +1228,95 @@ func (b *Bot) handlePickup(ctx context.Context, chatID int64, args string, tgUse
 		// Только одна часть - это название предмета
 		itemName = parts[0]
 	}
-	
+
 	if itemName == "" {
 		msg := tgbotapi.NewMessage(chatID, "Укажите название предмета. Формат: /pickup <предмет> [количество]")
 		return b.sendMessage(msg)
 	}
-	
+
 	req := inventoryapp.AddItemRequest{
-		ChatID:    chatID,
-		TgUserID:  tgUserID,
-		ItemName:  itemName,
-		Quantity:  quantity,
-		ItemType:  "", // Определяется автоматически по названию
+		ChatID:   chatID,
+		TgUserID: tgUserID,
+		ItemName: itemName,
+		Quantity: quantity,
+		ItemType: "", // Определяется автоматически по названию
 	}
-	
+
 	result, err := b.addItemUC.Execute(ctx, req)
 	if err != nil {
 		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при добавлении предмета: %v", err))
 		return b.sendMessage(errorMsg)
 	}
-	
+
 	return b.sendLongMessage(chatID, result)
 }
 
 func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
-	result, err := b.rollDiceUC.Execute(ctx, args)
+	// Очищаем аргументы от лишних символов (обратные апострофы, кавычки и т.д.)
+	cleanedArgs := strings.TrimSpace(args)
+	cleanedArgs = strings.Trim(cleanedArgs, "`\"'")
+	
+	result, err := b.rollDiceUC.Execute(ctx, cleanedArgs)
 	if err != nil {
 		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при броске кубика: %v\n\nИспользуйте формат: /roll d20 или /roll 2d6+3", err))
 		return b.sendMessage(errorMsg)
+	}
+
+	// Сохраняем результат броска в историю событий, чтобы DM мог его видеть
+	if b.eventRepo != nil {
+		gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+		if err == nil && gs != nil && gs.IsActive() {
+			// Создаем событие для результата броска
+			rollEvent := &event.StoryEvent{
+				GameSessionID: gs.ID,
+				AuthorType:    event.AuthorTypePlayer,
+				Content:       result, // Сохраняем полный результат броска
+				CreatedAt:     time.Now(),
+			}
+			
+			// Сохраняем событие (не блокируем отправку сообщения при ошибке)
+			if err := b.eventRepo.Save(ctx, rollEvent); err != nil {
+				logger.Warn("Failed to save dice roll event",
+					logger.ErrorField(err),
+					logger.Int64("chat_id", chatID),
+					logger.Uint("session_id", gs.ID),
+				)
+			} else {
+				logger.Debug("Dice roll event saved",
+					logger.Int64("chat_id", chatID),
+					logger.Uint("session_id", gs.ID),
+					logger.String("result", result),
+				)
+
+				// Индексируем результат броска в RAG, чтобы DM мог его видеть
+				if b.indexDocUC != nil {
+					ragCtx, ragCancel := context.WithTimeout(ctx, 10*time.Second)
+					defer ragCancel()
+					
+					doc := ragdomain.Document{
+						ID:        uuid.New().String(),
+						Source:    ragdomain.SourceEvent,
+						SessionID: gs.ID,
+						Text:      "Игрок бросил кубик: " + result,
+						Timestamp: time.Now(),
+					}
+					
+					// Индексируем с таймаутом (не блокируем отправку сообщения при ошибке)
+					if err := b.indexDocUC.Execute(ragCtx, doc); err != nil {
+						logger.Warn("Failed to index dice roll event in RAG (event saved in DB, but not indexed)",
+							logger.ErrorField(err),
+							logger.Int64("chat_id", chatID),
+							logger.Uint("session_id", gs.ID),
+						)
+					} else {
+						logger.Debug("Dice roll event indexed in RAG",
+							logger.Int64("chat_id", chatID),
+							logger.Uint("session_id", gs.ID),
+						)
+					}
+				}
+			}
+		}
 	}
 
 	return b.sendLongMessage(chatID, result)
@@ -1134,7 +1359,7 @@ func (b *Bot) handleAchievements(ctx context.Context, chatID int64, tgUserID int
 	}
 
 	req := achievementapp.GetAchievementsRequest{
-		ChatID:  chatID,
+		ChatID:   chatID,
 		TgUserID: tgUserID,
 	}
 
@@ -1150,7 +1375,7 @@ func (b *Bot) handleAchievements(ctx context.Context, chatID int64, tgUserID int
 // handleSpells обрабатывает команду /spells для просмотра заклинаний
 func (b *Bot) handleSpells(ctx context.Context, chatID int64, tgUserID int64) error {
 	req := spellapp.GetSpellsRequest{
-		ChatID:  chatID,
+		ChatID:   chatID,
 		TgUserID: tgUserID,
 	}
 
@@ -1235,47 +1460,47 @@ func (b *Bot) handleSubscription(ctx context.Context, chatID int64, tgUserID int
 	var message strings.Builder
 	message.WriteString(resp.Message)
 	message.WriteString("\n\n")
-	
+
 	details := resp.PlanDetails
 	message.WriteString(fmt.Sprintf("📋 Тариф: %s\n", details.Name))
-	
+
 	if details.Price > 0 {
 		message.WriteString(fmt.Sprintf("💰 Цена: %d₽/мес\n", details.Price))
 	}
-	
+
 	message.WriteString("\n📊 Лимиты:\n")
 	if details.MaxActiveGames == 0 {
 		message.WriteString("  ✅ Активных игр: безлимит\n")
 	} else {
 		message.WriteString(fmt.Sprintf("  📝 Активных игр: %d\n", details.MaxActiveGames))
 	}
-	
+
 	if details.MaxMessagesPerDay == 0 {
 		message.WriteString("  ✅ Сообщений/день: безлимит\n")
 	} else {
 		message.WriteString(fmt.Sprintf("  💬 Сообщений/день: %d\n", details.MaxMessagesPerDay))
 	}
-	
+
 	if details.MaxImagesPerDay == 0 {
 		message.WriteString("  ✅ Изображений/день: безлимит\n")
 	} else {
 		message.WriteString(fmt.Sprintf("  🖼️ Изображений/день: %d\n", details.MaxImagesPerDay))
 	}
-	
+
 	if details.MaxSaves == 0 {
 		message.WriteString("  ✅ Сохранений: безлимит\n")
 	} else {
 		message.WriteString(fmt.Sprintf("  💾 Сохранений: %d\n", details.MaxSaves))
 	}
-	
+
 	message.WriteString(fmt.Sprintf("  🎒 Слотов инвентаря: %d\n", details.MaxInventorySlots))
-	
+
 	if resp.DaysRemaining > 0 {
 		message.WriteString(fmt.Sprintf("\n⏰ Осталось дней: %d", resp.DaysRemaining))
 	} else if resp.DaysRemaining == -1 {
 		message.WriteString("\n✨ Бессрочная подписка")
 	}
-	
+
 	return b.sendLongMessage(chatID, message.String())
 }
 
@@ -1300,14 +1525,14 @@ func (b *Bot) handleSubscribe(ctx context.Context, chatID int64, tgUserID int64,
 	// Формируем сообщение с доступными тарифами
 	var message strings.Builder
 	message.WriteString("💎 Доступные тарифы:\n\n")
-	
+
 	message.WriteString("🆓 Free - Бесплатно\n")
 	message.WriteString("  • 1 активная игра\n")
 	message.WriteString("  • 50 сообщений/день\n")
 	message.WriteString("  • 5 изображений/день\n")
 	message.WriteString("  • 1 сохранение\n")
 	message.WriteString("  • 30 слотов инвентаря\n\n")
-	
+
 	message.WriteString("⭐ Premium - 299₽/мес\n")
 	message.WriteString("  • Безлимит игр\n")
 	message.WriteString("  • Безлимит сообщений\n")
@@ -1317,14 +1542,14 @@ func (b *Bot) handleSubscribe(ctx context.Context, chatID int64, tgUserID int64,
 	message.WriteString("  • Приоритетная обработка\n")
 	message.WriteString("  • Эксклюзивные миры\n")
 	message.WriteString("  • Приоритетная поддержка\n\n")
-	
+
 	message.WriteString("👑 Pro - 599₽/мес\n")
 	message.WriteString("  • Все из Premium\n")
 	message.WriteString("  • Мультиплеер до 8 игроков\n")
 	message.WriteString("  • API доступ\n")
 	message.WriteString("  • Кастомные моды\n")
 	message.WriteString("  • 70 слотов инвентаря\n\n")
-	
+
 	if resp.Subscription.IsActive() && resp.Subscription.Plan != subscription.PlanFree {
 		message.WriteString(fmt.Sprintf("ℹ️ У вас уже активна подписка %s\n", resp.Subscription.Plan))
 		if resp.DaysRemaining > 0 {
@@ -1396,13 +1621,13 @@ func (b *Bot) handleImage(ctx context.Context, chatID int64, tgUserID int64, arg
 
 	// Генерируем изображение
 	req := imageapp.GenerateImageRequest{
-		SystemPrompt:   "Ты — талантливый художник в стиле фэнтези и D&D. Создавай детализированные и атмосферные изображения.",
-		UserPrompt:     args,
-		Type:           "custom",
-		EntityID:       0,
+		SystemPrompt:    "Ты — талантливый художник в стиле фэнтези и D&D. Создавай детализированные и атмосферные изображения.",
+		UserPrompt:      args,
+		Type:            "custom",
+		EntityID:        0,
 		ForceRegenerate: false,
-		UserID:         tgUserID,
-		SkipLimitCheck: skipLimitCheck, // Проверяется через checkLimitsUC
+		UserID:          tgUserID,
+		SkipLimitCheck:  skipLimitCheck, // Проверяется через checkLimitsUC
 	}
 
 	resp, err := b.generateImageUC.Execute(ctx, req)
@@ -1443,18 +1668,18 @@ func (b *Bot) extractImageMarkers(text string) []string {
 	// Регулярное выражение для поиска маркеров [IMAGE:path]
 	re := regexp.MustCompile(`\[IMAGE:([^\]]+)\]`)
 	matches := re.FindAllStringSubmatch(text, -1)
-	
+
 	if len(matches) == 0 {
 		return nil
 	}
-	
+
 	imagePaths := make([]string, 0, len(matches))
 	for _, match := range matches {
 		if len(match) >= 2 {
 			imagePaths = append(imagePaths, match[1])
 		}
 	}
-	
+
 	return imagePaths
 }
 
@@ -1518,20 +1743,63 @@ func (b *Bot) handleBattlefield(ctx context.Context, chatID int64, args string) 
 		}
 	}
 
-	// Используем handleActionUC, который автоматически вызовет DM tool для получения поля боя
-	// DM tool get_battlefield_status будет вызван через handleActionUC
-	battlefieldMessage := fmt.Sprintf("Покажи поле боя в формате %s", format)
-	result, err := b.handleActionUC.Execute(ctx, chatID, battlefieldMessage)
+	// Получаем активный бой напрямую через combatRepo для надежности
+	activeCombat, err := b.combatRepo.GetActiveBySessionID(ctx, gs.ID)
 	if err != nil {
-		logger.Error("Failed to get battlefield status",
+		logger.Error("Failed to get combat",
 			logger.ErrorField(err),
-			logger.Int64("chat_id", chatID),
+			logger.Uint("session_id", gs.ID),
 		)
-		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка: %v\n\nИспользуйте: /battlefield [table|compact|detailed]", err))
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении боя: %v", err))
 		return b.sendMessage(errorMsg)
 	}
 
-	return b.sendLongMessage(chatID, result)
+	if activeCombat == nil || !activeCombat.IsActive() {
+		msg := tgbotapi.NewMessage(chatID, "Сейчас нет активного боя.")
+		return b.sendMessage(msg)
+	}
+
+	// Создаем адаптер для CombatRepository из bot.go к dm_tools.CombatRepository
+	combatRepoAdapter := &combatRepositoryAdapter{repo: b.combatRepo}
+
+	// Используем GetBattlefieldStatusTool для форматирования поля боя
+	tool := dm_tools.NewGetBattlefieldStatusTool(combatRepoAdapter, gs.ID)
+
+	// Выполняем tool напрямую с нужным форматом
+	toolArgs := map[string]interface{}{
+		"format": format,
+	}
+
+	result, err := tool.Execute(ctx, toolArgs)
+	if err != nil {
+		logger.Error("Failed to get battlefield status",
+			logger.ErrorField(err),
+			logger.Uint("session_id", gs.ID),
+		)
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении поля боя: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	// Извлекаем визуализацию из результата tool
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		errorMsg := tgbotapi.NewMessage(chatID, "Ошибка: неверный формат результата")
+		return b.sendMessage(errorMsg)
+	}
+
+	battlefieldView, ok := resultMap["battlefield"].(string)
+	if !ok || battlefieldView == "" {
+		// Если нет поля боя, проверяем сообщение
+		if msg, ok := resultMap["message"].(string); ok {
+			return b.sendLongMessage(chatID, msg)
+		}
+		errorMsg := tgbotapi.NewMessage(chatID, "Не удалось получить визуализацию поля боя")
+		return b.sendMessage(errorMsg)
+	}
+
+	// Добавляем заголовок с форматом
+	header := fmt.Sprintf("⚔️ Поле боя (формат: %s)\n\n", format)
+	return b.sendLongMessage(chatID, header+battlefieldView)
 }
 
 // handleAbilities обрабатывает команду /abilities для отображения способностей персонажа
@@ -1565,9 +1833,17 @@ func (b *Bot) handleAbilities(ctx context.Context, chatID int64, args string) er
 		}
 	}
 
-	// Используем handleActionUC, который автоматически вызовет DM tool для получения способностей
-	abilitiesMessage := fmt.Sprintf("Покажи способности персонажа, фильтр: %s", filterType)
-	result, err := b.handleActionUC.Execute(ctx, chatID, abilitiesMessage)
+	// Используем GetCharacterAbilitiesTool напрямую, без вызова DM
+	// Создаем адаптер для SessionRepository из bot.go к dm_tools.SessionRepository
+	adapter := &sessionRepoAdapter{sessionRepo: b.sessionRepo}
+	tool := dm_tools.NewGetCharacterAbilitiesTool(adapter, chatID)
+
+	// Выполняем tool напрямую с нужным фильтром
+	toolArgs := map[string]interface{}{
+		"filter_type": filterType,
+	}
+
+	result, err := tool.Execute(ctx, toolArgs)
 	if err != nil {
 		logger.Error("Failed to get abilities",
 			logger.ErrorField(err),
@@ -1577,7 +1853,95 @@ func (b *Bot) handleAbilities(ctx context.Context, chatID int64, args string) er
 		return b.sendMessage(errorMsg)
 	}
 
-	return b.sendLongMessage(chatID, result)
+	// Форматируем результат для отображения
+	resultMap, ok := result.(map[string]interface{})
+	if !ok {
+		errorMsg := tgbotapi.NewMessage(chatID, "Ошибка: неверный формат результата")
+		return b.sendMessage(errorMsg)
+	}
+
+	// Формируем читаемое сообщение со способностями
+	var parts []string
+	parts = append(parts, fmt.Sprintf("📊 Способности персонажа: %s", resultMap["character_name"]))
+	parts = append(parts, fmt.Sprintf("⚔️ Класс: %s | 📊 Уровень: %v", resultMap["character_class"], resultMap["character_level"]))
+
+	if filterType != "all" {
+		parts = append(parts, fmt.Sprintf("🔍 Фильтр: %s", filterType))
+	}
+
+	parts = append(parts, "")
+
+	abilities, ok := resultMap["abilities"].([]interface{})
+	if !ok || len(abilities) == 0 {
+		parts = append(parts, "У персонажа нет способностей выбранного типа.")
+	} else {
+		parts = append(parts, fmt.Sprintf("Всего способностей: %v\n", resultMap["total_abilities"]))
+
+		// Группируем способности по типу
+		spells := []map[string]interface{}{}
+		feats := []map[string]interface{}{}
+		classAbilities := []map[string]interface{}{}
+
+		for _, ab := range abilities {
+			abMap, ok := ab.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			abType, _ := abMap["type"].(string)
+			switch abType {
+			case "spell":
+				spells = append(spells, abMap)
+			case "feat":
+				feats = append(feats, abMap)
+			case "class":
+				classAbilities = append(classAbilities, abMap)
+			}
+		}
+
+		// Выводим способности по группам
+		if len(classAbilities) > 0 && (filterType == "all" || filterType == "class") {
+			parts = append(parts, "⚔️ Классовые способности:")
+			for _, ab := range classAbilities {
+				name, _ := ab["name"].(string)
+				desc, _ := ab["description"].(string)
+				useType, _ := ab["use_type"].(string)
+				parts = append(parts, fmt.Sprintf("  • %s (%s)", name, useType))
+				parts = append(parts, fmt.Sprintf("    %s", desc))
+				if usesPerDay, ok := ab["uses_per_day"].(float64); ok && usesPerDay > 0 {
+					usesRemaining, _ := ab["uses_remaining"].(float64)
+					parts = append(parts, fmt.Sprintf("    Использований: %.0f/%.0f в день", usesRemaining, usesPerDay))
+				}
+				parts = append(parts, "")
+			}
+		}
+
+		if len(spells) > 0 && (filterType == "all" || filterType == "spells") {
+			parts = append(parts, "🔮 Заклинания:")
+			for _, ab := range spells {
+				name, _ := ab["name"].(string)
+				desc, _ := ab["description"].(string)
+				spellLevel, _ := ab["spell_level"].(float64)
+				spellSchool, _ := ab["spell_school"].(string)
+				parts = append(parts, fmt.Sprintf("  • %s (Уровень %.0f, %s)", name, spellLevel, spellSchool))
+				parts = append(parts, fmt.Sprintf("    %s", desc))
+				parts = append(parts, "")
+			}
+		}
+
+		if len(feats) > 0 && (filterType == "all" || filterType == "feats") {
+			parts = append(parts, "⭐ Перки:")
+			for _, ab := range feats {
+				name, _ := ab["name"].(string)
+				desc, _ := ab["description"].(string)
+				parts = append(parts, fmt.Sprintf("  • %s", name))
+				parts = append(parts, fmt.Sprintf("    %s", desc))
+				parts = append(parts, "")
+			}
+		}
+	}
+
+	return b.sendLongMessage(chatID, strings.Join(parts, "\n"))
 }
 
 // handleFlee обрабатывает команду /flee для выхода из боя
@@ -1653,13 +2017,214 @@ func (b *Bot) handleFlee(ctx context.Context, chatID int64) error {
 }
 
 func (b *Bot) handleFeedback(ctx context.Context, chatID int64, args string, tgUserID int64, from *tgbotapi.User) error {
-	// Проверяем, что текст фидбека указан
+	// Если есть аргументы, используем старый формат для обратной совместимости
 	feedbackText := strings.TrimSpace(args)
-	if feedbackText == "" {
-		msg := tgbotapi.NewMessage(chatID, "Пожалуйста, укажите ваш отзыв. Формат: /feedback <текст отзыва>\n\nПример: /feedback Отличная игра! Очень интересный DM.")
-		return b.sendMessage(msg)
+	if feedbackText != "" {
+		// Отменяем активный диалог, если есть
+		b.feedbackStateMu.Lock()
+		delete(b.feedbackState, chatID)
+		b.feedbackStateMu.Unlock()
+		
+		return b.saveFeedbackDirectly(ctx, chatID, tgUserID, from, feedbackText, feedback.FeedbackTypeOther, feedback.FeedbackCategoryOther)
 	}
 
+	// Отменяем активный диалог, если есть (пользователь хочет начать заново)
+	b.feedbackStateMu.Lock()
+	delete(b.feedbackState, chatID)
+	b.feedbackStateMu.Unlock()
+
+	// Начинаем интерактивный диалог
+	return b.startFeedbackDialog(ctx, chatID, tgUserID, from)
+}
+
+// startFeedbackDialog начинает интерактивный диалог feedback
+func (b *Bot) startFeedbackDialog(ctx context.Context, chatID int64, tgUserID int64, from *tgbotapi.User) error {
+	// Инициализируем состояние диалога
+	b.feedbackStateMu.Lock()
+	b.feedbackState[chatID] = &FeedbackDialogState{
+		UserID: tgUserID,
+		From:   from,
+	}
+	b.feedbackStateMu.Unlock()
+
+	// Показываем кнопки для выбора типа обратной связи
+	msg := tgbotapi.NewMessage(chatID, "📝 Выберите тип обратной связи:")
+	
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🐛 Баг", "feedback_type_bug"),
+			tgbotapi.NewInlineKeyboardButtonData("💡 Предложение", "feedback_type_suggestion"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❓ Вопрос", "feedback_type_question"),
+			tgbotapi.NewInlineKeyboardButtonData("⭐ Похвала", "feedback_type_praise"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📋 Другое", "feedback_type_other"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "feedback_cancel"),
+		),
+	)
+	msg.ReplyMarkup = keyboard
+
+	return b.sendMessage(msg)
+}
+
+// handleFeedbackTypeSelection обрабатывает выбор типа feedback
+func (b *Bot) handleFeedbackTypeSelection(ctx context.Context, chatID int64, query *tgbotapi.CallbackQuery, feedbackType feedback.FeedbackType) error {
+	// Отвечаем на callback
+	typeNames := map[feedback.FeedbackType]string{
+		feedback.FeedbackTypeBug:        "Баг",
+		feedback.FeedbackTypeSuggestion: "Предложение",
+		feedback.FeedbackTypeQuestion:   "Вопрос",
+		feedback.FeedbackTypePraise:      "Похвала",
+		feedback.FeedbackTypeOther:       "Другое",
+	}
+	typeName := typeNames[feedbackType]
+	if typeName == "" {
+		typeName = "Другое"
+	}
+	
+	callback := tgbotapi.NewCallback(query.ID, fmt.Sprintf("Выбран тип: %s", typeName))
+	if _, err := b.api.Request(callback); err != nil {
+		logger.Error("Failed to answer callback",
+			logger.ErrorField(err),
+		)
+	}
+
+	// Сохраняем тип в состоянии
+	b.feedbackStateMu.Lock()
+	state, exists := b.feedbackState[chatID]
+	if !exists {
+		state = &FeedbackDialogState{
+			UserID: query.From.ID,
+			From:   query.From,
+		}
+		b.feedbackState[chatID] = state
+	}
+	state.Type = feedbackType
+	b.feedbackStateMu.Unlock()
+
+	// Показываем кнопки для выбора категории
+	msg := tgbotapi.NewEditMessageText(
+		chatID,
+		query.Message.MessageID,
+		fmt.Sprintf("📝 Тип: %s\n\nВыберите категорию:", typeName),
+	)
+
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("⚔️ Боевая система", "feedback_category_combat"),
+			tgbotapi.NewInlineKeyboardButtonData("🎭 DM", "feedback_category_dm"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🖥️ Интерфейс", "feedback_category_interface"),
+			tgbotapi.NewInlineKeyboardButtonData("🎮 Геймплей", "feedback_category_gameplay"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📋 Другое", "feedback_category_other"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "feedback_cancel"),
+		),
+	)
+	msg.ReplyMarkup = &keyboard
+
+	_, err := b.api.Send(msg)
+	return err
+}
+
+// handleFeedbackCategorySelection обрабатывает выбор категории feedback
+func (b *Bot) handleFeedbackCategorySelection(ctx context.Context, chatID int64, query *tgbotapi.CallbackQuery, feedbackCategory feedback.FeedbackCategory) error {
+	// Отвечаем на callback
+	categoryNames := map[feedback.FeedbackCategory]string{
+		feedback.FeedbackCategoryCombat:    "Боевая система",
+		feedback.FeedbackCategoryDM:          "DM",
+		feedback.FeedbackCategoryInterface:  "Интерфейс",
+		feedback.FeedbackCategoryGameplay:   "Геймплей",
+		feedback.FeedbackCategoryOther:      "Другое",
+	}
+	categoryName := categoryNames[feedbackCategory]
+	if categoryName == "" {
+		categoryName = "Другое"
+	}
+
+	callback := tgbotapi.NewCallback(query.ID, fmt.Sprintf("Выбрана категория: %s", categoryName))
+	if _, err := b.api.Request(callback); err != nil {
+		logger.Error("Failed to answer callback",
+			logger.ErrorField(err),
+		)
+	}
+
+	// Сохраняем категорию в состоянии
+	b.feedbackStateMu.Lock()
+	state, exists := b.feedbackState[chatID]
+	if !exists {
+		state = &FeedbackDialogState{
+			UserID: query.From.ID,
+			From:   query.From,
+		}
+		b.feedbackState[chatID] = state
+	}
+	state.Category = feedbackCategory
+	b.feedbackStateMu.Unlock()
+
+	// Получаем названия типа и категории для отображения
+	typeNames := map[feedback.FeedbackType]string{
+		feedback.FeedbackTypeBug:        "Баг",
+		feedback.FeedbackTypeSuggestion: "Предложение",
+		feedback.FeedbackTypeQuestion:   "Вопрос",
+		feedback.FeedbackTypePraise:      "Похвала",
+		feedback.FeedbackTypeOther:       "Другое",
+	}
+	typeName := typeNames[state.Type]
+	if typeName == "" {
+		typeName = "Другое"
+	}
+
+	// Просим ввести текст отзыва
+	msg := tgbotapi.NewEditMessageText(
+		chatID,
+		query.Message.MessageID,
+		fmt.Sprintf("📝 Тип: %s\n📂 Категория: %s\n\n✍️ Теперь напишите ваш отзыв (просто отправьте текст сообщением):", 
+			typeName, categoryName),
+	)
+	msg.ReplyMarkup = nil // Убираем кнопки
+
+	_, err := b.api.Send(msg)
+	return err
+}
+
+// handleFeedbackCancel обрабатывает отмену диалога feedback
+func (b *Bot) handleFeedbackCancel(ctx context.Context, chatID int64, query *tgbotapi.CallbackQuery) error {
+	// Отвечаем на callback
+	callback := tgbotapi.NewCallback(query.ID, "Диалог отменен")
+	if _, err := b.api.Request(callback); err != nil {
+		logger.Error("Failed to answer callback",
+			logger.ErrorField(err),
+		)
+	}
+
+	// Удаляем состояние диалога
+	b.feedbackStateMu.Lock()
+	delete(b.feedbackState, chatID)
+	b.feedbackStateMu.Unlock()
+
+	// Обновляем сообщение
+	msg := tgbotapi.NewEditMessageText(
+		chatID,
+		query.Message.MessageID,
+		"❌ Диалог отменен. Используйте /feedback для начала нового отзыва.",
+	)
+	msg.ReplyMarkup = nil
+
+	_, err := b.api.Send(msg)
+	return err
+}
+
+// saveFeedbackDirectly сохраняет feedback напрямую (для обратной совместимости)
+func (b *Bot) saveFeedbackDirectly(ctx context.Context, chatID int64, tgUserID int64, from *tgbotapi.User, feedbackText string, feedbackType feedback.FeedbackType, feedbackCategory feedback.FeedbackCategory) error {
 	if b.feedbackRepo == nil {
 		msg := tgbotapi.NewMessage(chatID, "Извините, система фидбека временно недоступна.")
 		return b.sendMessage(msg)
@@ -1667,9 +2232,11 @@ func (b *Bot) handleFeedback(ctx context.Context, chatID int64, args string, tgU
 
 	// Создаем фидбек
 	fb := &feedback.Feedback{
-		ChatID:  chatID,
-		UserID:  tgUserID,
-		Message: feedbackText,
+		ChatID:   chatID,
+		UserID:   tgUserID,
+		Message:  feedbackText,
+		Type:     feedbackType,
+		Category: feedbackCategory,
 	}
 
 	// Добавляем метаданные пользователя, если доступны
@@ -1747,7 +2314,7 @@ func (b *Bot) handleEndGame(ctx context.Context, chatID int64) error {
 Мир: %s
 %s
 
-Используйте /newgame для начала новой игры.`, 
+Используйте /newgame для начала новой игры.`,
 		gs.World.Name,
 		gs.World.Description)
 
@@ -1765,6 +2332,10 @@ func (b *Bot) sendMessageWithRetry(ctx context.Context, msg tgbotapi.MessageConf
 	const maxRetries = 3
 	const initialBackoff = 100 * time.Millisecond
 	const maxBackoff = 5 * time.Second
+
+	// Очищаем текст сообщения от невалидных UTF-8 последовательностей перед отправкой
+	// Telegram API требует, чтобы все строки были в UTF-8
+	msg.Text = sanitizeUTF8(msg.Text)
 
 	// Проверяем circuit breaker
 	b.circuitOpenMu.RLock()
@@ -1868,9 +2439,38 @@ func (b *Bot) sendMessageWithRetry(ctx context.Context, msg tgbotapi.MessageConf
 	return b.sendMessageWithRetry(ctx, msg, attempt+1)
 }
 
+// sanitizeUTF8 очищает строку от невалидных UTF-8 последовательностей
+// Telegram API требует, чтобы все строки были в UTF-8
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+
+	// Если строка содержит невалидные UTF-8 последовательности, очищаем их
+	var result strings.Builder
+	result.Grow(len(s))
+
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		if r == utf8.RuneError && size == 1 {
+			// Невалидная UTF-8 последовательность - заменяем на символ замены UTF-8 (U+FFFD)
+			result.WriteRune('\uFFFD')
+			s = s[1:]
+		} else {
+			result.WriteRune(r)
+			s = s[size:]
+		}
+	}
+
+	return result.String()
+}
+
 // sendLongMessage разбивает длинные сообщения на части и отправляет их
 // Telegram имеет лимит 4096 символов на сообщение
 func (b *Bot) sendLongMessage(chatID int64, text string) error {
+	// Очищаем текст от невалидных UTF-8 последовательностей перед отправкой
+	text = sanitizeUTF8(text)
+
 	if len(text) <= TelegramMaxMessageLength {
 		msg := tgbotapi.NewMessage(chatID, text)
 		return b.sendMessage(msg)
@@ -1881,6 +2481,8 @@ func (b *Bot) sendLongMessage(chatID int64, text string) error {
 
 	var lastErr error
 	for i, part := range parts {
+		// Очищаем каждую часть от невалидных UTF-8 последовательностей
+		part = sanitizeUTF8(part)
 		msg := tgbotapi.NewMessage(chatID, part)
 		if len(parts) > 1 {
 			// Добавляем индикатор части для многочастных сообщений
@@ -1986,6 +2588,122 @@ func splitMessage(text string, maxLen int) []string {
 	}
 
 	return parts
+}
+
+// handleLeaderboard обрабатывает команду /leaderboard для отображения рейтинга игроков
+func (b *Bot) handleLeaderboard(ctx context.Context, chatID int64, tgUserID int64, args string) error {
+	if b.getLeaderboardUC == nil {
+		msg := tgbotapi.NewMessage(chatID, "Система рейтингов временно недоступна.")
+		return b.sendMessage(msg)
+	}
+
+	// Парсим метрику из аргументов (по умолчанию - общий рейтинг)
+	metricType := rating.MetricTypeTotalRating
+	limit := 10
+
+	if args != "" {
+		parts := strings.Fields(strings.ToLower(args))
+		if len(parts) > 0 {
+			// Парсим тип метрики
+			switch parts[0] {
+			case "level", "уровень", "л":
+				metricType = rating.MetricTypeLevel
+			case "experience", "exp", "опыт", "о":
+				metricType = rating.MetricTypeExperience
+			case "wins", "combat", "победы", "п":
+				metricType = rating.MetricTypeCombatWins
+			case "quests", "квесты", "к":
+				metricType = rating.MetricTypeQuestsCompleted
+			case "total", "общий", "т":
+				metricType = rating.MetricTypeTotalRating
+			}
+
+			// Парсим лимит (если указан второй аргумент)
+			if len(parts) > 1 {
+				if parsedLimit, err := strconv.Atoi(parts[1]); err == nil && parsedLimit > 0 && parsedLimit <= 100 {
+					limit = parsedLimit
+				}
+			}
+		}
+	}
+
+	// Получаем лидерборд
+	req := ratingapp.GetLeaderboardRequest{
+		MetricType: metricType,
+		Limit:      limit,
+		TgUserID:   tgUserID,
+	}
+
+	resp, err := b.getLeaderboardUC.Execute(ctx, req)
+	if err != nil {
+		logger.Error("Failed to get leaderboard",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+		)
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении рейтинга: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	// Формируем сообщение с лидербордом
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("🏆 Лидерборд: %s\n\n", resp.MetricType))
+
+	if len(resp.Entries) == 0 {
+		result.WriteString("Пока нет игроков в рейтинге.\n")
+		result.WriteString("Играйте, чтобы попасть в топ!")
+	} else {
+		// Формируем таблицу лидерборда
+		for _, entry := range resp.Entries {
+			// Эмодзи для медалей
+			var medal string
+			switch entry.Rank {
+			case 1:
+				medal = "🥇"
+			case 2:
+				medal = "🥈"
+			case 3:
+				medal = "🥉"
+			default:
+				medal = fmt.Sprintf("%d.", entry.Rank)
+			}
+
+			result.WriteString(fmt.Sprintf("%s %s: %d\n", medal, entry.PlayerName, entry.MetricValue))
+		}
+
+		// Добавляем информацию о ранге пользователя
+		if resp.UserRank > 0 {
+			result.WriteString(fmt.Sprintf("\n📊 Ваш ранг: #%d (рейтинг: %d)", resp.UserRank, resp.UserRating))
+		}
+	}
+
+	// Добавляем подсказку по командам
+	result.WriteString(fmt.Sprintf("\n\n💡 Использование: /leaderboard [тип] [лимит]\n"))
+	result.WriteString("Типы: level, experience, wins, quests, total\n")
+	result.WriteString("Пример: /leaderboard level 20")
+
+	return b.sendLongMessage(chatID, result.String())
+}
+
+// combatRepositoryAdapter адаптирует CombatRepository из bot.go к dm_tools.CombatRepository
+type combatRepositoryAdapter struct {
+	repo CombatRepository
+}
+
+func (a *combatRepositoryAdapter) GetActiveBySessionID(ctx context.Context, sessionID uint) (*combat.Combat, error) {
+	return a.repo.GetActiveBySessionID(ctx, sessionID)
+}
+
+func (a *combatRepositoryAdapter) Save(ctx context.Context, c *combat.Combat) error {
+	return a.repo.Save(ctx, c)
+}
+
+// sessionRepoAdapter адаптирует session.Repository из bot.go к dm_tools.SessionRepository
+type sessionRepoAdapter struct {
+	sessionRepo session.Repository
+}
+
+func (a *sessionRepoAdapter) GetByChatID(ctx context.Context, chatID int64) (*session.GameSession, error) {
+	return a.sessionRepo.GetByChatID(ctx, chatID)
 }
 
 // editMessage редактирует сообщение, обрабатывая ошибку "message is not modified" как не критичную

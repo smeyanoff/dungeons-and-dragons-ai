@@ -552,6 +552,8 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 				nil, // responseCache - optional
 				nil, // actionValidator - optional
 				checkDailyProgressUC,
+				nil, // getSubscriptionUC - optional
+				nil, // updateRatingUC - optional
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
@@ -743,6 +745,8 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 				nil, // responseCache
 				validator,
 				checkDailyProgressUC,
+				nil, // getSubscriptionUC - optional
+				nil, // updateRatingUC - optional
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
@@ -903,6 +907,8 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				nil, // responseCache
 				validator,
 				checkDailyProgressUC,
+				nil, // getSubscriptionUC - optional
+				nil, // updateRatingUC - optional
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)

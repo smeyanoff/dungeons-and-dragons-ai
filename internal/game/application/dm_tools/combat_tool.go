@@ -1099,16 +1099,14 @@ func (t *PerformEnemyAttackTool) Execute(ctx context.Context, args map[string]in
 		}
 	}
 
+	// Переходим к следующему ходу после атаки врага
+	activeCombat.NextTurn()
+
 	// Проверяем, не закончился ли бой
 	combatFinished := false
 	victory := false
 	if activeCombat.CheckCombatEnd() {
 		activeCombat.State = combat.CombatStateFinished
-		if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
-			logger.Error("PerformEnemyAttackTool: failed to save combat",
-				logger.ErrorField(err),
-			)
-		}
 		combatFinished = true
 
 		// Проверяем, кто победил
@@ -1119,6 +1117,27 @@ func (t *PerformEnemyAttackTool) Execute(ctx context.Context, args map[string]in
 			}
 		}
 		victory = alivePlayers > 0
+	}
+
+	// Сохраняем состояние боя после перехода хода
+	if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
+		logger.Error("PerformEnemyAttackTool: failed to save combat after next turn",
+			logger.ErrorField(err),
+		)
+		// Не возвращаем ошибку - результат атаки уже сформирован
+	}
+
+	// Проверяем, чей следующий ход
+	nextParticipant := activeCombat.GetCurrentParticipant()
+	nextTurnInfo := ""
+	if nextParticipant != nil && !combatFinished {
+		if nextParticipant.IsPlayer {
+			// Следующий ход игрока - явно сообщаем об этом
+			nextTurnInfo = fmt.Sprintf("🎯 Теперь твой ход, %s! Что ты делаешь?", nextParticipant.GetName())
+		} else {
+			// Следующий ход другого врага (не должно происходить, но на всякий случай)
+			nextTurnInfo = fmt.Sprintf("🎯 Следующий ход: %s", nextParticipant.GetName())
+		}
 	}
 
 	// Формируем результат
@@ -1136,6 +1155,10 @@ func (t *PerformEnemyAttackTool) Execute(ctx context.Context, args map[string]in
 
 	if result.Hit {
 		attackResult["damage"] = result.Damage
+	}
+
+	if nextTurnInfo != "" {
+		attackResult["next_turn"] = nextTurnInfo
 	}
 
 	if combatFinished {

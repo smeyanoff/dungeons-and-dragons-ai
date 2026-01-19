@@ -52,3 +52,4 @@ test_results_summary.txt
 backups/
 data/postgres/
 data/qdrant/
+*.log

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"dungeons-and-dragons-ai/pkg/logger"
@@ -251,6 +252,7 @@ func formatCombatToolResult(result ToolResult) string {
 }
 
 // BuildToolsPrompt создает промпт с описанием доступных инструментов
+// ВАЖНО: DM может вызывать несколько инструментов одновременно в одном ответе
 func BuildToolsPrompt(tools []Tool) string {
 	if len(tools) == 0 {
 		return ""
@@ -296,18 +298,203 @@ func BuildToolsPrompt(tools []Tool) string {
 	parts = append(parts, "Важно:")
 	parts = append(parts, "- Используй инструменты, когда нужно получить актуальную информацию об игровом состоянии")
 	parts = append(parts, "- После вызова инструмента дождись результата и используй его в своем ответе")
-	parts = append(parts, "- Можно вызывать несколько инструментов одновременно")
+	parts = append(parts, "")
+	parts = append(parts, "⚠️ МНОЖЕСТВЕННЫЕ ВЫЗОВЫ:")
+	parts = append(parts, "- Ты можешь вызывать НЕСКОЛЬКО инструментов ОДНОВРЕМЕННО в одном ответе")
+	parts = append(parts, "- Просто добавь несколько тегов <tool_call> один за другим")
+	parts = append(parts, "- Пример: если нужно проверить инвентарь И атаковать, вызови оба инструмента сразу")
+	parts = append(parts, "- Все инструменты будут выполнены параллельно, и ты получишь результаты всех вызовов")
+	parts = append(parts, "")
+	parts = append(parts, "Пример множественного вызова:")
+	parts = append(parts, `<tool_call name="get_inventory">{}</tool_call>`)
+	parts = append(parts, `<tool_call name="perform_combat_attack">{...}</tool_call>`)
+	parts = append(parts, "")
 	parts = append(parts, "- Если инструмент вернул ошибку, учти это в своем ответе")
 	
 	return strings.Join(parts, "\n")
 }
 
-// CleanToolCallTags удаляет теги tool_call из текста ответа
+// CleanToolCallTags удаляет теги tool_call из текста ответа и заменяет их на понятные сообщения
 func CleanToolCallTags(text string) string {
-	// Удаляем все теги tool_call (включая многострочные)
+	// Паттерн для поиска вызовов инструментов: 
+	// 1. Самозакрывающийся: <tool_call name="tool_name" param="value"/>
+	// 2. С закрывающим тегом: <tool_call name="tool_name">{json}</tool_call>
+	// Обрабатываем оба формата отдельно
+	
+	// Сначала обрабатываем самозакрывающиеся теги
+	selfClosingPattern := regexp.MustCompile(`<tool_call\s+name=["']([^"']+)["']([^/>]*?)/>`)
+	text = selfClosingPattern.ReplaceAllStringFunc(text, func(match string) string {
+		matches := selfClosingPattern.FindStringSubmatch(match)
+		if len(matches) < 2 {
+			return ""
+		}
+		return formatToolCallMessage(matches[1], matches[2], "")
+	})
+	
+	// Затем обрабатываем теги с закрывающим тегом
+	toolCallPattern := regexp.MustCompile(`(?s)<tool_call\s+name=["']([^"']+)["']([^>]*)>(.*?)</tool_call>`)
+	text = toolCallPattern.ReplaceAllStringFunc(text, func(match string) string {
+		matches := toolCallPattern.FindStringSubmatch(match)
+		if len(matches) < 2 {
+			return ""
+		}
+		jsonContent := ""
+		if len(matches) > 3 {
+			jsonContent = matches[3]
+		}
+		return formatToolCallMessage(matches[1], matches[2], jsonContent)
+	})
+	
+	// Удаляем оставшиеся теги tool_call (на случай, если формат не совпал)
 	re := regexp.MustCompile(`(?s)<tool_call[^>]*>.*?</tool_call>`)
-	cleaned := re.ReplaceAllString(text, "")
+	text = re.ReplaceAllString(text, "")
+	
 	// Удаляем лишние пробелы и переносы строк
-	cleaned = strings.TrimSpace(cleaned)
-	return cleaned
+	text = strings.TrimSpace(text)
+	return text
+}
+
+// formatToolCallMessage формирует понятное сообщение для вызова инструмента
+func formatToolCallMessage(toolName, attributes, jsonContent string) string {
+	// Пытаемся извлечь параметры из атрибутов или JSON
+	var params map[string]interface{}
+	
+	// Сначала пробуем распарсить JSON, если он есть
+	if strings.TrimSpace(jsonContent) != "" {
+		if err := json.Unmarshal([]byte(jsonContent), &params); err == nil {
+			// Успешно распарсили JSON
+		}
+	}
+	
+	// Если JSON не удалось распарсить, пробуем извлечь из атрибутов
+	if params == nil {
+		params = make(map[string]interface{})
+		// Ищем атрибуты вида param="value"
+		attrPattern := regexp.MustCompile(`(\w+)=["']([^"']+)["']`)
+		attrMatches := attrPattern.FindAllStringSubmatch(attributes, -1)
+		for _, attrMatch := range attrMatches {
+			if len(attrMatch) >= 3 {
+				key := attrMatch[1]
+				value := attrMatch[2]
+				// Пытаемся преобразовать в число, если возможно
+				if intVal, err := strconv.Atoi(value); err == nil {
+					params[key] = intVal
+				} else {
+					params[key] = value
+				}
+			}
+		}
+	}
+	
+	// Формируем понятное сообщение в зависимости от инструмента
+	switch toolName {
+	case "request_ability_check":
+		ability := getStringParam(params, "ability")
+		dc := getIntParam(params, "dc")
+		abilityName := getAbilityName(ability)
+		if dc > 0 {
+			return fmt.Sprintf("Выполняется проверка %s (DC %d)", abilityName, dc)
+		} else if ability != "" {
+			return fmt.Sprintf("Выполняется проверка %s", abilityName)
+		}
+		return "Выполняется проверка характеристики"
+		
+	case "request_saving_throw":
+		ability := getStringParam(params, "ability")
+		dc := getIntParam(params, "dc")
+		abilityName := getAbilityName(ability)
+		if dc > 0 {
+			return fmt.Sprintf("Выполняется спасбросок %s (DC %d)", abilityName, dc)
+		} else if ability != "" {
+			return fmt.Sprintf("Выполняется спасбросок %s", abilityName)
+		}
+		return "Выполняется спасбросок"
+		
+	case "evaluate_check":
+		ability := getStringParam(params, "ability")
+		abilityName := getAbilityName(ability)
+		return fmt.Sprintf("Оценивается результат проверки %s", abilityName)
+		
+	case "perform_combat_attack":
+		return "Выполняется боевая атака"
+		
+	case "perform_enemy_attack":
+		target := getStringParam(params, "target_name")
+		if target != "" {
+			return fmt.Sprintf("Враг атакует %s", target)
+		}
+		return "Враг выполняет атаку"
+		
+	case "apply_damage":
+		return "Применяется урон"
+		
+	case "get_character_stats":
+		return "Получаются характеристики персонажа"
+		
+	case "get_inventory":
+		return "Проверяется инвентарь"
+		
+	case "get_battlefield_status":
+		return "Проверяется статус поля боя"
+		
+	case "get_character_abilities":
+		return "Проверяются способности персонажа"
+		
+	default:
+		// Для неизвестных инструментов просто удаляем
+		return ""
+	}
+}
+
+// getStringParam безопасно извлекает строковый параметр
+func getStringParam(params map[string]interface{}, key string) string {
+	if params == nil {
+		return ""
+	}
+	if val, ok := params[key]; ok {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+// getIntParam безопасно извлекает целочисленный параметр
+func getIntParam(params map[string]interface{}, key string) int {
+	if params == nil {
+		return 0
+	}
+	if val, ok := params[key]; ok {
+		switch v := val.(type) {
+		case int:
+			return v
+		case float64:
+			return int(v)
+		case string:
+			if intVal, err := strconv.Atoi(v); err == nil {
+				return intVal
+			}
+		}
+	}
+	return 0
+}
+
+// getAbilityName возвращает русское название характеристики
+func getAbilityName(ability string) string {
+	switch ability {
+	case "strength":
+		return "Силы (STR)"
+	case "dexterity":
+		return "Ловкости (DEX)"
+	case "constitution":
+		return "Телосложения (CON)"
+	case "intelligence":
+		return "Интеллекта (INT)"
+	case "wisdom":
+		return "Мудрости (WIS)"
+	case "charisma":
+		return "Харизмы (CHA)"
+	default:
+		return "характеристики"
+	}
 }

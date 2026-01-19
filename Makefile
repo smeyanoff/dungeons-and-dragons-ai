@@ -20,46 +20,13 @@ build:
 test:
 	go test -v -race -coverprofile=coverage.out ./...
 
-# Запуск интеграционных тестов
-test-integration:
-	@echo "Запуск интеграционных тестов..."
-	@echo "Убедитесь, что контейнеры запущены: make docker-up"
-	@echo "Результаты будут записаны в TESTING_REPORT.md и FEEDBACK.md"
-	@if [ -f .env ]; then \
-		echo "Загрузка переменных окружения из .env..."; \
-		set -a; \
-		. .env; \
-		set +a; \
-		go test -v -timeout 30m ./tests/integration/...; \
-	else \
-		echo "⚠️  Файл .env не найден. Используются переменные окружения из shell."; \
-		go test -v -timeout 30m ./tests/integration/...; \
-	fi
-
-# Запуск интеграционных тестов с реальными LLM ответами (как пользователь играет)
-test-integration-gameplay:
-	@echo "Запуск интеграционных тестов игрового процесса..."
-	@echo "Убедитесь, что контейнеры запущены: make docker-up"
-	@echo "Для тестов на хосте используйте GIGACHAT_SKIP_TLS_VERIFY=true в .env"
-	@echo "Или запускайте тесты внутри контейнера: make test-integration-gameplay-docker"
-	@echo "Результаты будут записаны в TESTING_REPORT.md и FEEDBACK.md"
-	@if [ -f .env ]; then \
-		echo "Загрузка переменных окружения из .env..."; \
-		set -a; \
-		. .env; \
-		set +a; \
-		go test -v -timeout 60m ./tests/integration/... -run "TestTelegramGameplay"; \
-	else \
-		echo "⚠️  Файл .env не найден. Используются переменные окружения из shell."; \
-		go test -v -timeout 60m ./tests/integration/... -run "TestTelegramGameplay"; \
-	fi
-
-# Запуск интеграционных тестов внутри Docker контейнера (где сертификаты настроены)
-test-integration-gameplay-docker:
-	@echo "Запуск интеграционных тестов внутри Docker контейнера..."
+# Запуск всех интеграционных тестов внутри Docker контейнера
+test-integration-docker:
+	@echo "Запуск всех интеграционных тестов внутри Docker контейнера..."
 	@echo "Убедитесь, что контейнеры запущены: make docker-up"
 	@echo "В контейнере сертификаты Сбербанка уже настроены, GIGACHAT_SKIP_TLS_VERIFY не требуется"
-	@docker exec -it dnd-bot-prod sh -c "cd /root && go test -v -timeout 60m ./tests/integration/... -run 'TestTelegramGameplay'"
+	@echo "Результаты будут записаны в TESTING_REPORT.md и FEEDBACK.md"
+	@docker exec dnd-bot-prod sh -c "cd /root && go test -v -timeout 60m ./tests/integration/..."
 
 # ============================================
 # Development (docker-compose.yml)
@@ -161,6 +128,7 @@ help:
 	@echo "  make test-integration - Запуск интеграционных тестов"
 	@echo "  make test-integration-gameplay - Запуск тестов игрового процесса (как пользователь, на хосте)"
 	@echo "  make test-integration-gameplay-docker - Запуск тестов внутри контейнера (сертификаты настроены)"
+	@echo "  make test-integration-docker - Запуск всех интеграционных тестов внутри контейнера"
 	@echo ""
 	@echo "Безопасность:"
 	@echo "  make security-scan   - Полное сканирование безопасности"

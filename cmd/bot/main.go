@@ -20,6 +20,7 @@ import (
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
+	ratingapp "dungeons-and-dragons-ai/internal/game/application/rating"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
@@ -35,6 +36,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/item"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
+	"dungeons-and-dragons-ai/internal/game/domain/rating"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/subscription"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
@@ -306,11 +308,21 @@ func main() {
 	getDailyQuestsUC := questapp.NewGetDailyQuestsUseCase(sessionRepo, dailyQuestRepo, playerRepo)
 	completeDailyQuestUC := questapp.NewCompleteDailyQuestUseCase(sessionRepo, dailyQuestRepo, playerRepo, addExperienceUC)
 	checkDailyProgressUC := questapp.NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeDailyQuestUC)
+	
+	// Создаем use cases для рейтингов и лидербордов
+	ratingRepo := persistence.NewRatingRepository(db)
+	getLeaderboardUC := ratingapp.NewGetLeaderboardUseCase(ratingRepo)
+	// Создаем адаптер для AchievementRepository для использования в rating пакете
+	achievementRepoAdapter := &ratingAchievementRepoAdapter{repo: achievementRepo}
+	updateRatingUC := ratingapp.NewUpdateRatingUseCase(ratingRepo, sessionRepo, playerRepo, achievementRepoAdapter)
+	
 	// Создаем адаптер для преобразования типов запросов между player_action и quest
 	dailyQuestProgressAdapter := &dailyQuestProgressAdapterForPlayerAction{
 		uc: checkDailyProgressUC,
 	}
-	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator, dailyQuestProgressAdapter)
+	// Создаем адаптер для RatingUpdater из updateRatingUC
+	ratingUpdaterAdapterAction := &ratingUpdaterAdapterAction{uc: updateRatingUC}
+	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator, dailyQuestProgressAdapter, getSubscriptionUC, ratingUpdaterAdapterAction)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
@@ -318,12 +330,15 @@ func main() {
 	handleCombatUC := combatapp.NewHandleCombatUseCase(combatRepo, sessionRepo)
 	// Настраиваем проверку достижений в HandleCombatUseCase
 	handleCombatUC.SetCheckAchievementsUseCase(checkAchievementsUC)
+	// Настраиваем проверку ежедневных заданий в HandleCombatUseCase
+	handleCombatUC.SetCheckDailyProgressUseCase(checkDailyProgressUC)
 	rollDiceUC := dice.NewRollDiceUseCase()
 	getQuestsUC := questapp.NewGetQuestsUseCase(sessionRepo, questRepo)
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
 	getAchievementsUC := achievementapp.NewGetAchievementsUseCase(achievementRepo, sessionRepo)
 	getSpellsUC := spellapp.NewGetSpellsUseCase(spellRepo, sessionRepo)
 	// getSubscriptionUC и checkLimitsUC уже созданы выше для использования в лимитере изображений
+	// ratingRepo, getLeaderboardUC и updateRatingUC уже созданы выше для использования в handleActionUC и боте
 
 	// Инициализация базовых достижений при старте
 	logger.Info("Initializing default achievements")
@@ -349,7 +364,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, sessionRepo, combatRepo, feedbackRepo)
+	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, sessionRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
 	if err != nil {
 		logger.Fatal("Failed to create bot",
 			logger.ErrorField(err),
@@ -361,6 +376,15 @@ func main() {
 	telegramNotificationService := achievementapp.NewTelegramNotificationServiceFromBot(bot)
 	addExperienceUC.SetNotificationService(telegramNotificationService)
 	handleCombatUC.SetNotificationService(telegramNotificationService)
+	
+	// Настраиваем обновление рейтингов в use cases
+	// Создаем адаптеры для RatingUpdater из updateRatingUC
+	ratingUpdaterAdapterExp := &ratingUpdaterAdapter{uc: updateRatingUC}
+	ratingUpdaterAdapterCombat := &ratingUpdaterAdapterCombat{uc: updateRatingUC}
+	addExperienceUC.SetRatingUpdater(ratingUpdaterAdapterExp)
+	handleCombatUC.SetRatingUpdater(ratingUpdaterAdapterCombat)
+	logger.Info("Rating updater configured for use cases")
+	
 	logger.Info("Telegram notification service configured for achievements")
 	logger.Info("Telegram bot initialized")
 
@@ -465,6 +489,69 @@ func main() {
 	}
 }
 
+// ratingAchievementRepoAdapter адаптирует persistence.AchievementRepository к rating.AchievementRepository
+type ratingAchievementRepoAdapter struct {
+	repo *persistence.AchievementRepository
+}
+
+func (a *ratingAchievementRepoAdapter) GetAchievementProgress(ctx context.Context, playerID uint, achievementID uint) (*ratingapp.AchievementProgress, error) {
+	progress, err := a.repo.GetAchievementProgress(ctx, playerID, achievementID)
+	if err != nil {
+		return nil, err
+	}
+	if progress == nil {
+		return nil, nil
+	}
+	return &ratingapp.AchievementProgress{
+		PlayerID:     progress.PlayerID,
+		AchievementID: progress.AchievementID,
+		CurrentValue: progress.CurrentValue,
+	}, nil
+}
+
+func (a *ratingAchievementRepoAdapter) GetAchievementProgressByRequirementKey(ctx context.Context, playerID uint, requirementKey string) (int, error) {
+	return a.repo.GetAchievementProgressByRequirementKey(ctx, playerID, requirementKey)
+}
+
+// ratingUpdaterAdapter адаптирует ratingapp.UpdateRatingUseCase к интерфейсу RatingUpdater
+type ratingUpdaterAdapter struct {
+	uc *ratingapp.UpdateRatingUseCase
+}
+
+func (a *ratingUpdaterAdapter) Execute(ctx context.Context, req characterapp.RatingUpdateRequest) error {
+	updateReq := ratingapp.UpdateRatingRequest{
+		TgUserID: req.TgUserID,
+		ChatID:   req.ChatID,
+	}
+	return a.uc.Execute(ctx, updateReq)
+}
+
+// ratingUpdaterAdapterCombat адаптирует ratingapp.UpdateRatingUseCase к интерфейсу combatapp.RatingUpdater
+type ratingUpdaterAdapterCombat struct {
+	uc *ratingapp.UpdateRatingUseCase
+}
+
+func (a *ratingUpdaterAdapterCombat) Execute(ctx context.Context, req combatapp.RatingUpdateRequest) error {
+	updateReq := ratingapp.UpdateRatingRequest{
+		TgUserID: req.TgUserID,
+		ChatID:   req.ChatID,
+	}
+	return a.uc.Execute(ctx, updateReq)
+}
+
+// ratingUpdaterAdapterAction адаптирует ratingapp.UpdateRatingUseCase к интерфейсу player_action.RatingUpdater
+type ratingUpdaterAdapterAction struct {
+	uc *ratingapp.UpdateRatingUseCase
+}
+
+func (a *ratingUpdaterAdapterAction) Execute(ctx context.Context, req player_action.RatingUpdateRequest) error {
+	updateReq := ratingapp.UpdateRatingRequest{
+		TgUserID: req.TgUserID,
+		ChatID:   req.ChatID,
+	}
+	return a.uc.Execute(ctx, updateReq)
+}
+
 func initDB(dsn string) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -497,6 +584,7 @@ func runMigrations(db *gorm.DB) error {
 		&quest.DailyQuestStreak{},
 		&feedback.Feedback{},
 		&achievement.Achievement{},
+		&rating.PlayerRating{},
 		&achievement.PlayerAchievement{},
 		&achievement.AchievementProgress{},
 		&spell.Spell{},

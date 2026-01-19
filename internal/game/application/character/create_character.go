@@ -80,6 +80,9 @@ func (uc *CreateCharacterUseCase) Execute(
 		stats = generateStats()
 	}
 
+	// Применяем бонусы расы к характеристикам
+	applyRaceBonuses(stats, req.Race)
+
 	// Создаем персонажа
 	char, err := character.NewCharacter(req.Name, req.Class, req.Race, *stats)
 	if err != nil {
@@ -144,6 +147,12 @@ func generateStats() *character.Stats {
 			}
 		}
 
+		// В D&D 5e минимальная характеристика обычно 8 (стандартный массив включает 8)
+		// Это предотвращает создание персонажей с критически низкими характеристиками
+		if sum < 8 {
+			sum = 8
+		}
+
 		return sum
 	}
 
@@ -154,5 +163,69 @@ func generateStats() *character.Stats {
 		Intelligence: rollStat(),
 		Wisdom:       rollStat(),
 		Charisma:     rollStat(),
+	}
+}
+
+// applyRaceBonuses применяет бонусы расы к характеристикам персонажа
+// Соответствует стандартным правилам D&D 5e
+func applyRaceBonuses(stats *character.Stats, race character.Race) {
+	switch race {
+	case character.RaceDwarf:
+		// Дварфы получают +2 к Телосложению
+		// В D&D 5e также есть подрасы, но для упрощения используем базовый бонус
+		stats.Constitution += 2
+		// Максимальная характеристика в D&D 5e = 20
+		if stats.Constitution > 20 {
+			stats.Constitution = 20
+		}
+	case character.RaceElf:
+		// Эльфы получают +2 к Ловкости
+		stats.Dexterity += 2
+		if stats.Dexterity > 20 {
+			stats.Dexterity = 20
+		}
+	case character.RaceHuman:
+		// Люди получают +1 ко всем характеристикам (стандартный вариант)
+		stats.Strength++
+		stats.Dexterity++
+		stats.Constitution++
+		stats.Intelligence++
+		stats.Wisdom++
+		stats.Charisma++
+		// Проверяем максимум для всех
+		if stats.Strength > 20 {
+			stats.Strength = 20
+		}
+		if stats.Dexterity > 20 {
+			stats.Dexterity = 20
+		}
+		if stats.Constitution > 20 {
+			stats.Constitution = 20
+		}
+		if stats.Intelligence > 20 {
+			stats.Intelligence = 20
+		}
+		if stats.Wisdom > 20 {
+			stats.Wisdom = 20
+		}
+		if stats.Charisma > 20 {
+			stats.Charisma = 20
+		}
+	case character.RaceOrc:
+		// Орки получают +2 к Силе и +1 к Телосложению
+		stats.Strength += 2
+		stats.Constitution++
+		if stats.Strength > 20 {
+			stats.Strength = 20
+		}
+		if stats.Constitution > 20 {
+			stats.Constitution = 20
+		}
+	case character.RaceHalfling:
+		// Халфлинги получают +2 к Ловкости
+		stats.Dexterity += 2
+		if stats.Dexterity > 20 {
+			stats.Dexterity = 20
+		}
 	}
 }

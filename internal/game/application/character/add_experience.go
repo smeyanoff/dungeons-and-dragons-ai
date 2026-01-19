@@ -15,6 +15,18 @@ type AddExperienceUseCase struct {
 	sessionRepo         session.Repository
 	checkAchievementsUC *achievementapp.CheckAchievementsUseCase // Опциональная зависимость для проверки достижений
 	notificationService achievementapp.NotificationService        // Опциональная зависимость для отправки уведомлений
+	updateRatingUC      RatingUpdater                             // Опциональная зависимость для обновления рейтингов
+}
+
+// RatingUpdater интерфейс для обновления рейтингов
+type RatingUpdater interface {
+	Execute(ctx context.Context, req RatingUpdateRequest) error
+}
+
+// RatingUpdateRequest запрос на обновление рейтинга
+type RatingUpdateRequest struct {
+	TgUserID int64
+	ChatID   int64
 }
 
 func NewAddExperienceUseCase(
@@ -35,6 +47,11 @@ func (uc *AddExperienceUseCase) SetCheckAchievementsUseCase(checkAchievementsUC 
 // SetNotificationService устанавливает NotificationService для отправки уведомлений
 func (uc *AddExperienceUseCase) SetNotificationService(notificationService achievementapp.NotificationService) {
 	uc.notificationService = notificationService
+}
+
+// SetRatingUpdater устанавливает RatingUpdater для обновления рейтингов
+func (uc *AddExperienceUseCase) SetRatingUpdater(updateRatingUC RatingUpdater) {
+	uc.updateRatingUC = updateRatingUC
 }
 
 type AddExperienceRequest struct {
@@ -123,6 +140,22 @@ func (uc *AddExperienceUseCase) Execute(
 		if oldLevel != p.Character.Level {
 			// Проверка уже выполнена выше для нового уровня
 			// Здесь можно добавить дополнительную логику, если нужно
+		}
+	}
+
+	// Обновляем рейтинг игрока после изменения опыта/уровня
+	if uc.updateRatingUC != nil {
+		ratingReq := RatingUpdateRequest{
+			TgUserID: p.TgUserID,
+			ChatID:   req.ChatID,
+		}
+		if err := uc.updateRatingUC.Execute(ctx, ratingReq); err != nil {
+			// Логируем ошибку, но не прерываем выполнение
+			logger.Warn("Failed to update rating after experience gain",
+				logger.ErrorField(err),
+				logger.Uint("player_id", p.ID),
+				logger.Int64("tg_user_id", p.TgUserID),
+			)
 		}
 	}
 

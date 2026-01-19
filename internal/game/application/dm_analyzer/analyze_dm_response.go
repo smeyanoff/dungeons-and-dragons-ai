@@ -51,9 +51,9 @@ type GeneratedImage struct {
 // Enemy представляет врага в бою
 type Enemy struct {
 	Name        string `json:"name"`         // Имя врага
-	HP          int    `json:"hp"`           // HP врага
-	AC          int    `json:"ac"`           // Класс брони
-	AttackBonus int    `json:"attack_bonus"` // Бонус к атаке
+	HP          *int   `json:"hp"`           // HP врага (указатель для обработки null)
+	AC          *int   `json:"ac"`           // Класс брони (указатель для обработки null)
+	AttackBonus *int   `json:"attack_bonus"` // Бонус к атаке (указатель для обработки null)
 }
 
 // Item представляет предмет, полученный игроком
@@ -261,9 +261,21 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 	ctx context.Context,
 	dmResponse string,
 ) (*DMResponseAnalysis, error) {
+	const maxRetries = 2
+	return uc.analyzeWithLLMWithRetry(ctx, dmResponse, 0, maxRetries)
+}
+
+// analyzeWithLLMWithRetry использует LLM для анализа ответа DM с retry механизмом
+func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
+	ctx context.Context,
+	dmResponse string,
+	attempt int,
+	maxRetries int,
+) (*DMResponseAnalysis, error) {
 	prompt := buildAnalysisPrompt(dmResponse)
 
-	llmCtx, llmCancel := context.WithTimeout(ctx, 10*time.Second)
+	// Увеличено до 30 секунд, так как без ограничения токенов ответ может быть длиннее
+	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
 
 	// Убрано ограничение на токены для анализа ответа DM и генерации противников
@@ -276,11 +288,11 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 	cleaned := cleanJSONResponse(raw)
 
 	// Логируем оригинальный ответ для анализа проблем
-	log.Printf("[DM Analyzer] Raw LLM response (length: %d): %s", len(raw), raw[:min(200, len(raw))])
+	log.Printf("[DM Analyzer] Raw LLM response (length: %d, attempt: %d): %s", len(raw), attempt+1, raw[:min(200, len(raw))])
 
 	// Пытаемся восстановить JSON если он невалиден
 	if !json.Valid([]byte(cleaned)) {
-		log.Printf("[DM Analyzer] Invalid JSON after initial cleaning, attempting repair...")
+		log.Printf("[DM Analyzer] Invalid JSON after initial cleaning, attempting repair (attempt: %d)...", attempt+1)
 		cleaned = tryRepairTruncatedJSON(cleaned)
 
 		if !json.Valid([]byte(cleaned)) {
@@ -289,12 +301,18 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 
 			if !json.Valid([]byte(cleaned)) {
 				// Логируем проблемный ответ для анализа
-				log.Printf("[DM Analyzer] Failed to parse JSON after all repair attempts")
+				log.Printf("[DM Analyzer] Failed to parse JSON after all repair attempts (attempt: %d)", attempt+1)
 				log.Printf("[DM Analyzer] Cleaned JSON (length: %d): %s", len(cleaned), cleaned)
+
+				// Если это не последняя попытка, повторяем запрос
+				if attempt < maxRetries {
+					log.Printf("[DM Analyzer] Retrying LLM request (attempt %d/%d)", attempt+2, maxRetries+1)
+					return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
+				}
 
 				// Возвращаем пустой анализ вместо ошибки (fallback механизм)
 				// Это позволяет системе продолжать работать даже при проблемах с парсингом
-				log.Printf("[DM Analyzer] Returning empty analysis as fallback")
+				log.Printf("[DM Analyzer] Returning empty analysis as fallback after %d attempts", attempt+1)
 				return &DMResponseAnalysis{}, nil
 			}
 		}
@@ -303,11 +321,17 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 	var analysis DMResponseAnalysis
 	if err := json.Unmarshal([]byte(cleaned), &analysis); err != nil {
 		// Логируем ошибку парсинга для анализа
-		log.Printf("[DM Analyzer] Failed to unmarshal JSON: %v", err)
+		log.Printf("[DM Analyzer] Failed to unmarshal JSON: %v (attempt: %d)", err, attempt+1)
 		log.Printf("[DM Analyzer] Cleaned JSON that failed to parse: %s", cleaned)
 
+		// Если это не последняя попытка, повторяем запрос
+		if attempt < maxRetries {
+			log.Printf("[DM Analyzer] Retrying LLM request due to unmarshal error (attempt %d/%d)", attempt+2, maxRetries+1)
+			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
+		}
+
 		// Возвращаем пустой анализ вместо ошибки (fallback механизм)
-		log.Printf("[DM Analyzer] Returning empty analysis as fallback")
+		log.Printf("[DM Analyzer] Returning empty analysis as fallback after %d attempts", attempt+1)
 		return &DMResponseAnalysis{}, nil
 	}
 
@@ -328,9 +352,26 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 	analysis *DMResponseAnalysis,
 ) error {
 	// Обрабатываем боевую ситуацию
+	// ВАЖНО: Проверяем, нет ли уже активного боя перед обработкой врагов
+	// Это предотвращает повторную генерацию врагов при каждом анализе ответа DM
 	if analysis.CombatDetected && len(analysis.Enemies) > 0 {
-		if err := uc.handleCombatStart(ctx, analysis.Enemies); err != nil {
-			return fmt.Errorf("failed to start combat: %w", err)
+		// Проверяем, нет ли уже активного боя
+		activeCombat, err := uc.combatRepo.GetActiveBySessionID(ctx, uc.sessionID)
+		if err != nil {
+			log.Printf("[DM Analyzer] Failed to check active combat: %v", err)
+			// Продолжаем обработку, так как это не критично
+		} else if activeCombat != nil {
+			// Бой уже активен, не обрабатываем врагов из анализа
+			// Это предотвращает повторную генерацию врагов с новыми HP
+			log.Printf("[DM Analyzer] Combat already active, ignoring enemies from analysis (session_id: %d)", uc.sessionID)
+			// Сбрасываем флаг combat_detected, чтобы не обрабатывать врагов
+			analysis.CombatDetected = false
+			analysis.Enemies = nil
+		} else {
+			// Боя нет, создаем новый
+			if err := uc.handleCombatStart(ctx, analysis.Enemies); err != nil {
+				return fmt.Errorf("failed to start combat: %w", err)
+			}
 		}
 	}
 
@@ -403,8 +444,8 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 		return nil
 	}
 	
-	// Создаем контекст с таймаутом для генерации изображений (чтобы не блокировать слишком долго)
-	imgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
+	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	
 	var generatedImages []GeneratedImage
@@ -460,8 +501,8 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 		return nil
 	}
 	
-	// Создаем контекст с таймаутом для генерации изображений
-	imgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
+	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	
 	// Формируем промпт для генерации изображения локации
@@ -508,8 +549,8 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 		return nil
 	}
 	
-	// Создаем контекст с таймаутом для генерации изображений
-	imgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
+	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 	
 	// Формируем промпт для генерации изображения NPC
@@ -583,25 +624,33 @@ func (uc *AnalyzeDMResponseUseCase) handleCombatStart(
 
 	// Добавляем врагов
 	for _, enemy := range enemies {
-		// Используем значения по умолчанию, если HP или другие параметры не указаны или равны 0
-		hp := enemy.HP
-		if hp <= 0 {
-			hp = 10 // Значение по умолчанию для HP монстра
+		// Используем значения по умолчанию, если HP или другие параметры не указаны (null) или равны 0
+		hp := 10 // Значение по умолчанию для HP монстра
+		if enemy.HP != nil && *enemy.HP > 0 {
+			hp = *enemy.HP
 		}
 
-		ac := enemy.AC
-		if ac <= 0 {
-			ac = 12 // Значение по умолчанию для AC монстра
+		ac := 12 // Значение по умолчанию для AC монстра
+		if enemy.AC != nil && *enemy.AC > 0 {
+			ac = *enemy.AC
 		}
 
-		attackBonus := enemy.AttackBonus
-		if attackBonus < 0 {
-			attackBonus = 2 // Значение по умолчанию для бонуса атаки
+		attackBonus := 2 // Значение по умолчанию для бонуса атаки
+		if enemy.AttackBonus != nil && *enemy.AttackBonus > 0 {
+			attackBonus = *enemy.AttackBonus
 		}
 
 		// Пропускаем врагов без имени
 		if enemy.Name == "" {
-			log.Printf("[DM Analyzer] Skipping enemy without name (HP: %d, AC: %d)", enemy.HP, enemy.AC)
+			hpVal := 0
+			acVal := 0
+			if enemy.HP != nil {
+				hpVal = *enemy.HP
+			}
+			if enemy.AC != nil {
+				acVal = *enemy.AC
+			}
+			log.Printf("[DM Analyzer] Skipping enemy without name (HP: %d, AC: %d)", hpVal, acVal)
 			continue
 		}
 
@@ -884,6 +933,11 @@ func buildAnalysisPrompt(dmResponse string) string {
 
 Важно:
 - Если бой начался, обязательно укажи хотя бы одного врага
+- Для каждого врага ОБЯЗАТЕЛЬНО укажи hp, ac и attack_bonus (числовые значения, не null!)
+- Если в ответе DM не указаны характеристики врага, используй разумные значения по умолчанию:
+  * hp: 10-30 для обычных врагов, 30-60 для сильных, 60+ для боссов
+  * ac: 12-15 для обычных врагов, 15-18 для сильных, 18+ для боссов
+  * attack_bonus: 2-4 для обычных врагов, 4-6 для сильных, 6+ для боссов
 - Если квест выполнен или провален, укажи название квеста
 - Опыт начисляется только за значимые достижения (завершение квеста, победа в бою)
 - Предметы добавляй только если в ответе DM явно указано, что игрок получил/нашел/поднял предмет (ключевые слова: "получаешь", "находишь", "поднимаешь", "нашел", "берешь", "взял", "дал", "подарил")
@@ -998,63 +1052,98 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 		return "{}"
 	}
 
+	// Если строка не начинается с {, пытаемся найти начало JSON
+	if !strings.HasPrefix(jsonStr, "{") {
+		firstBrace := strings.Index(jsonStr, "{")
+		if firstBrace > 0 {
+			jsonStr = jsonStr[firstBrace:]
+		} else {
+			// Нет открывающей скобки, возвращаем пустой объект
+			return "{}"
+		}
+	}
+
 	openBraces := 0
 	openBrackets := 0
 	inString := false
 	escapeNext := false
+	lastValidPos := 0
 
 	for i := 0; i < len(jsonStr); i++ {
 		char := jsonStr[i]
 
 		if escapeNext {
 			escapeNext = false
+			lastValidPos = i + 1
 			continue
 		}
 
 		if char == '\\' {
 			escapeNext = true
+			lastValidPos = i + 1
 			continue
 		}
 
 		if char == '"' && !escapeNext {
 			inString = !inString
+			lastValidPos = i + 1
 			continue
 		}
 
 		if inString {
+			lastValidPos = i + 1
 			continue
 		}
+
+		// Обновляем позицию последнего валидного символа
+		lastValidPos = i + 1
 
 		switch char {
 		case '{':
 			openBraces++
 		case '}':
 			openBraces--
+			if openBraces < 0 {
+				// Закрывающих скобок больше, чем открывающих - обрезаем до этого места
+				jsonStr = jsonStr[:i]
+				break
+			}
 		case '[':
 			openBrackets++
 		case ']':
 			openBrackets--
+			if openBrackets < 0 {
+				// Закрывающих скобок больше, чем открывающих - обрезаем до этого места
+				jsonStr = jsonStr[:i]
+				break
+			}
 		}
 	}
 
-	result := jsonStr
+	// Обрезаем до последней валидной позиции, если строка была обрезана
+	if lastValidPos < len(jsonStr) {
+		jsonStr = jsonStr[:lastValidPos]
+	}
+
+	result := strings.TrimRight(jsonStr, " \n\r\t,")
+
+	// Закрываем незакрытые строки
 	if inString {
 		result += "\""
 	}
 
-	if openBraces > 0 || openBrackets > 0 || inString {
-		result = strings.TrimRight(result, " \n\r\t")
-		if !inString && strings.HasSuffix(result, ",") {
-			result = strings.TrimSuffix(result, ",")
+	// Закрываем незакрытые массивы и объекты
+	if openBraces > 0 || openBrackets > 0 {
+		// Удаляем последнюю запятую, если она есть
+		result = strings.TrimSuffix(result, ",")
+		// Закрываем массивы перед объектами
+		for i := 0; i < openBrackets; i++ {
+			result += "]"
 		}
 		for i := 0; i < openBraces; i++ {
 			result += "}"
 		}
-		for i := 0; i < openBrackets; i++ {
-			result += "]"
-		}
-		return result
 	}
 
-	return jsonStr
+	return result
 }

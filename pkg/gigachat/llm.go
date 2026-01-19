@@ -25,7 +25,7 @@ func (c *Client) ChatWithMaxTokens(ctx context.Context, model string, message st
 		},
 	}
 	
-	// Устанавливаем max_tokens если указано (по умолчанию 8192 для генерации кампании)
+	// Устанавливаем max_tokens только если указано (nil означает отсутствие ограничения)
 	if maxTokens != nil {
 		reqBody.MaxTokens = maxTokens
 	}

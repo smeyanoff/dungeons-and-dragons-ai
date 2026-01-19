@@ -89,13 +89,14 @@ func (c *Character) Heal(amount int) error {
 }
 
 func calculateHP(class Class, stats Stats) int {
-	// Базовое HP по классу (на 1 уровне)
+	// Базовое HP по классу (на 1 уровне) = максимум Hit Die
+	// В D&D 5e на 1 уровне HP = максимум Hit Die + модификатор Телосложения
 	baseHP := map[Class]int{
-		ClassFighter: 10,
-		ClassWizard:  6,
-		ClassRogue:   8,
-		ClassCleric:  8,
-		ClassRanger:  10,
+		ClassFighter: 10, // d10
+		ClassWizard:  6,  // d6
+		ClassRogue:   8,  // d8
+		ClassCleric:  8,  // d8
+		ClassRanger:  10, // d10
 	}
 
 	// Модификатор конституции
@@ -106,7 +107,14 @@ func calculateHP(class Class, stats Stats) int {
 		hp = 8 // значение по умолчанию
 	}
 
-	return hp + conModifier
+	hp = hp + conModifier
+
+	// В D&D 5e минимальное HP на уровне = 1 (даже при очень низком Телосложении)
+	if hp < 1 {
+		hp = 1
+	}
+
+	return hp
 }
 
 func NewCharacter(

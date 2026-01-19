@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // GenerateImageRequest представляет запрос на генерацию изображения
@@ -97,43 +98,74 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 	return fileID, nil
 }
 
-// DownloadImage скачивает изображение по file_id
+// DownloadImage скачивает изображение по file_id с retry механизмом для 403 ошибок
+// (изображение может быть еще не готово сразу после генерации)
 func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, error) {
 	url := fmt.Sprintf("%s/files/%s/content", c.cfg.APIBaseURL, fileID)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	const maxRetries = 3
+	const retryDelay = 2 * time.Second
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Задержка перед повторной попыткой (изображение может быть еще не готово)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(retryDelay):
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		token, err := c.auth.getToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get token: %w", err)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+token)
+		// Согласно документации GigaChat API, для скачивания изображений используется Accept: application/jpg
+		req.Header.Set("Accept", "application/jpg")
+
+		// Если есть ClientID в конфиге, добавляем заголовок X-Client-ID
+		if c.cfg.ClientID != "" {
+			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
+		}
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			if attempt < maxRetries-1 {
+				continue // Retry при сетевых ошибках
+			}
+			return nil, fmt.Errorf("failed to download image: %w", err)
+		}
+
+		// Если получили 403, пробуем еще раз (изображение может быть еще не готово)
+		if resp.StatusCode == 403 && attempt < maxRetries-1 {
+			if err := resp.Body.Close(); err != nil {
+				// Логируем ошибку закрытия, но продолжаем retry
+				fmt.Printf("warning: failed to close response body: %v\n", err)
+			}
+			continue
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 400 {
+			data, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("gigachat image download error status %d: %s", resp.StatusCode, string(data))
+		}
+
+		imageData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read image data: %w", err)
+		}
+
+		return imageData, nil
 	}
 
-	token, err := c.auth.getToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get token: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/jpg")
-
-	// Если есть ClientID в конфиге, добавляем заголовок X-Client-ID
-	if c.cfg.ClientID != "" {
-		req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download image: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		data, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("gigachat image download error status %d: %s", resp.StatusCode, string(data))
-	}
-
-	imageData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read image data: %w", err)
-	}
-
-	return imageData, nil
+	return nil, fmt.Errorf("failed to download image after %d attempts", maxRetries)
 }

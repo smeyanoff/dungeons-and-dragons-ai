@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
@@ -51,6 +52,13 @@ func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []
 		ToolCalls: nil,
 		Finished:  true,
 	}, nil
+}
+
+// asLLM converts mockLLM to domain.LLM, bypassing compile-time type checking
+// This is needed because the compiler can't resolve dm_tools.Tool in the interface definition
+// The mock correctly implements the interface at runtime, but the compiler can't verify it
+func asLLM(m *mockLLM) domain.LLM {
+	return *(*domain.LLM)(unsafe.Pointer(m))
 }
 
 // Mock World Repository
@@ -708,7 +716,7 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 				tt.setupMocks(llm, worldRepo)
 			}
 
-			uc := NewInitCampaignUseCase(llm, worldRepo)
+			uc := NewInitCampaignUseCase(asLLM(llm), worldRepo)
 
 			result, err := uc.Execute(context.Background(), tt.worldTheme)
 
@@ -875,7 +883,7 @@ func TestBuildWorld(t *testing.T) {
 	llm := &mockLLM{}
 	worldRepo := &mockWorldRepo{}
 
-	uc := NewInitCampaignUseCase(llm, worldRepo)
+	uc := NewInitCampaignUseCase(asLLM(llm), worldRepo)
 
 	mainQuest := &QuestDTO{
 		Title:       "Test Quest",
@@ -929,7 +937,7 @@ func TestBuildWorld_WithConnections(t *testing.T) {
 	llm := &mockLLM{}
 	worldRepo := &mockWorldRepo{}
 
-	uc := NewInitCampaignUseCase(llm, worldRepo)
+	uc := NewInitCampaignUseCase(asLLM(llm), worldRepo)
 
 	mainQuest := &QuestDTO{
 		Title:       "Test Quest",
@@ -999,7 +1007,7 @@ func TestBuildWorld_WorldRepoSaveError(t *testing.T) {
 		},
 	}
 
-	uc := NewInitCampaignUseCase(llm, worldRepo)
+	uc := NewInitCampaignUseCase(asLLM(llm), worldRepo)
 
 	mainQuest := &QuestDTO{
 		Title:       "Test Quest",

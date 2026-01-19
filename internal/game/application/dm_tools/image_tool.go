@@ -10,6 +10,18 @@ import (
 	"dungeons-and-dragons-ai/pkg/logger"
 )
 
+// SubscriptionChecker интерфейс для проверки Premium статуса (разрывает циклическую зависимость)
+type SubscriptionChecker interface {
+	IsPremium(ctx context.Context, tgUserID int64) (bool, error)
+}
+
+// defaultSubscriptionChecker реализует SubscriptionChecker с заглушкой (всегда false)
+type defaultSubscriptionChecker struct{}
+
+func (d *defaultSubscriptionChecker) IsPremium(ctx context.Context, tgUserID int64) (bool, error) {
+	return false, nil
+}
+
 // ImageGenerationService интерфейс для генерации изображений (разрывает циклическую зависимость)
 type ImageGenerationService interface {
 	// GenerateImage генерирует изображение по запросу
@@ -37,17 +49,27 @@ type GenerateImageResponse struct {
 
 // GenerateImageTool позволяет DM генерировать изображения через GigaChat API
 type GenerateImageTool struct {
-	imageService ImageGenerationService
-	chatID       int64
-	userID       int64
+	imageService      ImageGenerationService
+	chatID            int64
+	userID            int64
+	subscriptionChecker SubscriptionChecker // Опциональная зависимость для проверки Premium статуса
 }
 
 // NewGenerateImageTool создает новый инструмент для генерации изображений
-func NewGenerateImageTool(imageService ImageGenerationService, chatID int64, userID int64) *GenerateImageTool {
+func NewGenerateImageTool(
+	imageService ImageGenerationService,
+	chatID int64,
+	userID int64,
+	subscriptionChecker SubscriptionChecker, // Опциональная зависимость (может быть nil)
+) *GenerateImageTool {
+	if subscriptionChecker == nil {
+		subscriptionChecker = &defaultSubscriptionChecker{}
+	}
 	return &GenerateImageTool{
-		imageService: imageService,
-		chatID:       chatID,
-		userID:       userID,
+		imageService:       imageService,
+		chatID:             chatID,
+		userID:             userID,
+		subscriptionChecker: subscriptionChecker,
 	}
 }
 
@@ -138,6 +160,24 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]interfa
 		logger.Bool("force_regenerate", forceRegenerate),
 	)
 
+	// Проверяем Premium статус для снятия лимита
+	skipLimitCheck := false
+	if t.subscriptionChecker != nil {
+		isPremium, err := t.subscriptionChecker.IsPremium(ctx, t.userID)
+		if err == nil && isPremium {
+			skipLimitCheck = true
+			logger.Debug("Premium/Pro user - skipping image limit check",
+				logger.Int64("user_id", t.userID),
+			)
+		} else if err != nil {
+			// Логируем ошибку, но продолжаем с проверкой лимита
+			logger.Warn("Failed to check subscription status for image limit",
+				logger.ErrorField(err),
+				logger.Int64("user_id", t.userID),
+			)
+		}
+	}
+
 	// Генерируем изображение
 	req := GenerateImageRequest{
 		SystemPrompt:    systemPrompt,
@@ -146,7 +186,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]interfa
 		EntityID:        entityID,
 		ForceRegenerate: forceRegenerate,
 		UserID:          t.userID,
-		SkipLimitCheck:  false, // TODO: Проверять Premium статус для снятия лимита
+		SkipLimitCheck:  skipLimitCheck,
 	}
 
 	resp, err := t.imageService.GenerateImage(ctx, req)

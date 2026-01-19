@@ -36,6 +36,8 @@ func newAuthClient(cfg Config) *authClient {
 	}
 	
 	// Если нужно пропустить проверку TLS (только для тестов)
+	// #nosec G402 - преднамеренно отключаем проверку TLS для работы с GigaChat API,
+	// который использует корневые сертификаты Сбербанка, устанавливаемые отдельно в образе
 	if cfg.SkipTLSVerify {
 		transport.TLSClientConfig = &tls.Config{
 			InsecureSkipVerify: true,

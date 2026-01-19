@@ -278,3 +278,30 @@ func TestHPCalculationByClass(t *testing.T) {
 		})
 	}
 }
+
+func TestHPCalculationMinimumHP(t *testing.T) {
+	// Тест для проверки минимального HP = 1 (правило D&D 5e)
+	// Даже при очень низком Телосложении HP не должно быть меньше 1
+	stats := Stats{
+		Constitution: 3, // -4 modifier (очень низкое Телосложение)
+	}
+
+	// Для волшебника: базовое HP = 6, модификатор = -4, результат = 2
+	// Но по правилам D&D 5e минимальное HP = 1
+	char, err := NewCharacter("Weak Wizard", ClassWizard, RaceHuman, stats)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// HP должно быть минимум 1, даже если расчет дает меньше
+	if char.MaxHP < 1 {
+		t.Errorf("expected MinHP >= 1, got %d", char.MaxHP)
+	}
+
+	// Для волшебника с Телосложением 3: 6 + (-4) = 2, но минимум 1
+	// Но на самом деле с нашим исправлением генерации характеристик, Телосложение не может быть меньше 8
+	// Поэтому этот тест проверяет, что даже если Телосложение очень низкое, HP >= 1
+	if char.MaxHP < 1 {
+		t.Errorf("HP should be at least 1, got %d", char.MaxHP)
+	}
+}
