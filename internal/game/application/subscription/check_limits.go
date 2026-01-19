@@ -13,17 +13,34 @@ import (
 type CheckLimitsUseCase struct {
 	subscriptionRepo *persistence.SubscriptionRepository
 	sessionRepo      session.Repository
+	sessionCountRepo SessionCountRepository // Для подсчета активных игр и сохранений
+	eventCountRepo   EventCountRepository   // Для подсчета сообщений
 	imageLimiter     imageapp.ImageGenerationLimiter // Для подсчета использования изображений
+}
+
+// SessionCountRepository интерфейс для подсчета сессий
+type SessionCountRepository interface {
+	CountActiveGamesByTgUserID(ctx context.Context, tgUserID int64) (int, error)
+	CountSavesByTgUserID(ctx context.Context, tgUserID int64) (int, error)
+}
+
+// EventCountRepository интерфейс для подсчета событий
+type EventCountRepository interface {
+	CountMessagesPerDayByTgUserID(ctx context.Context, tgUserID int64) (int, error)
 }
 
 func NewCheckLimitsUseCase(
 	subscriptionRepo *persistence.SubscriptionRepository,
 	sessionRepo session.Repository,
+	sessionCountRepo SessionCountRepository,
+	eventCountRepo EventCountRepository,
 	imageLimiter imageapp.ImageGenerationLimiter, // Опционально, для подсчета использования изображений
 ) *CheckLimitsUseCase {
 	return &CheckLimitsUseCase{
 		subscriptionRepo: subscriptionRepo,
 		sessionRepo:      sessionRepo,
+		sessionCountRepo: sessionCountRepo,
+		eventCountRepo:   eventCountRepo,
 		imageLimiter:     imageLimiter,
 	}
 }
@@ -77,8 +94,21 @@ func (uc *CheckLimitsUseCase) Execute(ctx context.Context, req CheckLimitRequest
 			}, nil
 		}
 		// Считаем активные игры пользователя
-		// TODO: Добавить метод в sessionRepo для подсчета активных игр пользователя
-		current = 0 // временно
+		if uc.sessionCountRepo != nil {
+			count, err := uc.sessionCountRepo.CountActiveGamesByTgUserID(ctx, req.TgUserID)
+			if err != nil {
+				logger.Warn("CheckLimitsUseCase: failed to count active games",
+					logger.ErrorField(err),
+					logger.Int64("tg_user_id", req.TgUserID),
+				)
+				// В случае ошибки считаем 0 для безопасности
+				current = 0
+			} else {
+				current = count
+			}
+		} else {
+			current = 0
+		}
 		remaining = limit - current
 
 	case LimitTypeMessagesPerDay:
@@ -93,8 +123,22 @@ func (uc *CheckLimitsUseCase) Execute(ctx context.Context, req CheckLimitRequest
 				Message:   "У вас безлимит сообщений",
 			}, nil
 		}
-		// TODO: Считать сообщения за день
-		current = 0 // временно
+		// Считаем сообщения за день
+		if uc.eventCountRepo != nil {
+			count, err := uc.eventCountRepo.CountMessagesPerDayByTgUserID(ctx, req.TgUserID)
+			if err != nil {
+				logger.Warn("CheckLimitsUseCase: failed to count messages",
+					logger.ErrorField(err),
+					logger.Int64("tg_user_id", req.TgUserID),
+				)
+				// В случае ошибки считаем 0 для безопасности
+				current = 0
+			} else {
+				current = count
+			}
+		} else {
+			current = 0
+		}
 		remaining = limit - current
 
 	case LimitTypeImagesPerDay:
@@ -139,8 +183,22 @@ func (uc *CheckLimitsUseCase) Execute(ctx context.Context, req CheckLimitRequest
 				Message:   "У вас безлимит сохранений",
 			}, nil
 		}
-		// TODO: Считать сохранения пользователя
-		current = 0 // временно
+		// Считаем сохранения пользователя (завершенные сессии)
+		if uc.sessionCountRepo != nil {
+			count, err := uc.sessionCountRepo.CountSavesByTgUserID(ctx, req.TgUserID)
+			if err != nil {
+				logger.Warn("CheckLimitsUseCase: failed to count saves",
+					logger.ErrorField(err),
+					logger.Int64("tg_user_id", req.TgUserID),
+				)
+				// В случае ошибки считаем 0 для безопасности
+				current = 0
+			} else {
+				current = count
+			}
+		} else {
+			current = 0
+		}
 		remaining = limit - current
 
 	default:

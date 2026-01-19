@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
@@ -48,6 +50,8 @@ type Bot struct {
 	handleCombatUC    *combatapp.HandleCombatUseCase
 	rollDiceUC        *dice.RollDiceUseCase
 	getQuestsUC       *questapp.GetQuestsUseCase
+	getDailyQuestsUC  *questapp.GetDailyQuestsUseCase
+	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase
 	getMapUC          *mapapp.GetMapUseCase
 	getAchievementsUC *achievementapp.GetAchievementsUseCase
 	getSpellsUC       *spellapp.GetSpellsUseCase
@@ -58,6 +62,13 @@ type Bot struct {
 	sessionRepo       session.Repository
 	combatRepo        CombatRepository
 	feedbackRepo      FeedbackRepository
+	
+	// Для улучшенной обработки ошибок Telegram API
+	errorCount        int      // Счетчик последовательных ошибок
+	errorCountMu       sync.Mutex
+	lastErrorTime      time.Time
+	circuitOpen        bool     // Circuit breaker состояние
+	circuitOpenMu      sync.RWMutex
 }
 
 // FeedbackRepository интерфейс для работы с фидбеком
@@ -82,6 +93,8 @@ func NewBot(
 	handleCombatUC *combatapp.HandleCombatUseCase,
 	rollDiceUC *dice.RollDiceUseCase,
 	getQuestsUC *questapp.GetQuestsUseCase,
+	getDailyQuestsUC *questapp.GetDailyQuestsUseCase,
+	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase,
 	getMapUC *mapapp.GetMapUseCase,
 	getAchievementsUC *achievementapp.GetAchievementsUseCase,
 	getSpellsUC *spellapp.GetSpellsUseCase,
@@ -109,6 +122,8 @@ func NewBot(
 		handleCombatUC:    handleCombatUC,
 		rollDiceUC:        rollDiceUC,
 		getQuestsUC:       getQuestsUC,
+		getDailyQuestsUC:  getDailyQuestsUC,
+		checkDailyProgressUC: checkDailyProgressUC,
 		getMapUC:          getMapUC,
 		getAchievementsUC: getAchievementsUC,
 		getSpellsUC:       getSpellsUC,
@@ -152,6 +167,7 @@ func (b *Bot) setupBotCommands() error {
 		{Command: "roll", Description: "Бросить кубик"},
 		{Command: "history", Description: "История игры"},
 		{Command: "quests", Description: "Активные квесты"},
+		{Command: "daily", Description: "Ежедневные задания"},
 		{Command: "map", Description: "Карта мира"},
 		{Command: "achievements", Description: "Просмотр достижений"},
 		{Command: "image", Description: "Сгенерировать изображение"},
@@ -198,10 +214,31 @@ func (b *Bot) Start(ctx context.Context) error {
 			return ctx.Err()
 		case update := <-updates:
 			if err := b.handleUpdate(ctx, update); err != nil {
-				logger.Error("Error handling update",
-					logger.ErrorField(err),
-					logger.Int("update_id", update.UpdateID),
-				)
+				// Логируем только после нескольких неудачных попыток подряд
+				b.errorCountMu.Lock()
+				b.errorCount++
+				shouldLog := b.errorCount >= 3 // Логируем после 3 ошибок подряд
+				b.errorCountMu.Unlock()
+				
+				if shouldLog {
+					logger.Error("Error handling update (multiple consecutive errors)",
+						logger.ErrorField(err),
+						logger.Int("update_id", update.UpdateID),
+						logger.Int("consecutive_errors", b.errorCount),
+					)
+				} else {
+					logger.Debug("Error handling update (suppressed logging)",
+						logger.ErrorField(err),
+						logger.Int("update_id", update.UpdateID),
+					)
+				}
+			} else {
+				// Сбрасываем счетчик ошибок при успешной обработке
+				b.errorCountMu.Lock()
+				if b.errorCount > 0 {
+					b.errorCount = 0
+				}
+				b.errorCountMu.Unlock()
 			}
 		}
 	}
@@ -268,6 +305,8 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleRoll(ctx, chatID, args)
 	case "quests":
 		return b.handleQuests(ctx, chatID)
+	case "daily":
+		return b.handleDaily(ctx, chatID, tgUserID)
 	case "map":
 		return b.handleMap(ctx, chatID)
 	case "achievements":
@@ -1068,6 +1107,16 @@ func (b *Bot) handleQuests(ctx context.Context, chatID int64) error {
 	return b.sendLongMessage(chatID, questsText)
 }
 
+func (b *Bot) handleDaily(ctx context.Context, chatID int64, tgUserID int64) error {
+	dailyText, err := b.getDailyQuestsUC.Execute(ctx, chatID, tgUserID)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении ежедневных заданий: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	return b.sendLongMessage(chatID, dailyText)
+}
+
 func (b *Bot) handleMap(ctx context.Context, chatID int64) error {
 	mapText, err := b.getMapUC.Execute(ctx, chatID)
 	if err != nil {
@@ -1706,17 +1755,117 @@ func (b *Bot) handleEndGame(ctx context.Context, chatID int64) error {
 	return b.sendMessage(msg)
 }
 
-// sendMessage отправляет сообщение с проверкой ошибок и логированием
+// sendMessage отправляет сообщение с проверкой ошибок, логированием и retry механизмом
 func (b *Bot) sendMessage(msg tgbotapi.MessageConfig) error {
+	return b.sendMessageWithRetry(context.Background(), msg, 0)
+}
+
+// sendMessageWithRetry отправляет сообщение с retry механизмом и exponential backoff
+func (b *Bot) sendMessageWithRetry(ctx context.Context, msg tgbotapi.MessageConfig, attempt int) error {
+	const maxRetries = 3
+	const initialBackoff = 100 * time.Millisecond
+	const maxBackoff = 5 * time.Second
+
+	// Проверяем circuit breaker
+	b.circuitOpenMu.RLock()
+	circuitOpen := b.circuitOpen
+	b.circuitOpenMu.RUnlock()
+
+	if circuitOpen {
+		// Circuit breaker открыт - проверяем, можно ли попробовать снова
+		b.errorCountMu.Lock()
+		timeSinceLastError := time.Since(b.lastErrorTime)
+		if timeSinceLastError > 30*time.Second {
+			// Прошло достаточно времени, закрываем circuit breaker
+			b.circuitOpenMu.Lock()
+			b.circuitOpen = false
+			b.circuitOpenMu.Unlock()
+			b.errorCount = 0
+		}
+		b.errorCountMu.Unlock()
+
+		if b.circuitOpen {
+			return fmt.Errorf("circuit breaker is open, too many errors")
+		}
+	}
+
 	_, err := b.api.Send(msg)
-	if err != nil {
-		logger.Error("Failed to send message",
-			logger.ErrorField(err),
-			logger.Int64("chat_id", msg.ChatID),
+	if err == nil {
+		// Успешная отправка - сбрасываем счетчик ошибок и закрываем circuit breaker
+		b.errorCountMu.Lock()
+		b.errorCount = 0
+		b.errorCountMu.Unlock()
+		b.circuitOpenMu.Lock()
+		b.circuitOpen = false
+		b.circuitOpenMu.Unlock()
+		return nil
+	}
+
+	// Ошибка отправки
+	b.errorCountMu.Lock()
+	b.errorCount++
+	b.lastErrorTime = time.Now()
+	errorCount := b.errorCount
+	b.errorCountMu.Unlock()
+
+	// Проверяем, нужно ли открыть circuit breaker (после 10 ошибок подряд)
+	if errorCount >= 10 {
+		b.circuitOpenMu.Lock()
+		b.circuitOpen = true
+		b.circuitOpenMu.Unlock()
+		logger.Warn("Telegram API circuit breaker opened due to too many errors",
+			logger.Int("consecutive_errors", errorCount),
 		)
+	}
+
+	// Проверяем, стоит ли повторять попытку
+	errStr := err.Error()
+	shouldRetry := false
+	if strings.Contains(errStr, "unexpected EOF") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "connection") ||
+		strings.Contains(errStr, "network") {
+		shouldRetry = true
+	}
+
+	if !shouldRetry || attempt >= maxRetries {
+		// Не retry или исчерпаны попытки
+		if attempt >= maxRetries {
+			logger.Warn("Failed to send message after max retries",
+				logger.ErrorField(err),
+				logger.Int64("chat_id", msg.ChatID),
+				logger.Int("attempts", attempt+1),
+			)
+		}
 		return err
 	}
-	return nil
+
+	// Вычисляем exponential backoff: 100ms, 200ms, 400ms
+	// Защита от integer overflow: ограничиваем сдвиг безопасными пределами
+	// time.Duration это int64, поэтому 1<<30 безопасно
+	const maxSafeShift = 30
+	safeAttempt := attempt
+	if safeAttempt < 0 {
+		safeAttempt = 0
+	} else if safeAttempt > maxSafeShift {
+		safeAttempt = maxSafeShift
+	}
+	// #nosec G115 - защита от overflow реализована выше: safeAttempt ограничен до maxSafeShift=30
+	// что безопасно для int64/time.Duration (максимальный безопасный сдвиг для int64)
+	backoff := initialBackoff * time.Duration(1<<uint(safeAttempt))
+	if backoff > maxBackoff {
+		backoff = maxBackoff
+	}
+
+	// Ждем перед повтором
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(backoff):
+	}
+
+	// Повторяем попытку
+	return b.sendMessageWithRetry(ctx, msg, attempt+1)
 }
 
 // sendLongMessage разбивает длинные сообщения на части и отправляет их

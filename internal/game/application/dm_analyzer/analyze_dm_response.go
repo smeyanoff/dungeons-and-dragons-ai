@@ -32,6 +32,20 @@ type DMResponseAnalysis struct {
 
 	// Предметы
 	ItemsReceived []Item `json:"items_received,omitempty"` // Предметы, полученные игроком
+	
+	// Локации и NPC
+	LocationVisited *Location `json:"location_visited,omitempty"` // Локация, которую игрок впервые посетил
+	NPCMet         *NPC     `json:"npc_met,omitempty"`           // NPC, с которым игрок впервые встретился
+	
+	// Автоматически сгенерированные изображения
+	GeneratedImages []GeneratedImage `json:"generated_images,omitempty"` // Пути к автоматически сгенерированным изображениям
+}
+
+// GeneratedImage представляет автоматически сгенерированное изображение
+type GeneratedImage struct {
+	Type     string `json:"type"`     // Тип: "item", "location", "npc"
+	ImagePath string `json:"image_path"` // Путь к изображению
+	EntityName string `json:"entity_name"` // Название сущности (предмет, локация, NPC)
 }
 
 // Enemy представляет врага в бою
@@ -49,6 +63,20 @@ type Item struct {
 	Weight      float64 `json:"weight"`      // Вес в кг (оценка, если не указано)
 	Quantity    int     `json:"quantity"`    // Количество (по умолчанию 1)
 	Type        string  `json:"type"`        // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
+}
+
+// Location представляет локацию, которую игрок посетил
+type Location struct {
+	Name        string `json:"name"`        // Название локации
+	Description string `json:"description"` // Описание локации
+	IsFirstVisit bool  `json:"is_first_visit"` // Первое ли это посещение
+}
+
+// NPC представляет NPC, с которым игрок встретился
+type NPC struct {
+	Name        string `json:"name"`        // Имя NPC
+	Description string `json:"description"` // Описание NPC
+	IsFirstMeeting bool `json:"is_first_meeting"` // Первая ли это встреча
 }
 
 // CombatRepository интерфейс для работы с боями
@@ -83,6 +111,10 @@ type AnalyzeDMResponseUseCase struct {
 	combatStartMessage string // Сообщение о порядке ходов при начале боя
 	checkAchievementsUC AchievementChecker // Опциональная зависимость для проверки достижений
 	notificationService NotificationService // Опциональная зависимость для отправки уведомлений
+	imageGenerationService ImageGenerationService // Опциональная зависимость для автоматической генерации изображений
+	userID int64 // ID пользователя для генерации изображений (Telegram User ID)
+	checkDailyProgressUC DailyQuestProgressChecker // Опциональная зависимость для отслеживания ежедневных заданий
+	tgUserID int64 // Telegram User ID для отслеживания ежедневных заданий
 }
 
 // AchievementChecker интерфейс для проверки достижений
@@ -113,6 +145,42 @@ type Achievement struct {
 // NotificationService интерфейс для отправки уведомлений о достижениях (из achievement пакета)
 type NotificationService interface {
 	SendAchievementNotification(ctx context.Context, chatID int64, message string) error
+}
+
+// DailyQuestProgressChecker интерфейс для отслеживания прогресса ежедневных заданий
+type DailyQuestProgressChecker interface {
+	Execute(ctx context.Context, req DailyQuestProgressRequest) error
+}
+
+// DailyQuestProgressRequest запрос на проверку прогресса ежедневного задания
+type DailyQuestProgressRequest struct {
+	ChatID    int64
+	TgUserID  int64
+	QuestType string // Тип задания: "complete_quest", "win_combat", "explore_location"
+	Increment int    // На сколько увеличить прогресс
+}
+
+// ImageGenerationService интерфейс для автоматической генерации изображений
+type ImageGenerationService interface {
+	GenerateImage(ctx context.Context, req GenerateImageRequest) (*GenerateImageResponse, error)
+}
+
+// GenerateImageRequest запрос на генерацию изображения
+type GenerateImageRequest struct {
+	SystemPrompt   string
+	UserPrompt     string
+	Type           string // "location", "npc", "item", "character", "custom"
+	EntityID       uint
+	ForceRegenerate bool
+	UserID         int64
+	SkipLimitCheck bool
+}
+
+// GenerateImageResponse ответ на запрос генерации изображения
+type GenerateImageResponse struct {
+	ImagePath string
+	FileID    string
+	FromCache bool
 }
 
 func NewAnalyzeDMResponseUseCase(
@@ -147,6 +215,17 @@ func (uc *AnalyzeDMResponseUseCase) SetCheckAchievementsUseCase(checkAchievement
 // SetNotificationService устанавливает NotificationService для отправки уведомлений
 func (uc *AnalyzeDMResponseUseCase) SetNotificationService(notificationService NotificationService) {
 	uc.notificationService = notificationService
+}
+
+// SetImageGenerationService устанавливает ImageGenerationService для автоматической генерации изображений
+func (uc *AnalyzeDMResponseUseCase) SetImageGenerationService(imageService ImageGenerationService, userID int64) {
+	uc.imageGenerationService = imageService
+	uc.userID = userID
+}
+
+func (uc *AnalyzeDMResponseUseCase) SetCheckDailyProgress(checkDailyProgressUC DailyQuestProgressChecker, tgUserID int64) {
+	uc.checkDailyProgressUC = checkDailyProgressUC
+	uc.tgUserID = tgUserID
 }
 
 // Execute анализирует ответ DM и выполняет необходимые действия
@@ -187,8 +266,8 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 	llmCtx, llmCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer llmCancel()
 
-	// Увеличено с 512 до 1024 для предотвращения обрезанного JSON
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 1024)
+	// Убрано ограничение на токены для анализа ответа DM и генерации противников
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -267,9 +346,205 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 		if err := uc.handleItemsReceived(ctx, analysis.ItemsReceived); err != nil {
 			return fmt.Errorf("failed to add items to inventory: %w", err)
 		}
+		
+		// Автоматически генерируем изображения для полученных предметов
+		if uc.imageGenerationService != nil && uc.userID > 0 {
+			generatedImages := uc.generateImagesForItems(ctx, analysis.ItemsReceived)
+			// Добавляем пути к изображениям в анализ для последующей отправки
+			analysis.GeneratedImages = append(analysis.GeneratedImages, generatedImages...)
+		}
+	}
+
+	// Обрабатываем посещение новой локации
+	if analysis.LocationVisited != nil && analysis.LocationVisited.IsFirstVisit {
+		// Автоматически генерируем изображение для локации
+		if uc.imageGenerationService != nil && uc.userID > 0 {
+			generatedImage := uc.generateImageForLocation(ctx, *analysis.LocationVisited)
+			if generatedImage != nil {
+				analysis.GeneratedImages = append(analysis.GeneratedImages, *generatedImage)
+			}
+		}
+		
+		// Отслеживаем прогресс ежедневных заданий при исследовании локации
+		if uc.checkDailyProgressUC != nil && uc.tgUserID > 0 {
+			dailyReq := DailyQuestProgressRequest{
+				ChatID:    uc.chatID,
+				TgUserID:  uc.tgUserID,
+				QuestType: "explore_location",
+				Increment: 1,
+			}
+			if err := uc.checkDailyProgressUC.Execute(ctx, dailyReq); err != nil {
+				log.Printf("[DM Analyzer] Failed to check daily quest progress after location exploration: %v", err)
+			}
+		}
+	}
+
+	// Обрабатываем встречу с NPC
+	if analysis.NPCMet != nil && analysis.NPCMet.IsFirstMeeting {
+		// Автоматически генерируем изображение для NPC
+		if uc.imageGenerationService != nil && uc.userID > 0 {
+			generatedImage := uc.generateImageForNPC(ctx, *analysis.NPCMet)
+			if generatedImage != nil {
+				analysis.GeneratedImages = append(analysis.GeneratedImages, *generatedImage)
+			}
+		}
 	}
 
 	return nil
+}
+
+// generateImagesForItems автоматически генерирует изображения для полученных предметов
+// Возвращает пути к сгенерированным изображениям (синхронно, но с таймаутом)
+func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
+	ctx context.Context,
+	items []Item,
+) []GeneratedImage {
+	if uc.imageGenerationService == nil || uc.userID == 0 {
+		return nil
+	}
+	
+	// Создаем контекст с таймаутом для генерации изображений (чтобы не блокировать слишком долго)
+	imgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	
+	var generatedImages []GeneratedImage
+	
+	for _, item := range items {
+		// Формируем промпт для генерации изображения предмета
+		systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные изображения предметов и артефактов в стиле классического фэнтези-арта."
+		
+		userPrompt := item.Name
+		if item.Description != "" {
+			// Используем описание предмета для более детального изображения
+			userPrompt = fmt.Sprintf("%s, %s", item.Name, item.Description)
+		}
+		
+		// Генерируем изображение (синхронно, но с таймаутом)
+		req := GenerateImageRequest{
+			SystemPrompt:    systemPrompt,
+			UserPrompt:      userPrompt,
+			Type:            "item",
+			EntityID:        0, // Пока нет привязки к ID предмета в БД
+			ForceRegenerate: false,
+			UserID:          uc.userID,
+			SkipLimitCheck:  false, // Проверяем лимиты
+		}
+		
+		resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
+		if err != nil {
+			// Логируем ошибку, но не прерываем выполнение
+			log.Printf("Failed to auto-generate image for item '%s': %v", item.Name, err)
+			// Продолжаем генерацию для остальных предметов
+			continue
+		}
+		
+		log.Printf("Auto-generated image for item: %s (path: %s)", item.Name, resp.ImagePath)
+		
+		// Добавляем путь к изображению в список
+		generatedImages = append(generatedImages, GeneratedImage{
+			Type:       "item",
+			ImagePath:  resp.ImagePath,
+			EntityName: item.Name,
+		})
+	}
+	
+	return generatedImages
+}
+
+// generateImageForLocation автоматически генерирует изображение для локации
+func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
+	ctx context.Context,
+	location Location,
+) *GeneratedImage {
+	if uc.imageGenerationService == nil || uc.userID == 0 {
+		return nil
+	}
+	
+	// Создаем контекст с таймаутом для генерации изображений
+	imgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	
+	// Формируем промпт для генерации изображения локации
+	systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные, атмосферные изображения локаций и окружающей среды в стиле классического фэнтези-арта."
+	
+	userPrompt := location.Name
+	if location.Description != "" {
+		userPrompt = fmt.Sprintf("%s, %s", location.Name, location.Description)
+	}
+	
+	// Генерируем изображение
+	req := GenerateImageRequest{
+		SystemPrompt:    systemPrompt,
+		UserPrompt:      userPrompt,
+		Type:            "location",
+		EntityID:        0, // Пока нет привязки к ID локации в БД
+		ForceRegenerate: false,
+		UserID:          uc.userID,
+		SkipLimitCheck:  false, // Проверяем лимиты
+	}
+	
+	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
+	if err != nil {
+		// Логируем ошибку, но не прерываем выполнение
+		log.Printf("Failed to auto-generate image for location '%s': %v", location.Name, err)
+		return nil
+	}
+	
+	log.Printf("Auto-generated image for location: %s (path: %s)", location.Name, resp.ImagePath)
+	
+	return &GeneratedImage{
+		Type:       "location",
+		ImagePath:  resp.ImagePath,
+		EntityName: location.Name,
+	}
+}
+
+// generateImageForNPC автоматически генерирует изображение для NPC
+func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
+	ctx context.Context,
+	npc NPC,
+) *GeneratedImage {
+	if uc.imageGenerationService == nil || uc.userID == 0 {
+		return nil
+	}
+	
+	// Создаем контекст с таймаутом для генерации изображений
+	imgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	
+	// Формируем промпт для генерации изображения NPC
+	systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные изображения персонажей и NPC в стиле классического фэнтези-арта."
+	
+	userPrompt := npc.Name
+	if npc.Description != "" {
+		userPrompt = fmt.Sprintf("%s, %s", npc.Name, npc.Description)
+	}
+	
+	// Генерируем изображение
+	req := GenerateImageRequest{
+		SystemPrompt:    systemPrompt,
+		UserPrompt:      userPrompt,
+		Type:            "npc",
+		EntityID:        0, // Пока нет привязки к ID NPC в БД
+		ForceRegenerate: false,
+		UserID:          uc.userID,
+		SkipLimitCheck:  false, // Проверяем лимиты
+	}
+	
+	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
+	if err != nil {
+		// Логируем ошибку, но не прерываем выполнение
+		log.Printf("Failed to auto-generate image for NPC '%s': %v", npc.Name, err)
+		return nil
+	}
+	
+	log.Printf("Auto-generated image for NPC: %s (path: %s)", npc.Name, resp.ImagePath)
+	
+	return &GeneratedImage{
+		Type:       "npc",
+		ImagePath:  resp.ImagePath,
+		EntityName: npc.Name,
+	}
 }
 
 // handleCombatStart создает новый бой, если его еще нет
@@ -463,6 +738,19 @@ func (uc *AnalyzeDMResponseUseCase) handleQuestStatus(
 		}
 	}
 
+	// Отслеживаем прогресс ежедневных заданий при завершении квеста
+	if uc.checkDailyProgressUC != nil && uc.tgUserID > 0 && analysis.QuestCompleted {
+		dailyReq := DailyQuestProgressRequest{
+			ChatID:    uc.chatID,
+			TgUserID:  uc.tgUserID,
+			QuestType: "complete_quest",
+			Increment: 1,
+		}
+		if err := uc.checkDailyProgressUC.Execute(ctx, dailyReq); err != nil {
+			log.Printf("[DM Analyzer] Failed to check daily quest progress after quest completion: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -581,7 +869,17 @@ func buildAnalysisPrompt(dmResponse string) string {
       "quantity": число,
       "type": "weapon|armor|potion|tool|consumable|misc"
     }
-  ]
+  ],
+  "location_visited": {
+    "name": "название локации",
+    "description": "описание локации",
+    "is_first_visit": true/false
+  },
+  "npc_met": {
+    "name": "имя NPC",
+    "description": "описание NPC",
+    "is_first_meeting": true/false
+  }
 }
 
 Важно:
@@ -590,7 +888,9 @@ func buildAnalysisPrompt(dmResponse string) string {
 - Опыт начисляется только за значимые достижения (завершение квеста, победа в бою)
 - Предметы добавляй только если в ответе DM явно указано, что игрок получил/нашел/поднял предмет (ключевые слова: "получаешь", "находишь", "поднимаешь", "нашел", "берешь", "взял", "дал", "подарил")
 - Не добавляй предметы, если они только упоминаются в описании или не были получены игроком
-- Если информации недостаточно, используй значения по умолчанию (false, 0, пустые строки, пустые массивы)
+- location_visited указывай только если DM описывает новую локацию, которую игрок впервые посещает (ключевые слова: "входишь", "приходишь", "оказываешься", "достигаешь", "перед тобой", "новое место")
+- npc_met указывай только если DM описывает встречу с новым NPC (ключевые слова: "встречаешь", "видишь", "подходит", "появляется", "знакомишься")
+- Если информации недостаточно, используй значения по умолчанию (false, 0, пустые строки, пустые массивы, null)
 
 КРИТИЧЕСКИ ВАЖНО:
 - Верни ТОЛЬКО валидный JSON, без дополнительного текста до или после JSON
@@ -603,7 +903,7 @@ func buildAnalysisPrompt(dmResponse string) string {
 - НЕ обрезай JSON в середине структуры - если не хватает места, верни сокращенную но полную структуру
 
 Пример правильного ответа:
-{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[]}`, dmResponse)
+{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null}`, dmResponse)
 }
 
 // cleanJSONResponse очищает ответ LLM от markdown блоков кода и лишнего текста

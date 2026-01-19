@@ -328,6 +328,70 @@ type PlayerRepository interface {
 	Save(ctx context.Context, p *player.Player) error
 }
 
+// syncPlayerHPFromCombat синхронизирует HP персонажа из боевого участника в БД
+// Используется для обеспечения консистентности между боем и состоянием персонажа
+func syncPlayerHPFromCombat(
+	ctx context.Context,
+	participant *combat.CombatParticipant,
+	sessionRepo GameSessionRepository,
+	playerRepo PlayerRepository,
+	sessionID uint,
+	chatID int64,
+) error {
+	if !participant.IsPlayer || participant.Character == nil {
+		return nil // Не игрок или персонаж не загружен
+	}
+
+	// Получаем сессию для поиска игрока
+	gs, err := sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+	if gs == nil {
+		return fmt.Errorf("session not found")
+	}
+
+	// Ищем игрока по CharacterID из боевого участника
+	var targetPlayer *player.Player
+	if participant.CharacterID != nil {
+		// Пытаемся найти игрока по CharacterID
+		for i := range gs.Players {
+			if gs.Players[i].CharacterID == *participant.CharacterID {
+				targetPlayer = &gs.Players[i]
+				break
+			}
+		}
+	}
+
+	// Если не нашли по CharacterID, используем первого игрока (для обратной совместимости)
+	if targetPlayer == nil {
+		targetPlayer = gs.GetFirstPlayer()
+	}
+
+	if targetPlayer == nil {
+		return fmt.Errorf("player not found in session")
+	}
+
+	// Обновляем HP и статус персонажа из боевого участника
+	targetPlayer.Character.HP = participant.Character.HP
+	targetPlayer.Character.Status = participant.Character.Status
+	targetPlayer.Character.MaxHP = participant.Character.MaxHP // На случай, если MaxHP изменился
+
+	// Сохраняем изменения
+	if err := playerRepo.Save(ctx, targetPlayer); err != nil {
+		return fmt.Errorf("failed to save player: %w", err)
+	}
+
+	logger.Info("Player HP synced from combat",
+		logger.Uint("session_id", sessionID),
+		logger.Uint("character_id", targetPlayer.CharacterID),
+		logger.Int("hp", targetPlayer.Character.HP),
+		logger.String("status", string(targetPlayer.Character.Status)),
+	)
+
+	return nil
+}
+
 // NewApplyDamageTool создает новый инструмент для нанесения урона
 func NewApplyDamageTool(
 	combatRepo CombatRepository,
@@ -505,19 +569,13 @@ func (t *ApplyDamageTool) Execute(ctx context.Context, args map[string]interface
 	}
 
 	// Если цель - игрок, обновляем персонажа в БД
-	if targetParticipant.IsPlayer && targetParticipant.CharacterID != nil && t.playerRepo != nil {
-		// Получаем игрока через адаптер
-		player, err := t.playerRepo.GetByTgUserIDAndSessionID(ctx, t.chatID, t.sessionID)
-		if err == nil && player != nil && player.CharacterID == *targetParticipant.CharacterID {
-			// Обновляем HP персонажа из боевого участника
-			player.Character.HP = targetParticipant.Character.HP
-			player.Character.Status = targetParticipant.Character.Status
-			if err := t.playerRepo.Save(ctx, player); err != nil {
-				logger.Error("ApplyDamageTool: failed to save player",
-					logger.ErrorField(err),
-				)
-				// Не возвращаем ошибку - урон уже применен в бою
-			}
+	if targetParticipant.IsPlayer && t.playerRepo != nil {
+		if err := syncPlayerHPFromCombat(ctx, targetParticipant, t.sessionRepo, t.playerRepo, t.sessionID, t.chatID); err != nil {
+			logger.Error("ApplyDamageTool: failed to sync player HP",
+				logger.ErrorField(err),
+				logger.Uint("session_id", t.sessionID),
+			)
+			// Не возвращаем ошибку - урон уже применен в бою
 		}
 	}
 
@@ -1031,17 +1089,13 @@ func (t *PerformEnemyAttackTool) Execute(ctx context.Context, args map[string]in
 	}
 
 	// Если цель - игрок, обновляем персонажа в БД
-	if targetParticipant.IsPlayer && targetParticipant.CharacterID != nil && t.playerRepo != nil {
-		player, err := t.playerRepo.GetByTgUserIDAndSessionID(ctx, t.chatID, t.sessionID)
-		if err == nil && player != nil && player.CharacterID == *targetParticipant.CharacterID {
-			// Обновляем HP персонажа из боевого участника
-			player.Character.HP = targetParticipant.Character.HP
-			player.Character.Status = targetParticipant.Character.Status
-			if err := t.playerRepo.Save(ctx, player); err != nil {
-				logger.Error("PerformEnemyAttackTool: failed to save player",
-					logger.ErrorField(err),
-				)
-			}
+	if targetParticipant.IsPlayer && t.playerRepo != nil {
+		if err := syncPlayerHPFromCombat(ctx, targetParticipant, t.sessionRepo, t.playerRepo, t.sessionID, t.chatID); err != nil {
+			logger.Error("PerformEnemyAttackTool: failed to sync player HP",
+				logger.ErrorField(err),
+				logger.Uint("session_id", t.sessionID),
+			)
+			// Не возвращаем ошибку - урон уже применен в бою
 		}
 	}
 

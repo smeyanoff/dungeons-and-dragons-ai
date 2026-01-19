@@ -46,10 +46,12 @@ type HandleActionUseCase struct {
 	useSpellUC         *spellapp.UseSpellUseCase                 // Для использования заклинаний (опционально)
 	responseCache      *dmcache.DMResponseCache
 	actionValidator    *ActionValidator
+	checkDailyProgressUC DailyQuestProgressChecker // Для отслеживания ежедневных заданий
 }
 
 type EventRepository interface {
 	Save(ctx context.Context, e *event.StoryEvent) error
+	SaveInTransaction(ctx context.Context, e *event.StoryEvent, fn func(tx interface{}) error) error
 }
 
 type ContextBuilder interface {
@@ -128,6 +130,19 @@ type InventoryRepository interface {
 	Save(ctx context.Context, inv *inventory.Inventory) error
 }
 
+// DailyQuestProgressChecker интерфейс для отслеживания ежедневных заданий
+type DailyQuestProgressChecker interface {
+	Execute(ctx context.Context, req CheckDailyQuestProgressRequest) error
+}
+
+// CheckDailyQuestProgressRequest запрос на проверку прогресса ежедневного задания
+type CheckDailyQuestProgressRequest struct {
+	ChatID    int64
+	TgUserID  int64
+	QuestType quest.DailyQuestType
+	Increment int
+}
+
 func NewHandleActionUseCase(
 	llm domain.LLM,
 	sessionRepo session.Repository,
@@ -145,6 +160,7 @@ func NewHandleActionUseCase(
 	useSpellUC *spellapp.UseSpellUseCase,
 	responseCache *dmcache.DMResponseCache,
 	actionValidator *ActionValidator,
+	checkDailyProgressUC DailyQuestProgressChecker,
 ) *HandleActionUseCase {
 	return &HandleActionUseCase{
 		llm:                llm,
@@ -163,6 +179,7 @@ func NewHandleActionUseCase(
 		useSpellUC:         useSpellUC,
 		responseCache:      responseCache,
 		actionValidator:    actionValidator,
+		checkDailyProgressUC: checkDailyProgressUC,
 	}
 }
 
@@ -269,6 +286,8 @@ func (uc *HandleActionUseCase) Execute(
 		Content:       playerMessage,
 		CreatedAt:     time.Now(),
 	}
+	
+	// Сохраняем событие в БД (атомарная операция)
 	if err := uc.eventRepo.Save(dbCtx, playerEvent); err != nil {
 		// Логируем ошибку, но не прерываем выполнение
 		logger.Error("Failed to save player event",
@@ -280,7 +299,7 @@ func (uc *HandleActionUseCase) Execute(
 			logger.Uint("session_id", gs.ID),
 			logger.Uint("event_id", playerEvent.ID),
 		)
-		// Индексируем событие игрока в RAG с таймаутом
+		// Индексируем событие игрока в RAG с таймаутом и повторными попытками
 		doc := ragdomain.Document{
 			ID:        uuid.New().String(),
 			Source:    ragdomain.SourceEvent,
@@ -288,11 +307,15 @@ func (uc *HandleActionUseCase) Execute(
 			Text:      fmt.Sprintf("Игрок: %s", playerMessage),
 			Timestamp: time.Now(),
 		}
-		if err := uc.indexDocUC.Execute(ragCtx, doc); err != nil {
-			logger.Warn("Failed to index player event",
+		// Пытаемся проиндексировать с повторными попытками
+		if err := uc.indexDocumentWithRetry(ragCtx, doc, 3); err != nil {
+			logger.Warn("Failed to index player event after retries (event saved in DB, but not indexed in RAG)",
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
+				logger.Uint("event_id", playerEvent.ID),
 			)
+			// Событие сохранено в БД, но не проиндексировано в RAG
+			// Это не критично - событие все равно доступно через историю
 		} else {
 			logger.Debug("Player event indexed in RAG",
 				logger.Uint("session_id", gs.ID),
@@ -387,6 +410,7 @@ func (uc *HandleActionUseCase) Execute(
 		Content:       response,
 		CreatedAt:     time.Now(),
 	}
+	// Сохраняем событие в БД (атомарная операция)
 	if err := uc.eventRepo.Save(dbCtx, dmEvent); err != nil {
 		// Логируем ошибку, но не прерываем выполнение
 		logger.Error("Failed to save DM event",
@@ -398,7 +422,7 @@ func (uc *HandleActionUseCase) Execute(
 			logger.Uint("session_id", gs.ID),
 			logger.Uint("event_id", dmEvent.ID),
 		)
-		// Индексируем ответ DM в RAG с новым контекстом и таймаутом
+		// Индексируем ответ DM в RAG с новым контекстом, таймаутом и повторными попытками
 		// Создаем новый контекст, так как ragCtx мог быть просрочен после долгого вызова LLM
 		indexCtx, indexCancel := context.WithTimeout(ctx, 15*time.Second)
 		defer indexCancel()
@@ -409,11 +433,15 @@ func (uc *HandleActionUseCase) Execute(
 			Text:      fmt.Sprintf("DM: %s", response),
 			Timestamp: time.Now(),
 		}
-		if err := uc.indexDocUC.Execute(indexCtx, doc); err != nil {
-			logger.Warn("Failed to index DM event",
+		// Пытаемся проиндексировать с повторными попытками
+		if err := uc.indexDocumentWithRetry(indexCtx, doc, 3); err != nil {
+			logger.Warn("Failed to index DM event after retries (event saved in DB, but not indexed in RAG)",
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
+				logger.Uint("event_id", dmEvent.ID),
 			)
+			// Событие сохранено в БД, но не проиндексировано в RAG
+			// Это не критично - событие все равно доступно через историю
 		} else {
 			logger.Debug("DM event indexed in RAG",
 				logger.Uint("session_id", gs.ID),
@@ -423,8 +451,11 @@ func (uc *HandleActionUseCase) Execute(
 	}
 
 	// Анализируем ответ DM для автоматического определения боевых ситуаций, квестов и опыта
-	// Получаем сообщение о начале боя, если оно было сгенерировано
-	combatStartMessage := uc.analyzeDMResponse(ctx, gs, response)
+	// Получаем модифицированный response с маркерами изображений и сообщение о начале боя
+	modifiedResponse, combatStartMessage := uc.analyzeDMResponse(ctx, gs, response)
+	
+	// Используем модифицированный response (с маркерами изображений)
+	response = modifiedResponse
 
 	// Добавляем сообщение о порядке ходов к ответу DM, если бой начался
 	if combatStartMessage != "" {
@@ -495,17 +526,17 @@ func (uc *HandleActionUseCase) Execute(
 }
 
 // analyzeDMResponse анализирует ответ DM и выполняет автоматические действия
-// Возвращает сообщение о начале боя (порядок ходов), если бой начался
+// Возвращает модифицированный response с добавленными маркерами изображений и сообщение о начале боя
 func (uc *HandleActionUseCase) analyzeDMResponse(
 	ctx context.Context,
 	gs *session.GameSession,
 	dmResponse string,
-) string {
+) (modifiedResponse string, combatStartMessage string) {
 	// Получаем игрока (используем первого игрока для обратной совместимости)
 	player := gs.GetFirstPlayer()
 	if player == nil {
 		// Нет игрока, нечего анализировать
-		return ""
+		return dmResponse, ""
 	}
 
 	// Создаем анализатор
@@ -532,6 +563,20 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		// Для этого нужно создать адаптер или передать через HandleActionUseCase
 		// Пока оставляем как есть - уведомления будут отправляться только если notification service настроен
 	}
+	
+	// Настраиваем автоматическую генерацию изображений
+	if uc.generateImageUC != nil && player != nil {
+		// Создаем адаптер для передачи ImageGenerationUseCase в dm_analyzer
+		imageServiceAdapter := &imageGenerationServiceAdapter{uc: uc.generateImageUC}
+		analyzer.SetImageGenerationService(imageServiceAdapter, player.TgUserID)
+	}
+	
+	// Настраиваем отслеживание ежедневных заданий
+	if uc.checkDailyProgressUC != nil && player != nil {
+		// Создаем адаптер для передачи CheckDailyQuestProgressUseCase в dm_analyzer
+		dailyQuestAdapter := &dailyQuestProgressAdapter{checkDailyProgressUC: uc.checkDailyProgressUC}
+		analyzer.SetCheckDailyProgress(dailyQuestAdapter, player.TgUserID)
+	}
 
 	// Анализируем ответ DM
 	analysis, err := analyzer.Execute(ctx, dmResponse)
@@ -540,11 +585,25 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 			logger.ErrorField(err),
 			logger.Uint("session_id", gs.ID),
 		)
-		return ""
+		return dmResponse, ""
 	}
 
 	// Сохраняем сообщение о начале боя для возврата
-	combatStartMessage := analysis.CombatStartMessage
+	combatStartMessage = analysis.CombatStartMessage
+
+	// Добавляем маркеры автоматически сгенерированных изображений в ответ DM
+	// Изображения будут отправлены автоматически через extractImageMarkers в bot.go
+	modifiedResponse = dmResponse
+	if len(analysis.GeneratedImages) > 0 {
+		logger.Info("Adding image markers to DM response",
+			logger.Uint("session_id", gs.ID),
+			logger.Int("image_count", len(analysis.GeneratedImages)),
+		)
+		// Добавляем маркеры изображений в конец ответа DM
+		for _, img := range analysis.GeneratedImages {
+			modifiedResponse += fmt.Sprintf("\n[IMAGE:%s]", img.ImagePath)
+		}
+	}
 
 	// Начисляем опыт, если он был получен
 	if analysis.ExperienceGained > 0 {
@@ -572,8 +631,8 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		}
 	}
 
-	// Возвращаем сообщение о начале боя
-	return combatStartMessage
+	// Возвращаем модифицированный response с маркерами изображений и сообщение о начале боя
+	return modifiedResponse, combatStartMessage
 }
 
 // generateEnemyTurn генерирует автоматический ход врага в бою
@@ -1084,6 +1143,59 @@ type achievementCheckerAdapter struct {
 	checkAchievementsUC *achievementapp.CheckAchievementsUseCase
 }
 
+// dailyQuestProgressAdapter адаптирует CheckDailyQuestProgressUseCase к интерфейсу dm_analyzer.DailyQuestProgressChecker
+type dailyQuestProgressAdapter struct {
+	checkDailyProgressUC DailyQuestProgressChecker
+}
+
+func (a *dailyQuestProgressAdapter) Execute(
+	ctx context.Context,
+	req dm_analyzer.DailyQuestProgressRequest,
+) error {
+	// Преобразуем запрос из dm_analyzer в формат quest.CheckDailyQuestProgressUseCase
+	// Нужно преобразовать QuestType из строки в quest.DailyQuestType
+	questType := quest.DailyQuestType(req.QuestType)
+	progressReq := CheckDailyQuestProgressRequest{
+		ChatID:    req.ChatID,
+		TgUserID:  req.TgUserID,
+		QuestType: questType,
+		Increment: req.Increment,
+	}
+	
+	return a.checkDailyProgressUC.Execute(ctx, progressReq)
+}
+
+// imageGenerationServiceAdapter адаптирует ImageGenerationUseCase к интерфейсу dm_analyzer.ImageGenerationService
+type imageGenerationServiceAdapter struct {
+	uc *imageapp.ImageGenerationUseCase
+}
+
+func (a *imageGenerationServiceAdapter) GenerateImage(ctx context.Context, req dm_analyzer.GenerateImageRequest) (*dm_analyzer.GenerateImageResponse, error) {
+	// Преобразуем запрос из dm_analyzer в внутренний формат
+	internalReq := imageapp.GenerateImageRequest{
+		SystemPrompt:    req.SystemPrompt,
+		UserPrompt:      req.UserPrompt,
+		Type:            req.Type,
+		EntityID:        req.EntityID,
+		ForceRegenerate: req.ForceRegenerate,
+		UserID:          req.UserID,
+		SkipLimitCheck:  req.SkipLimitCheck,
+	}
+	
+	// Выполняем генерацию
+	resp, err := a.uc.Execute(ctx, internalReq)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Преобразуем ответ из внутреннего формата в формат dm_analyzer
+	return &dm_analyzer.GenerateImageResponse{
+		ImagePath: resp.ImagePath,
+		FileID:    resp.FileID,
+		FromCache: resp.FromCache,
+	}, nil
+}
+
 func (a *achievementCheckerAdapter) Execute(
 	ctx context.Context,
 	req dm_analyzer.CheckAchievementsRequest,
@@ -1113,5 +1225,82 @@ func (a *achievementCheckerAdapter) Execute(
 	}
 	
 	return result, nil
+}
+
+// indexDocumentWithRetry индексирует документ в RAG с повторными попытками и exponential backoff
+// Это компенсирующая транзакция для RAG - если БД успешно, но RAG нет, пытаемся повторить
+func (uc *HandleActionUseCase) indexDocumentWithRetry(
+	ctx context.Context,
+	doc ragdomain.Document,
+	maxRetries int,
+) error {
+	const initialBackoff = 100 * time.Millisecond
+	const maxBackoff = 2 * time.Second
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Вычисляем exponential backoff: 100ms, 200ms, 400ms
+			// Защита от integer overflow: ограничиваем сдвиг безопасными пределами
+			// time.Duration это int64, поэтому 1<<30 безопасно
+			const maxSafeShift = 30
+			shift := attempt - 1
+			if shift < 0 {
+				shift = 0
+			} else if shift > maxSafeShift {
+				shift = maxSafeShift
+			}
+			// #nosec G115 - защита от overflow реализована выше: shift ограничен до maxSafeShift=30
+			// что безопасно для int64/time.Duration (максимальный безопасный сдвиг для int64)
+			backoff := initialBackoff * time.Duration(1<<uint(shift))
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			
+			logger.Debug("Retrying RAG indexation",
+				logger.Uint("session_id", doc.SessionID),
+				logger.Int("attempt", attempt),
+				logger.Duration("backoff", backoff),
+			)
+			
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		// Пытаемся проиндексировать документ
+		err := uc.indexDocUC.Execute(ctx, doc)
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+
+		// Проверяем, стоит ли повторять попытку
+		errStr := err.Error()
+		shouldRetry := false
+		if strings.Contains(errStr, "context deadline exceeded") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "connection") ||
+			strings.Contains(errStr, "network") {
+			shouldRetry = true
+		}
+
+		if !shouldRetry || attempt >= maxRetries {
+			// Не retry или исчерпаны попытки
+			if attempt >= maxRetries {
+				logger.Warn("Failed to index document in RAG after max retries",
+					logger.ErrorField(err),
+					logger.Uint("session_id", doc.SessionID),
+					logger.Int("attempts", attempt+1),
+				)
+			}
+			break
+		}
+	}
+
+	return lastErr
 }
 

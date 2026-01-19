@@ -2,6 +2,7 @@ package gigachat
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,15 +29,24 @@ type authClient struct {
 }
 
 func newAuthClient(cfg Config) *authClient {
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	
+	// Если нужно пропустить проверку TLS (только для тестов)
+	if cfg.SkipTLSVerify {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+	}
+	
 	return &authClient{
 		cfg: cfg,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				IdleConnTimeout:     90 * time.Second,
-				TLSHandshakeTimeout: 10 * time.Second,
-			},
+			Timeout:   30 * time.Second,
+			Transport: transport,
 		},
 	}
 }
@@ -153,10 +163,16 @@ func (a *authClient) getTokenWithRetry(ctx context.Context, clientID, authHeader
 			// Проверяем на overflow перед конвертацией int -> uint
 			// attempt-1 всегда >= 0, так как attempt > 0
 			shift := attempt - 1
-			if shift < 0 || shift > 63 {
-				// Защита от overflow: ограничиваем сдвиг разумными пределами
-				shift = 63 // максимальный безопасный сдвиг для uint64
+			// Защита от overflow: ограничиваем сдвиг безопасными пределами (максимум 30 для time.Duration)
+			// time.Duration это int64, поэтому 1<<30 безопасно
+			const maxSafeShift = 30
+			if shift < 0 {
+				shift = 0
+			} else if shift > maxSafeShift {
+				shift = maxSafeShift
 			}
+			// #nosec G115 - защита от overflow реализована выше: shift ограничен до maxSafeShift=30
+			// что безопасно для int64/time.Duration (максимальный безопасный сдвиг для int64)
 			backoff := initialBackoff * time.Duration(1<<uint(shift))
 			if backoff > maxBackoff {
 				backoff = maxBackoff

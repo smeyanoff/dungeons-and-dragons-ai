@@ -152,6 +152,17 @@ func (m *mockEventRepo) Save(ctx context.Context, e *event.StoryEvent) error {
 	return nil
 }
 
+func (m *mockEventRepo) SaveInTransaction(ctx context.Context, e *event.StoryEvent, fn func(tx interface{}) error) error {
+	// Простая реализация без реальной транзакции для тестов
+	if err := m.Save(ctx, e); err != nil {
+		return err
+	}
+	if fn != nil {
+		return fn(nil) // Передаем nil как транзакцию для тестов
+	}
+	return nil
+}
+
 // Mock Combat Repository
 type mockCombatRepo struct {
 	saveFunc                 func(ctx context.Context, c *combat.Combat) error
@@ -256,6 +267,18 @@ func (m *mockInventoryRepo) GetByCharacterID(ctx context.Context, characterID ui
 func (m *mockInventoryRepo) Save(ctx context.Context, inv *inventory.Inventory) error {
 	if m.saveFunc != nil {
 		return m.saveFunc(ctx, inv)
+	}
+	return nil
+}
+
+// Mock Daily Quest Progress Checker
+type mockDailyQuestProgressChecker struct {
+	executeFunc func(ctx context.Context, req CheckDailyQuestProgressRequest) error
+}
+
+func (m *mockDailyQuestProgressChecker) Execute(ctx context.Context, req CheckDailyQuestProgressRequest) error {
+	if m.executeFunc != nil {
+		return m.executeFunc(ctx, req)
 	}
 	return nil
 }
@@ -509,6 +532,7 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 			playerRepo := &mockPlayerRepo{}
 			addExperienceUC := characterapp.NewAddExperienceUseCase(playerRepo, sessionRepo)
 			checkWorldEventsUC := worldeventapp.NewCheckWorldEventsUseCase(worldEventRepo)
+			checkDailyProgressUC := &mockDailyQuestProgressChecker{}
 
 			uc := NewHandleActionUseCase(
 				llm,
@@ -527,6 +551,7 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 				nil, // useSpellUC - optional
 				nil, // responseCache - optional
 				nil, // actionValidator - optional
+				checkDailyProgressUC,
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
@@ -698,6 +723,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 			playerRepo := &mockPlayerRepo{}
 			addExperienceUC := characterapp.NewAddExperienceUseCase(playerRepo, sessionRepo)
 			checkWorldEventsUC := worldeventapp.NewCheckWorldEventsUseCase(worldEventRepo)
+			checkDailyProgressUC := &mockDailyQuestProgressChecker{}
 
 			uc := NewHandleActionUseCase(
 				llm,
@@ -716,6 +742,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 				nil, // useSpellUC - optional
 				nil, // responseCache
 				validator,
+				checkDailyProgressUC,
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
@@ -856,6 +883,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 			playerRepo := &mockPlayerRepo{}
 			addExperienceUC := characterapp.NewAddExperienceUseCase(playerRepo, sessionRepo)
 			checkWorldEventsUC := worldeventapp.NewCheckWorldEventsUseCase(worldEventRepo)
+			checkDailyProgressUC := &mockDailyQuestProgressChecker{}
 
 			uc := NewHandleActionUseCase(
 				llm,
@@ -874,6 +902,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				nil, // useSpellUC - optional
 				nil, // responseCache
 				validator,
+				checkDailyProgressUC,
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)

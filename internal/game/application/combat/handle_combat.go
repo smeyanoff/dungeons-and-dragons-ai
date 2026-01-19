@@ -93,7 +93,13 @@ func (uc *HandleCombatUseCase) Execute(
 	if targetParticipant == nil {
 		// Все враги мертвы
 		activeCombat.State = combat.CombatStateFinished
-		uc.combatRepo.Save(ctx, activeCombat)
+		if err := uc.combatRepo.Save(ctx, activeCombat); err != nil {
+			logger.Error("Failed to save combat state after victory",
+				logger.ErrorField(err),
+				logger.Uint("session_id", activeCombat.GameSessionID),
+			)
+			// Продолжаем выполнение, так как бой уже завершен логически
+		}
 		return "🎉 Все враги побеждены! Бой окончен.", nil
 	}
 

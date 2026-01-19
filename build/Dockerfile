@@ -2,7 +2,12 @@
 FROM golang:1.25-alpine AS builder
 
 # Установка зависимостей для сборки
-RUN apk add --no-cache git ca-certificates tzdata
+# Фиксируем версии пакетов для воспроизводимости сборок (golang:1.25-alpine)
+# Регулярно обновляйте версии при обновлении базового образа
+RUN apk add --no-cache \
+    git=2.52.0-r0 \
+    ca-certificates=20251003-r0 \
+    tzdata=2025c-r0
 
 # Рабочая директория
 WORKDIR /app
@@ -31,11 +36,16 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 
 # Final stage - минимальный alpine образ для health check
 # Фиксируем версию Alpine для воспроизводимости сборок
-# Используем поддерживаемую версию Alpine 3.19
-FROM alpine:3.19
+# Обновлено до Alpine 3.20 для получения обновлений безопасности
+FROM alpine:3.20
 
 # Установка CA сертификатов для HTTPS запросов и wget для health check
-RUN apk --no-cache add ca-certificates tzdata wget
+# Фиксируем версии пакетов для воспроизводимости сборок (Alpine 3.20)
+# Регулярно обновляйте версии при обновлении базового образа
+RUN apk --no-cache add \
+    ca-certificates=20250911-r0 \
+    tzdata=2025c-r0 \
+    wget=1.24.5-r0
 
 WORKDIR /root/
 

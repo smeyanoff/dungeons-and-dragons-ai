@@ -36,6 +36,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/subscription"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
@@ -52,6 +53,22 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+// dailyQuestProgressAdapterForPlayerAction адаптирует questapp.CheckDailyQuestProgressUseCase к интерфейсу player_action.DailyQuestProgressChecker
+type dailyQuestProgressAdapterForPlayerAction struct {
+	uc *questapp.CheckDailyQuestProgressUseCase
+}
+
+func (a *dailyQuestProgressAdapterForPlayerAction) Execute(ctx context.Context, req player_action.CheckDailyQuestProgressRequest) error {
+	// Преобразуем запрос из player_action в формат quest
+	questReq := questapp.CheckProgressRequest{
+		ChatID:    req.ChatID,
+		TgUserID:  req.TgUserID,
+		QuestType: req.QuestType,
+		Increment: req.Increment,
+	}
+	return a.uc.Execute(ctx, questReq)
+}
 
 func main() {
 	// Инициализация логгера (должна быть первой)
@@ -243,6 +260,7 @@ func main() {
 	inventoryRepo := persistence.NewInventoryRepository(db)
 	combatRepo := persistence.NewCombatRepository(db)
 	questRepo := persistence.NewQuestRepository(db)
+	dailyQuestRepo := persistence.NewDailyQuestRepository(db)
 	worldEventRepo := persistence.NewWorldEventRepository(db)
 	feedbackRepo := persistence.NewFeedbackRepository(db)
 	achievementRepo := persistence.NewAchievementRepository(db)
@@ -251,7 +269,9 @@ func main() {
 
 	// Создаем use cases для подписок (нужно для лимитера изображений)
 	getSubscriptionUC := subscriptionapp.NewGetSubscriptionUseCase(subscriptionRepo)
-	checkLimitsUC := subscriptionapp.NewCheckLimitsUseCase(subscriptionRepo, sessionRepo, fallbackLimiter)
+	// Передаем sessionRepo как SessionCountRepository (GameSessionRepository реализует нужные методы)
+	// и eventRepo как EventCountRepository (GameEventRepository реализует нужные методы)
+	checkLimitsUC := subscriptionapp.NewCheckLimitsUseCase(subscriptionRepo, sessionRepo, sessionRepo, eventRepo, fallbackLimiter)
 
 	// Обновляем лимитер изображений для использования системы подписок
 	subscriptionImageLimiter := subscriptionapp.NewSubscriptionImageLimiter(checkLimitsUC, fallbackLimiter)
@@ -281,8 +301,16 @@ func main() {
 	addExperienceUC.SetCheckAchievementsUseCase(checkAchievementsUC)
 	addExperienceUC.SetNotificationService(notificationService)
 	checkWorldEventsUC := worldeventapp.NewCheckWorldEventsUseCase(worldEventRepo)
-	useSpellUC := spellapp.NewUseSpellUseCase(spellRepo, sessionRepo, playerRepo)
-	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator)
+	useSpellUC := spellapp.NewUseSpellUseCase(spellRepo, sessionRepo, playerRepo, combatRepo)
+	// Создаем use cases для ежедневных заданий (нужны для handleActionUC)
+	getDailyQuestsUC := questapp.NewGetDailyQuestsUseCase(sessionRepo, dailyQuestRepo, playerRepo)
+	completeDailyQuestUC := questapp.NewCompleteDailyQuestUseCase(sessionRepo, dailyQuestRepo, playerRepo, addExperienceUC)
+	checkDailyProgressUC := questapp.NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeDailyQuestUC)
+	// Создаем адаптер для преобразования типов запросов между player_action и quest
+	dailyQuestProgressAdapter := &dailyQuestProgressAdapterForPlayerAction{
+		uc: checkDailyProgressUC,
+	}
+	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator, dailyQuestProgressAdapter)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
@@ -321,7 +349,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getMapUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, sessionRepo, combatRepo, feedbackRepo)
+	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, sessionRepo, combatRepo, feedbackRepo)
 	if err != nil {
 		logger.Fatal("Failed to create bot",
 			logger.ErrorField(err),
@@ -464,12 +492,16 @@ func runMigrations(db *gorm.DB) error {
 		&combat.CombatParticipant{},
 		&item.Item{},
 		&quest.Quest{},
+		&quest.DailyQuest{},
+		&quest.DailyQuestProgress{},
+		&quest.DailyQuestStreak{},
 		&feedback.Feedback{},
 		&achievement.Achievement{},
 		&achievement.PlayerAchievement{},
 		&achievement.AchievementProgress{},
 		&spell.Spell{},
 		&spell.CharacterSpell{},
+		&subscription.Subscription{},
 	)
 }
 

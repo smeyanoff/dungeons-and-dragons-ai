@@ -42,3 +42,13 @@ bot
 gosec-report.json
 trivy-image-report.json
 hadolint-report.json
+security-scan-output.log
+
+# Test output files
+test_output.log
+test_results_summary.txt
+
+# Runtime data directories (created by scripts, should not be committed)
+backups/
+data/postgres/
+data/qdrant/

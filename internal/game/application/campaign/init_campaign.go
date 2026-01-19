@@ -103,7 +103,8 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
 	
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 2048)
+	// Убрано ограничение на токены для генерации главного квеста
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -180,8 +181,8 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
 	
-	// Увеличиваем max_tokens до 4096 для генерации локаций
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 4096)
+	// Убрано ограничение на токены для генерации локаций
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -254,7 +255,8 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 	llmCtx, llmCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer llmCancel()
 	
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 1024)
+	// Убрано ограничение на токены для генерации NPC
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -309,8 +311,8 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
 	
-	// Увеличиваем max_tokens до 4096 для генерации connections
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 4096)
+	// Убрано ограничение на токены для генерации связей между локациями
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}

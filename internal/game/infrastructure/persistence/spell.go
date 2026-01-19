@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"sort"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/spell"
@@ -116,16 +117,37 @@ func (r *SpellRepository) Save(ctx context.Context, s *spell.Spell) error {
 func (r *SpellRepository) GetCharacterSpells(ctx context.Context, characterID uint) ([]*spell.CharacterSpell, error) {
 	var characterSpells []*spell.CharacterSpell
 	err := r.db.WithContext(ctx).
-		Joins("Spell").
-		Where("character_spells.character_id = ?", characterID).
-		Order("spell.level ASC, spell.name ASC").
+		Preload("Spell").
+		Where("character_id = ?", characterID).
 		Find(&characterSpells).Error
 	
 	if err != nil {
 		return nil, err
 	}
 	
+	// Сортируем заклинания по уровню и имени в памяти
+	// GORM Preload не поддерживает сортировку связанных таблиц напрямую
+	// Альтернативный подход: использовать два запроса или сортировать в памяти
+	// Для простоты сортируем в памяти после загрузки
+	sortCharacterSpells(characterSpells)
+	
 	return characterSpells, nil
+}
+
+// sortCharacterSpells сортирует заклинания персонажа по уровню и имени
+func sortCharacterSpells(spells []*spell.CharacterSpell) {
+	sort.Slice(spells, func(i, j int) bool {
+		spellI := spells[i]
+		spellJ := spells[j]
+		
+		// Сначала сортируем по уровню (по возрастанию)
+		if spellI.Spell.Level != spellJ.Spell.Level {
+			return spellI.Spell.Level < spellJ.Spell.Level
+		}
+		
+		// Если уровни одинаковые, сортируем по имени (по алфавиту)
+		return spellI.Spell.Name < spellJ.Spell.Name
+	})
 }
 
 // GetCharacterSpell получает конкретное известное заклинание персонажа

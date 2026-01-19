@@ -18,6 +18,53 @@ func NewGameSessionRepository(db *gorm.DB) *GameSessionRepository {
 	return &GameSessionRepository{db: db}
 }
 
+// CountActiveGamesByTgUserID подсчитывает количество активных игр для пользователя
+// Активная игра - это сессия со статусом "active", в которой есть игрок с указанным TgUserID
+func (r *GameSessionRepository) CountActiveGamesByTgUserID(
+	ctx context.Context,
+	tgUserID int64,
+) (int, error) {
+	var count int64
+
+	// Подсчитываем активные сессии, где есть игрок с указанным TgUserID
+	err := r.db.WithContext(ctx).
+		Model(&session.GameSession{}).
+		Joins("INNER JOIN players ON players.game_session_id = game_sessions.id").
+		Where("game_sessions.state = ? AND players.tg_user_id = ?", session.StateActive, tgUserID).
+		Distinct("game_sessions.id").
+		Count(&count).Error
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to count active games: %w", err)
+	}
+
+	return int(count), nil
+}
+
+// CountSavesByTgUserID подсчитывает количество сохранений для пользователя
+// Сохранение - это завершенная сессия (state = "done"), которую можно загрузить позже
+// В текущей реализации это количество завершенных сессий пользователя
+func (r *GameSessionRepository) CountSavesByTgUserID(
+	ctx context.Context,
+	tgUserID int64,
+) (int, error) {
+	var count int64
+
+	// Подсчитываем завершенные сессии, где есть игрок с указанным TgUserID
+	err := r.db.WithContext(ctx).
+		Model(&session.GameSession{}).
+		Joins("INNER JOIN players ON players.game_session_id = game_sessions.id").
+		Where("game_sessions.state = ? AND players.tg_user_id = ?", session.StateDone, tgUserID).
+		Distinct("game_sessions.id").
+		Count(&count).Error
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to count saves: %w", err)
+	}
+
+	return int(count), nil
+}
+
 func (r *GameSessionRepository) GetByChatID(
 	ctx context.Context,
 	chatID int64,

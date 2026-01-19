@@ -3,6 +3,7 @@ package gigachat
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,16 +17,25 @@ type Client struct {
 }
 
 func NewClient(cfg Config) *Client {
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	
+	// Если нужно пропустить проверку TLS (только для тестов)
+	if cfg.SkipTLSVerify {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+	}
+	
 	return &Client{
 		auth: newAuthClient(cfg),
 		cfg:  cfg,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				IdleConnTimeout:     90 * time.Second,
-				TLSHandshakeTimeout: 10 * time.Second,
-			},
+			Timeout:   30 * time.Second,
+			Transport: transport,
 		},
 	}
 }
@@ -57,7 +67,10 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 
 	// Если получили 401 Unauthorized, токен мог истек - пробуем обновить и повторить запрос
 	if resp.StatusCode == 401 {
-		resp.Body.Close() // Закрываем предыдущий ответ
+		// Закрываем предыдущий ответ (игнорируем ошибку, так как это cleanup)
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Printf("Warning: failed to close response body: %v", closeErr)
+		}
 
 		// Инвалидируем старый токен
 		c.auth.invalidateToken()
