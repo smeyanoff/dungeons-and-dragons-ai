@@ -141,6 +141,8 @@
 - Structured logging
 - Log rotation
 - Готовность к интеграции с Prometheus/Grafana
+- LLM Monitoring UI (`http://localhost:8081`) с логами запросов/ответов
+- Встроенный LLM proxy (MonitoredLLM) между Telegram и моделью, сохраняет запросы/ответы в PostgreSQL
 
 ### Масштабирование
 

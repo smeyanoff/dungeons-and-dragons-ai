@@ -50,6 +50,9 @@ make prod-logs
 
 # Health check
 curl http://localhost:8080/health
+
+# LLM Monitoring UI
+open http://localhost:8081
 ```
 
 ## Управление

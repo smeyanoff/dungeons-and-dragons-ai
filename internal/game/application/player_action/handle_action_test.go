@@ -137,8 +137,10 @@ func (m *mockContextBuilder) BuildContext(ctx context.Context, gs *session.GameS
 
 // Mock Event Repository
 type mockEventRepo struct {
-	saveFunc func(ctx context.Context, e *event.StoryEvent) error
-	events   []*event.StoryEvent
+	saveFunc              func(ctx context.Context, e *event.StoryEvent) error
+	saveInTransactionFunc func(ctx context.Context, e *event.StoryEvent, fn func(tx interface{}) error) error
+	getBySessionIDFunc    func(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)
+	events                []*event.StoryEvent
 }
 
 func (m *mockEventRepo) Save(ctx context.Context, e *event.StoryEvent) error {
@@ -153,6 +155,9 @@ func (m *mockEventRepo) Save(ctx context.Context, e *event.StoryEvent) error {
 }
 
 func (m *mockEventRepo) SaveInTransaction(ctx context.Context, e *event.StoryEvent, fn func(tx interface{}) error) error {
+	if m.saveInTransactionFunc != nil {
+		return m.saveInTransactionFunc(ctx, e, fn)
+	}
 	// Простая реализация без реальной транзакции для тестов
 	if err := m.Save(ctx, e); err != nil {
 		return err
@@ -161,6 +166,25 @@ func (m *mockEventRepo) SaveInTransaction(ctx context.Context, e *event.StoryEve
 		return fn(nil) // Передаем nil как транзакцию для тестов
 	}
 	return nil
+}
+
+func (m *mockEventRepo) GetBySessionID(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error) {
+	if m.getBySessionIDFunc != nil {
+		return m.getBySessionIDFunc(ctx, sessionID, limit)
+	}
+	// Простая реализация: возвращаем события из внутреннего массива
+	result := make([]event.StoryEvent, 0)
+	count := 0
+	for _, e := range m.events {
+		if e != nil && e.GameSessionID == sessionID {
+			result = append(result, *e)
+			count++
+			if limit > 0 && count >= limit {
+				break
+			}
+		}
+	}
+	return result, nil
 }
 
 // Mock Combat Repository
@@ -554,6 +578,8 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 				checkDailyProgressUC,
 				nil, // getSubscriptionUC - optional
 				nil, // updateRatingUC - optional
+				nil, // analyzePlayerActionUC - optional
+				nil, // generateLocationEventUC - optional
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
@@ -747,6 +773,8 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 				checkDailyProgressUC,
 				nil, // getSubscriptionUC - optional
 				nil, // updateRatingUC - optional
+				nil, // analyzePlayerActionUC - optional
+				nil, // generateLocationEventUC - optional
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
@@ -786,7 +814,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 		shouldContain  string // Текст, который должен содержаться в результате
 	}{
 		{
-			name:          "action validation fails - insufficient strength shows correct stat",
+			name:          "action validation does not block - strength checks handled by DM tools",
 			chatID:        12345,
 			playerMessage: "поднять тяжелый камень",
 			characterStats: character.Stats{
@@ -819,8 +847,8 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				}
 			},
 			expectedError:  false,
-			expectedResult: "",  // Валидатор должен вернуть сообщение об ошибке
-			shouldContain:  "8", // Сообщение должно содержать "8", а не "0"
+			expectedResult: "Test DM response",
+			shouldContain:  "",
 		},
 		{
 			name:          "action validation passes - sufficient strength",
@@ -909,6 +937,8 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				checkDailyProgressUC,
 				nil, // getSubscriptionUC - optional
 				nil, // updateRatingUC - optional
+				nil, // analyzePlayerActionUC - optional
+				nil, // generateLocationEventUC - optional
 			)
 
 			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
@@ -922,19 +952,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 					t.Errorf("unexpected error: %v", err)
 				}
 
-				if tt.name == "action validation fails - insufficient strength shows correct stat" {
-					// Валидация должна вернуть сообщение об ошибке с правильным значением силы (8, а не 0)
-					if result == "" {
-						t.Error("expected validation error message")
-					}
-					if tt.shouldContain != "" && !contains(result, tt.shouldContain) {
-						t.Errorf("BUG #3: Expected error message to contain '%s' (actual strength), got message: %s", tt.shouldContain, result)
-					}
-					// Проверяем, что сообщение НЕ содержит "0" как значение силы (если только это не минимум "10")
-					if contains(result, "(0)") && tt.characterStats.Strength != 0 {
-						t.Errorf("BUG #3: Error message shows strength as 0 instead of %d! Message: %s", tt.characterStats.Strength, result)
-					}
-				} else if result != tt.expectedResult {
+				if result != tt.expectedResult {
 					t.Errorf("expected result '%s', got '%s'", tt.expectedResult, result)
 				}
 			}

@@ -1,6 +1,10 @@
 package world
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/datatypes"
+)
 
 // WorldEventType тип мирового события
 type WorldEventType string
@@ -12,6 +16,12 @@ const (
 	WorldEventTypeNatural         WorldEventType = "natural"          // Природное явление (метеоритный дождь, северное сияние и т.д.)
 	WorldEventTypeMarket          WorldEventType = "market"           // Рынок/ярмарка
 	WorldEventTypeQuest           WorldEventType = "quest"            // Специальный квест
+	// События локаций (автоматическая генерация)
+	WorldEventTypeLocationNPC      WorldEventType = "location_npc"      // Встреча с NPC в локации
+	WorldEventTypeLocationItem     WorldEventType = "location_item"     // Находка предмета в локации
+	WorldEventTypeLocationTrap     WorldEventType = "location_trap"     // Ловушка в локации
+	WorldEventTypeLocationPuzzle   WorldEventType = "location_puzzle"   // Загадка в локации
+	WorldEventTypeLocationEncounter WorldEventType = "location_encounter" // Случайная встреча в локации
 )
 
 // WorldEventStatus статус мирового события
@@ -24,6 +34,15 @@ const (
 	WorldEventStatusCancelled WorldEventStatus = "cancelled" // Отменено
 )
 
+// LocationEventMetadata описывает структурированную полезную нагрузку событий локации.
+type LocationEventMetadata struct {
+	Hook            string   `json:"hook"`
+	Options         []string `json:"options,omitempty"`
+	SuggestedChecks []string `json:"suggested_checks,omitempty"`
+	Stakes          string   `json:"stakes,omitempty"`
+	Status          string   `json:"status,omitempty"`
+}
+
 // WorldEvent представляет динамическое событие в игровом мире
 type WorldEvent struct {
 	ID          uint             `gorm:"primaryKey"`
@@ -32,6 +51,7 @@ type WorldEvent struct {
 	Status      WorldEventStatus `gorm:"type:varchar(16);not null"`
 	Name        string           `gorm:"type:varchar(255);not null"`
 	Description string           `gorm:"type:text"`
+	Metadata    datatypes.JSON   `gorm:"type:jsonb"`
 	
 	// Условия активации
 	RequiredDayOfWeek *int    // День недели (0-6, где 0 = воскресенье) или nil если не важно

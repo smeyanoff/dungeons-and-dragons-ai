@@ -11,13 +11,16 @@ import (
 	"time"
 
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
+	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
+	dm_analyzer "dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/dice"
 	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	"dungeons-and-dragons-ai/internal/game/application/history"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
+	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
 	ratingapp "dungeons-and-dragons-ai/internal/game/application/rating"
@@ -43,6 +46,8 @@ import (
 	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	llminfrastructure "dungeons-and-dragons-ai/internal/llm/infrastructure"
+	"dungeons-and-dragons-ai/internal/monitoring"
+	llmlogdomain "dungeons-and-dragons-ai/internal/game/domain/llm_log"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragembeddings "dungeons-and-dragons-ai/internal/rag/infrastructure/embeddings"
 	ragvectorstore "dungeons-and-dragons-ai/internal/rag/infrastructure/vectorstore"
@@ -70,6 +75,19 @@ func (a *dailyQuestProgressAdapterForPlayerAction) Execute(ctx context.Context, 
 		Increment: req.Increment,
 	}
 	return a.uc.Execute(ctx, questReq)
+}
+
+// locationEventRepoAdapter адаптирует persistence.WorldEventRepository к locationeventapp.LocationEventRepository
+type locationEventRepoAdapter struct {
+	repo *persistence.WorldEventRepository
+}
+
+func (a *locationEventRepoAdapter) GetByLocationID(ctx context.Context, locationID uint) ([]world.WorldEvent, error) {
+	return a.repo.GetByLocationID(ctx, locationID)
+}
+
+func (a *locationEventRepoAdapter) Save(ctx context.Context, e *world.WorldEvent) error {
+	return a.repo.Save(ctx, e)
 }
 
 func main() {
@@ -184,7 +202,12 @@ func main() {
 	}
 
 	// Инициализация LLM
-	llm := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
+	baseLLM := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
+	
+	// Инициализация мониторинга LLM
+	llmLogRepo := persistence.NewLLMLogRepository(db)
+	llm := llminfrastructure.NewMonitoredLLM(baseLLM, llmLogRepo)
+	logger.Info("LLM monitoring initialized")
 	
 	// Инициализация ImageGenerator для генерации изображений
 	imageGenerator := llminfrastructure.NewGigachatImageGenerator(gigachatClient, gigachatModel)
@@ -322,7 +345,14 @@ func main() {
 	}
 	// Создаем адаптер для RatingUpdater из updateRatingUC
 	ratingUpdaterAdapterAction := &ratingUpdaterAdapterAction{uc: updateRatingUC}
-	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator, dailyQuestProgressAdapter, getSubscriptionUC, ratingUpdaterAdapterAction)
+	// Создаем анализатор действий игрока для определения необходимости проверок
+	analyzePlayerActionUC := dm_analyzer.NewAnalyzePlayerActionUseCase(llm, eventRepo)
+	
+	// Создаем генератор событий локаций
+	locationEventRepo := &locationEventRepoAdapter{repo: worldEventRepo}
+	generateLocationEventUC := locationeventapp.NewLocationEventGenerator(locationEventRepo)
+	
+	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator, dailyQuestProgressAdapter, getSubscriptionUC, ratingUpdaterAdapterAction, analyzePlayerActionUC, generateLocationEventUC)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
@@ -335,8 +365,10 @@ func main() {
 	rollDiceUC := dice.NewRollDiceUseCase()
 	getQuestsUC := questapp.NewGetQuestsUseCase(sessionRepo, questRepo)
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(sessionRepo)
 	getAchievementsUC := achievementapp.NewGetAchievementsUseCase(achievementRepo, sessionRepo)
 	getSpellsUC := spellapp.NewGetSpellsUseCase(spellRepo, sessionRepo)
+	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(sessionRepo, eventRepo, indexDocUC)
 	// getSubscriptionUC и checkLimitsUC уже созданы выше для использования в лимитере изображений
 	// ratingRepo, getLeaderboardUC и updateRatingUC уже созданы выше для использования в handleActionUC и боте
 
@@ -364,7 +396,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, sessionRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
+	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
 	if err != nil {
 		logger.Fatal("Failed to create bot",
 			logger.ErrorField(err),
@@ -424,6 +456,24 @@ func main() {
 		fmt.Fprintf(w, "Ready")
 	})
 
+	// Запуск HTTP сервера для мониторинга LLM
+	monitoringPort := getEnv("MONITORING_PORT", "8081")
+	monitoringAddr := fmt.Sprintf(":%s", monitoringPort)
+	monitoringServer := monitoring.NewServer(monitoringAddr, llmLogRepo)
+	
+	go func() {
+		if err := monitoringServer.Start(); err != nil && err != http.ErrServerClosed {
+			logger.Error("Monitoring server failed",
+				logger.ErrorField(err),
+				logger.String("addr", monitoringAddr),
+			)
+		}
+	}()
+	logger.Info("LLM monitoring server started",
+		logger.String("addr", monitoringAddr),
+		logger.String("url", fmt.Sprintf("http://localhost:%s", monitoringPort)),
+	)
+	
 	http.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -575,6 +625,7 @@ func runMigrations(db *gorm.DB) error {
 		&event.StoryEvent{},
 		&inventory.Inventory{},
 		&inventory.InventoryItem{},
+		&llmlogdomain.LLMLog{},
 		&combat.Combat{},
 		&combat.CombatParticipant{},
 		&item.Item{},

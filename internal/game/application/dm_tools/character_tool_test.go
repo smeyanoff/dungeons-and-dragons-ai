@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
@@ -14,6 +16,8 @@ import (
 // Mock Session Repository for character tool
 type mockSessionRepoForCharacter struct {
 	getByChatIDFunc func(ctx context.Context, chatID int64) (*session.GameSession, error)
+	saveFunc        func(ctx context.Context, gs *session.GameSession) error
+	savedSession    *session.GameSession
 }
 
 func (m *mockSessionRepoForCharacter) GetByChatID(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -21,6 +25,26 @@ func (m *mockSessionRepoForCharacter) GetByChatID(ctx context.Context, chatID in
 		return m.getByChatIDFunc(ctx, chatID)
 	}
 	return nil, nil
+}
+
+func (m *mockSessionRepoForCharacter) Save(ctx context.Context, gs *session.GameSession) error {
+	m.savedSession = gs
+	if m.saveFunc != nil {
+		return m.saveFunc(ctx, gs)
+	}
+	return nil
+}
+
+// Mock Event Repository for character tool
+type mockEventRepoForCharacter struct {
+	getBySessionIDFunc func(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)
+}
+
+func (m *mockEventRepoForCharacter) GetBySessionID(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error) {
+	if m.getBySessionIDFunc != nil {
+		return m.getBySessionIDFunc(ctx, sessionID, limit)
+	}
+	return []event.StoryEvent{}, nil
 }
 
 func TestGetCharacterStatsTool_Name(t *testing.T) {
@@ -278,14 +302,14 @@ func createTestSessionWithCharacter(t *testing.T, char *character.Character) *se
 
 // Test RequestAbilityCheckTool
 func TestRequestAbilityCheckTool_Name(t *testing.T) {
-	tool := NewRequestAbilityCheckTool(nil, 1)
+	tool := NewRequestAbilityCheckTool(nil, &mockEventRepoForCharacter{}, 1)
 	if tool.Name() != "request_ability_check" {
 		t.Errorf("expected name 'request_ability_check', got '%s'", tool.Name())
 	}
 }
 
 func TestRequestAbilityCheckTool_Description(t *testing.T) {
-	tool := NewRequestAbilityCheckTool(nil, 1)
+	tool := NewRequestAbilityCheckTool(nil, &mockEventRepoForCharacter{}, 1)
 	if tool.Description() == "" {
 		t.Error("expected non-empty description")
 	}
@@ -293,15 +317,16 @@ func TestRequestAbilityCheckTool_Description(t *testing.T) {
 
 func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 	tests := []struct {
-		name          string
-		chatID        int64
-		args          map[string]interface{}
-		setupMock     func(*mockSessionRepoForCharacter)
-		expectedError bool
-		validate      func(*testing.T, interface{})
+		name           string
+		chatID         int64
+		args           map[string]interface{}
+		setupMock      func(*mockSessionRepoForCharacter)
+		setupEventRepo func(*mockEventRepoForCharacter)
+		expectedError  bool
+		validate       func(*testing.T, interface{})
 	}{
 		{
-			name:   "successful ability check without DC",
+			name:   "ability check without DC requires DC",
 			chatID: 12345,
 			args: map[string]interface{}{
 				"ability": "strength",
@@ -314,21 +339,7 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 					return createTestSessionWithCharacter(t, char), nil
 				}
 			},
-			expectedError: false,
-			validate: func(t *testing.T, result interface{}) {
-				resultMap, ok := result.(map[string]interface{})
-				if !ok {
-					t.Fatalf("expected map[string]interface{}, got %T", result)
-				}
-
-				if ability, ok := resultMap["ability"].(string); !ok || ability != "strength" {
-					t.Errorf("expected ability='strength', got %v", resultMap["ability"])
-				}
-
-				if modifier, ok := resultMap["modifier"].(int); !ok || modifier != 3 {
-					t.Errorf("expected modifier=3 for STR 16, got %v", modifier)
-				}
-			},
+			expectedError: true, // DC is required
 		},
 		{
 			name:   "successful ability check with DC",
@@ -362,6 +373,108 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 
 				if _, ok := resultMap["success_chance_percent"]; !ok {
 					t.Error("expected success_chance_percent in result")
+				}
+			},
+		},
+		{
+			name:   "ability check rejected when pending exists",
+			chatID: 12345,
+			args: map[string]interface{}{
+				"ability": "strength",
+				"dc":      12,
+			},
+			setupMock: func(repo *mockSessionRepoForCharacter) {
+				char, _ := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{
+					Strength: 12,
+				})
+				repo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					gs := createTestSessionWithCharacter(t, char)
+					gs.SetPendingAbilityCheck("pending-1", "strength", 12)
+					return gs, nil
+				}
+			},
+			expectedError: false,
+			validate: func(t *testing.T, result interface{}) {
+				resultMap, ok := result.(map[string]interface{})
+				if !ok {
+					t.Fatalf("expected map[string]interface{}, got %T", result)
+				}
+				if alreadyPending, ok := resultMap["already_pending"].(bool); !ok || !alreadyPending {
+					t.Errorf("expected already_pending=true, got %v", resultMap["already_pending"])
+				}
+			},
+		},
+		{
+			name:   "ability check cooldown for recent similar check",
+			chatID: 12345,
+			args: map[string]interface{}{
+				"ability": "dexterity",
+				"dc":      13,
+			},
+			setupMock: func(repo *mockSessionRepoForCharacter) {
+				char, _ := character.NewCharacter("Test Hero", character.ClassRogue, character.RaceHuman, character.Stats{
+					Dexterity: 14,
+				})
+				repo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					return createTestSessionWithCharacter(t, char), nil
+				}
+			},
+			setupEventRepo: func(repo *mockEventRepoForCharacter) {
+				repo.getBySessionIDFunc = func(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error) {
+					return []event.StoryEvent{
+						{
+							AuthorType: event.AuthorTypeDM,
+							Content:    "Проверка dexterity выполнялась недавно без результата",
+							CreatedAt:  time.Now().Add(-1 * time.Minute),
+						},
+					}, nil
+				}
+			},
+			expectedError: false,
+			validate: func(t *testing.T, result interface{}) {
+				resultMap, ok := result.(map[string]interface{})
+				if !ok {
+					t.Fatalf("expected map[string]interface{}, got %T", result)
+				}
+				if cooldown, ok := resultMap["cooldown"].(bool); !ok || !cooldown {
+					t.Errorf("expected cooldown=true, got %v", resultMap["cooldown"])
+				}
+			},
+		},
+		{
+			name:   "ability check blocked when already checked",
+			chatID: 12345,
+			args: map[string]interface{}{
+				"ability": "wisdom",
+				"dc":      14,
+			},
+			setupMock: func(repo *mockSessionRepoForCharacter) {
+				char, _ := character.NewCharacter("Test Hero", character.ClassCleric, character.RaceHuman, character.Stats{
+					Wisdom: 16,
+				})
+				repo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					return createTestSessionWithCharacter(t, char), nil
+				}
+			},
+			setupEventRepo: func(repo *mockEventRepoForCharacter) {
+				repo.getBySessionIDFunc = func(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error) {
+					return []event.StoryEvent{
+						{
+							AuthorType: event.AuthorTypeDM,
+							Content:    "Успех: wisdom проверка пройдена ранее",
+							CreatedAt:  time.Now().Add(-10 * time.Minute),
+						},
+					}, nil
+				}
+			},
+			expectedError: false,
+			validate: func(t *testing.T, result interface{}) {
+				resultMap, ok := result.(map[string]interface{})
+				if !ok {
+					t.Fatalf("expected map[string]interface{}, got %T", result)
+				}
+				if alreadyChecked, ok := resultMap["already_checked"].(bool); !ok || !alreadyChecked {
+					t.Errorf("expected already_checked=true, got %v", resultMap["already_checked"])
 				}
 			},
 		},
@@ -412,7 +525,11 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 				tt.setupMock(repo)
 			}
 
-			tool := NewRequestAbilityCheckTool(repo, tt.chatID)
+			eventRepo := &mockEventRepoForCharacter{}
+			if tt.setupEventRepo != nil {
+				tt.setupEventRepo(eventRepo)
+			}
+			tool := NewRequestAbilityCheckTool(repo, eventRepo, tt.chatID)
 			result, err := tool.Execute(context.Background(), tt.args)
 
 			if tt.expectedError {

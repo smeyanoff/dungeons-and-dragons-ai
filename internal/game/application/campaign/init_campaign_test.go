@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
@@ -23,6 +22,10 @@ type mockLLM struct {
 func (m *mockLLM) Generate(ctx context.Context, prompt string) (string, error) {
 	if m.generateFunc != nil {
 		return m.generateFunc(ctx, prompt)
+	}
+	// Backward-compatible fallback: a lot of older tests stub GenerateWithMaxTokens only.
+	if m.generateWithMaxTokensFunc != nil {
+		return m.generateWithMaxTokensFunc(ctx, prompt, 0)
 	}
 	return "", nil
 }
@@ -52,13 +55,6 @@ func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []
 		ToolCalls: nil,
 		Finished:  true,
 	}, nil
-}
-
-// asLLM converts mockLLM to domain.LLM, bypassing compile-time type checking
-// This is needed because the compiler can't resolve dm_tools.Tool in the interface definition
-// The mock correctly implements the interface at runtime, but the compiler can't verify it
-func asLLM(m *mockLLM) domain.LLM {
-	return *(*domain.LLM)(unsafe.Pointer(m))
 }
 
 // Mock World Repository
@@ -490,8 +486,20 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 						jsonBytes, _ := json.Marshal(response)
 						return string(jsonBytes), nil
 					}
-					// Call 3-4: NPCs for each location
-					if callCount == 3 {
+					// Call 3-4: Predefined checks for each location (added in newer campaign generation flow)
+					if callCount == 3 || callCount == 4 {
+						response := struct {
+							PredefinedChecks []PredefinedCheckDTO `json:"predefined_checks"`
+						}{
+							PredefinedChecks: []PredefinedCheckDTO{
+								{Ability: "wisdom", DC: 12, Description: "Test check", LocationHint: "Near the entrance"},
+							},
+						}
+						jsonBytes, _ := json.Marshal(response)
+						return string(jsonBytes), nil
+					}
+					// Call 5-6: NPCs for each location
+					if callCount == 5 {
 						response := struct {
 							NPCs []NPCDTO `json:"npcs"`
 						}{
@@ -500,7 +508,7 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 						jsonBytes, _ := json.Marshal(response)
 						return string(jsonBytes), nil
 					}
-					if callCount == 4 {
+					if callCount == 6 {
 						response := struct {
 							NPCs []NPCDTO `json:"npcs"`
 						}{
@@ -509,8 +517,8 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 						jsonBytes, _ := json.Marshal(response)
 						return string(jsonBytes), nil
 					}
-					// Call 5: Connections
-					if callCount == 5 {
+					// Call 7: Connections
+					if callCount == 7 {
 						response := struct {
 							Connections map[string][]ConnectionDTO `json:"connections"`
 						}{
@@ -716,7 +724,7 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 				tt.setupMocks(llm, worldRepo)
 			}
 
-			uc := NewInitCampaignUseCase(asLLM(llm), worldRepo)
+			uc := NewInitCampaignUseCase(llm, worldRepo)
 
 			result, err := uc.Execute(context.Background(), tt.worldTheme)
 
@@ -883,7 +891,7 @@ func TestBuildWorld(t *testing.T) {
 	llm := &mockLLM{}
 	worldRepo := &mockWorldRepo{}
 
-	uc := NewInitCampaignUseCase(asLLM(llm), worldRepo)
+	uc := NewInitCampaignUseCase(llm, worldRepo)
 
 	mainQuest := &QuestDTO{
 		Title:       "Test Quest",
@@ -937,7 +945,7 @@ func TestBuildWorld_WithConnections(t *testing.T) {
 	llm := &mockLLM{}
 	worldRepo := &mockWorldRepo{}
 
-	uc := NewInitCampaignUseCase(asLLM(llm), worldRepo)
+	uc := NewInitCampaignUseCase(llm, worldRepo)
 
 	mainQuest := &QuestDTO{
 		Title:       "Test Quest",
@@ -1007,7 +1015,7 @@ func TestBuildWorld_WorldRepoSaveError(t *testing.T) {
 		},
 	}
 
-	uc := NewInitCampaignUseCase(asLLM(llm), worldRepo)
+	uc := NewInitCampaignUseCase(llm, worldRepo)
 
 	mainQuest := &QuestDTO{
 		Title:       "Test Quest",

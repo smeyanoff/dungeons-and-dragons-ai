@@ -34,11 +34,11 @@ func (uc *GetMapUseCase) Execute(
 	}
 
 	// Формируем карту мира
-	return uc.generateMap(&gs.World), nil
+	return uc.generateMap(&gs.World, gs.CurrentLocationID), nil
 }
 
 // generateMap создает ASCII визуализацию карты мира на основе связей между локациями
-func (uc *GetMapUseCase) generateMap(w *world.World) string {
+func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) string {
 	if len(w.Locations) == 0 {
 		return "🗺️ Карта мира пуста. Локации еще не открыты."
 	}
@@ -53,10 +53,38 @@ func (uc *GetMapUseCase) generateMap(w *world.World) string {
 		locationMap[w.Locations[i].ID] = &w.Locations[i]
 	}
 
+	// Определяем текущую локацию (если не задана — считаем первой локацией мира)
+	var currentLoc *world.Location
+	if currentLocationID != nil {
+		currentLoc = locationMap[*currentLocationID]
+	}
+	if currentLoc == nil {
+		currentLoc = &w.Locations[0]
+	}
+
+	// Короткий блок “где ты сейчас” + доступные выходы
+	parts = append(parts, fmt.Sprintf("📌 Сейчас вы здесь: %s", currentLoc.Name))
+	if len(currentLoc.Connections) > 0 {
+		var exits []string
+		for _, conn := range currentLoc.Connections {
+			sym := uc.getDirectionSymbol(conn.Direction)
+			exits = append(exits, fmt.Sprintf("%s %s", sym, strings.ToLower(conn.Direction)))
+		}
+		parts = append(parts, "Выходы: "+strings.Join(exits, ", "))
+	} else {
+		parts = append(parts, "Выходы: нет известных путей.")
+	}
+	parts = append(parts, "")
+
 	// Формируем список локаций с их связями
 	for i := range w.Locations {
 		loc := &w.Locations[i]
-		parts = append(parts, fmt.Sprintf("📍 %s", loc.Name))
+		isCurrent := currentLoc != nil && loc.ID == currentLoc.ID
+		prefix := "📍"
+		if isCurrent {
+			prefix = "📍▶️"
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", prefix, loc.Name))
 		
 		if loc.Description != "" {
 			// Ограничиваем длину описания для компактности

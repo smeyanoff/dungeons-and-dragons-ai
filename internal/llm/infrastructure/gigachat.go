@@ -3,6 +3,7 @@ package infrastructure
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/llm/domain"
@@ -10,18 +11,33 @@ import (
 )
 
 type GigachatLLM struct {
-	client *gigachat.Client
-	model  string
+	client     *gigachat.Client
+	model      string
+	rateLimiter LLMRateLimiter // Rate limiter для предотвращения ддос атак
 }
 
 func NewGigachatLLM(client *gigachat.Client, model string) domain.LLM {
+	// Создаем rate limiter с минимальной задержкой 2 секунды между запросами
+	rateLimiter := NewSimpleLLMRateLimiter(2 * time.Second)
+	return NewGigachatLLMWithRateLimiter(client, model, rateLimiter)
+}
+
+func NewGigachatLLMWithRateLimiter(client *gigachat.Client, model string, rateLimiter LLMRateLimiter) domain.LLM {
 	return &GigachatLLM{
-		client: client,
-		model:  model,
+		client:      client,
+		model:       model,
+		rateLimiter: rateLimiter,
 	}
 }
 
 func (g *GigachatLLM) Generate(ctx context.Context, prompt string) (string, error) {
+	// Ожидаем rate limit перед запросом
+	if g.rateLimiter != nil {
+		if err := g.rateLimiter.Wait(ctx); err != nil {
+			return "", fmt.Errorf("rate limiter wait failed: %w", err)
+		}
+	}
+	
 	resp, err := g.client.Chat(ctx, g.model, prompt)
 	if err != nil {
 		return "", err
@@ -30,6 +46,13 @@ func (g *GigachatLLM) Generate(ctx context.Context, prompt string) (string, erro
 }
 
 func (g *GigachatLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, maxTokens int) (string, error) {
+	// Ожидаем rate limit перед запросом
+	if g.rateLimiter != nil {
+		if err := g.rateLimiter.Wait(ctx); err != nil {
+			return "", fmt.Errorf("rate limiter wait failed: %w", err)
+		}
+	}
+	
 	resp, err := g.client.ChatWithMaxTokens(ctx, g.model, prompt, &maxTokens)
 	if err != nil {
 		return "", err
@@ -43,6 +66,13 @@ func (g *GigachatLLM) GenerateWithTools(ctx context.Context, prompt string, tool
 	// Добавляем описание инструментов в промпт
 	toolsPrompt := dm_tools.BuildToolsPrompt(tools)
 	enhancedPrompt := prompt + toolsPrompt
+	
+	// Ожидаем rate limit перед запросом
+	if g.rateLimiter != nil {
+		if err := g.rateLimiter.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("rate limiter wait failed: %w", err)
+		}
+	}
 	
 	// Первый шаг: генерируем ответ с возможными вызовами инструментов
 	resp, err := g.client.ChatWithMaxTokens(ctx, g.model, enhancedPrompt, nil)

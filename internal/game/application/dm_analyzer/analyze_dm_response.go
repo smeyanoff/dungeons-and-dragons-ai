@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	jsonrepair "dungeons-and-dragons-ai/internal/game/application/jsonrepair"
+	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
@@ -115,6 +117,31 @@ type AnalyzeDMResponseUseCase struct {
 	userID int64 // ID пользователя для генерации изображений (Telegram User ID)
 	checkDailyProgressUC DailyQuestProgressChecker // Опциональная зависимость для отслеживания ежедневных заданий
 	tgUserID int64 // Telegram User ID для отслеживания ежедневных заданий
+	generateLocationEventUC LocationEventGenerator // Опциональная зависимость для генерации событий локаций
+	sessionRepo            SessionRepository       // Репозиторий сессий для поиска локаций
+}
+
+// SessionRepository интерфейс для доступа к сессии (для поиска локаций)
+type SessionRepository interface {
+	GetByChatID(ctx context.Context, chatID int64) (*SessionSnapshot, error)
+}
+
+// SessionSnapshot — упрощенная структура сессии (для доступа к миру и локациям)
+type SessionSnapshot struct {
+	ID    uint
+	World WorldSnapshot
+}
+
+// WorldSnapshot — упрощенная структура мира (для доступа к локациям)
+type WorldSnapshot struct {
+	ID        uint
+	Locations []LocationSnapshot
+}
+
+// LocationSnapshot — упрощенная структура локации (для поиска по имени)
+type LocationSnapshot struct {
+	ID   uint
+	Name string
 }
 
 // AchievementChecker интерфейс для проверки достижений
@@ -226,6 +253,21 @@ func (uc *AnalyzeDMResponseUseCase) SetImageGenerationService(imageService Image
 func (uc *AnalyzeDMResponseUseCase) SetCheckDailyProgress(checkDailyProgressUC DailyQuestProgressChecker, tgUserID int64) {
 	uc.checkDailyProgressUC = checkDailyProgressUC
 	uc.tgUserID = tgUserID
+}
+
+// LocationEventGenerator интерфейс для генерации событий локаций
+type LocationEventGenerator interface {
+	Execute(ctx context.Context, req locationeventapp.GenerateLocationEventRequest) (*locationeventapp.GenerateLocationEventResponse, error)
+}
+
+// SetLocationEventGenerator устанавливает генератор событий локаций
+func (uc *AnalyzeDMResponseUseCase) SetLocationEventGenerator(generator LocationEventGenerator) {
+	uc.generateLocationEventUC = generator
+}
+
+// SetSessionRepository устанавливает репозиторий сессий для поиска локаций
+func (uc *AnalyzeDMResponseUseCase) SetSessionRepository(sessionRepo SessionRepository) {
+	uc.sessionRepo = sessionRepo
 }
 
 // Execute анализирует ответ DM и выполняет необходимые действия
@@ -398,6 +440,27 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 
 	// Обрабатываем посещение новой локации
 	if analysis.LocationVisited != nil && analysis.LocationVisited.IsFirstVisit {
+		// Автоматически генерируем событие локации при первом посещении
+		if uc.generateLocationEventUC != nil && uc.sessionRepo != nil {
+			// Ищем локацию по имени в мире
+			locationID := uc.findLocationIDByName(ctx, analysis.LocationVisited.Name)
+			if locationID > 0 {
+				locationReq := locationeventapp.GenerateLocationEventRequest{
+					WorldID:      uc.worldID,
+					LocationID:   locationID,
+					LocationName: analysis.LocationVisited.Name,
+					IsFirstVisit: true,
+				}
+				eventResp, err := uc.generateLocationEventUC.Execute(ctx, locationReq)
+				if err != nil {
+					log.Printf("[DM Analyzer] Failed to generate location event: %v", err)
+				} else if eventResp != nil && eventResp.Description != "" {
+					log.Printf("[DM Analyzer] Location event generated: %s", eventResp.Description)
+					// Событие сохранено в БД, будет включено в контекст для DM при следующем действии
+				}
+			}
+		}
+		
 		// Автоматически генерируем изображение для локации
 		if uc.imageGenerationService != nil && uc.userID > 0 {
 			generatedImage := uc.generateImageForLocation(ctx, *analysis.LocationVisited)
@@ -962,34 +1025,7 @@ func buildAnalysisPrompt(dmResponse string) string {
 
 // cleanJSONResponse очищает ответ LLM от markdown блоков кода и лишнего текста
 func cleanJSONResponse(raw string) string {
-	raw = strings.TrimSpace(raw)
-
-	// Удаляем markdown блоки кода
-	if strings.HasPrefix(raw, "```json") {
-		raw = strings.TrimPrefix(raw, "```json")
-		raw = strings.TrimSpace(raw)
-	} else if strings.HasPrefix(raw, "```") {
-		raw = strings.TrimPrefix(raw, "```")
-		raw = strings.TrimSpace(raw)
-	}
-
-	// Удаляем закрывающий markdown блок
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
-
-	// Удаляем текст до первого { (если есть префиксный текст)
-	firstBrace := strings.Index(raw, "{")
-	if firstBrace > 0 {
-		raw = raw[firstBrace:]
-	}
-
-	// Удаляем текст после последнего } (если есть постфиксный текст)
-	lastBrace := strings.LastIndex(raw, "}")
-	if lastBrace >= 0 && lastBrace < len(raw)-1 {
-		raw = raw[:lastBrace+1]
-	}
-
-	return strings.TrimSpace(raw)
+	return jsonrepair.Clean(raw)
 }
 
 // aggressiveJSONClean применяет более агрессивную очистку JSON
@@ -1052,6 +1088,12 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 		return "{}"
 	}
 
+	repaired := jsonrepair.Repair(jsonStr)
+	if json.Valid([]byte(repaired)) {
+		return repaired
+	}
+	jsonStr = repaired
+
 	// Если строка не начинается с {, пытаемся найти начало JSON
 	if !strings.HasPrefix(jsonStr, "{") {
 		firstBrace := strings.Index(jsonStr, "{")
@@ -1069,6 +1111,7 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 	escapeNext := false
 	lastValidPos := 0
 
+scanLoop:
 	for i := 0; i < len(jsonStr); i++ {
 		char := jsonStr[i]
 
@@ -1106,7 +1149,7 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 			if openBraces < 0 {
 				// Закрывающих скобок больше, чем открывающих - обрезаем до этого места
 				jsonStr = jsonStr[:i]
-				break
+				break scanLoop
 			}
 		case '[':
 			openBrackets++
@@ -1115,7 +1158,7 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 			if openBrackets < 0 {
 				// Закрывающих скобок больше, чем открывающих - обрезаем до этого места
 				jsonStr = jsonStr[:i]
-				break
+				break scanLoop
 			}
 		}
 	}
@@ -1146,4 +1189,27 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 	}
 
 	return result
+}
+
+// findLocationIDByName ищет локацию по имени в мире и возвращает её ID
+func (uc *AnalyzeDMResponseUseCase) findLocationIDByName(ctx context.Context, locationName string) uint {
+	if uc.sessionRepo == nil || locationName == "" {
+		return 0
+	}
+
+	// Получаем сессию для доступа к миру
+	session, err := uc.sessionRepo.GetByChatID(ctx, uc.chatID)
+	if err != nil || session == nil {
+		return 0
+	}
+
+	// Ищем локацию по имени (без учета регистра)
+	locationNameLower := strings.ToLower(locationName)
+	for _, loc := range session.World.Locations {
+		if strings.ToLower(loc.Name) == locationNameLower {
+			return loc.ID
+		}
+	}
+
+	return 0
 }

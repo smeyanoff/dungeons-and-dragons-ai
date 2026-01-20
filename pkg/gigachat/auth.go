@@ -318,7 +318,30 @@ func (a *authClient) requestToken(ctx context.Context, clientID, authHeader, sco
 		return nil, fmt.Errorf("failed to decode token response: %w", err)
 	}
 
+	if token.ExpiresAt > 0 {
+		token.ExpiresAt = normalizeExpiresAt(token.ExpiresAt, time.Now().Unix())
+	}
+
 	return &token, nil
+}
+
+func normalizeExpiresAt(expiresAt int64, now int64) int64 {
+	if expiresAt <= 0 {
+		return expiresAt
+	}
+
+	// Если приходит в миллисекундах (типично > 1e12), нормализуем в секунды
+	if expiresAt > 1_000_000_000_000 {
+		return expiresAt / 1000
+	}
+
+	// Санити-чек: слишком далекое будущее (например, год 58022) → трактуем как миллисекунды
+	const maxReasonableFutureSeconds = 60 * 60 * 24 * 365 * 10 // 10 лет
+	if expiresAt-now > maxReasonableFutureSeconds {
+		return expiresAt / 1000
+	}
+
+	return expiresAt
 }
 
 // invalidateToken инвалидирует текущий токен, заставляя перезапросить его при следующем вызове

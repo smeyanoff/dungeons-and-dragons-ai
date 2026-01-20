@@ -112,6 +112,21 @@ func (w *World) AddLocation(loc *location.Location) {
 	w.Locations = append(w.Locations, worldLoc)
 }
 
+// AddLocationWithChecks добавляет локацию с предопределенными проверками
+func (w *World) AddLocationWithChecks(name, description string, npcs []NPC, predefinedChecks []PredefinedCheck) {
+	worldLoc := Location{
+		Name:        name,
+		Description: description,
+		NPCs:        npcs,
+	}
+	// Устанавливаем предопределенные проверки
+	if err := worldLoc.SetPredefinedChecks(predefinedChecks); err != nil {
+		// Логируем ошибку, но не прерываем выполнение
+		// В production можно использовать logger
+	}
+	w.Locations = append(w.Locations, worldLoc)
+}
+
 type World struct {
 	ID          uint `gorm:"primaryKey"`
 	Name        string

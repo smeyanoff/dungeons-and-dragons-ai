@@ -228,8 +228,9 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				if p == nil {
 					t.Fatal("expected player, got nil")
 				}
-				if p.Character.Stats.Strength != 16 {
-					t.Errorf("expected strength 16, got %d", p.Character.Stats.Strength)
+				// Для Human применяется расовый бонус +1 ко всем характеристикам.
+				if p.Character.Stats.Strength != 17 {
+					t.Errorf("expected strength 17 (16 + human bonus), got %d", p.Character.Stats.Strength)
 				}
 			},
 		},

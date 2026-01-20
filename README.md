@@ -42,30 +42,34 @@ cp .env.example .env
 ### 3. Запустите проект
 
 ```bash
-docker-compose up -d
+# Инфраструктура (PostgreSQL + Qdrant)
+docker compose -f build/docker-compose.yml up -d
+
+# Бот (нужен TELEGRAM_BOT_TOKEN)
+docker compose -f build/docker-compose.yml --profile bot up -d
 ```
 
 Это запустит:
 - PostgreSQL базу данных
 - Qdrant векторное хранилище
-- Telegram бота
+- Telegram бота (только с профилем `bot`)
 
 ### 4. Проверьте логи
 
 ```bash
-docker-compose logs -f bot
+docker compose -f build/docker-compose.yml --profile bot logs -f bot
 ```
 
 ### 5. Остановка
 
 ```bash
-docker-compose down
+docker compose -f build/docker-compose.yml down
 ```
 
 Для удаления всех данных (включая базу данных):
 
 ```bash
-docker-compose down -v
+docker compose -f build/docker-compose.yml down -v
 ```
 
 ## Локальная разработка
@@ -92,7 +96,7 @@ export GIGACHAT_CLIENT_SECRET="your_client_secret"
 Через Docker Compose (только зависимости):
 
 ```bash
-docker-compose up -d postgres qdrant
+docker compose -f build/docker-compose.yml up -d postgres qdrant
 ```
 
 Или установите локально:

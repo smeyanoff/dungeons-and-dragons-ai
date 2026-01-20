@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
 	"testing"
@@ -13,9 +14,11 @@ import (
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
 	"dungeons-and-dragons-ai/internal/game/application/dice"
-	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
+	dm_analyzer "dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/history"
+	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
+	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
 	ratingapp "dungeons-and-dragons-ai/internal/game/application/rating"
@@ -23,12 +26,13 @@ import (
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
-	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
-	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/rating"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	worlddomain "dungeons-and-dragons-ai/internal/game/domain/world"
+	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
+	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
+	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	llminfrastructure "dungeons-and-dragons-ai/internal/llm/infrastructure"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragembeddings "dungeons-and-dragons-ai/internal/rag/infrastructure/embeddings"
@@ -43,30 +47,30 @@ import (
 
 // testConfig содержит конфигурацию для интеграционных тестов
 type testConfig struct {
-	db                    *gorm.DB
-	qdrantClient          *qdrant.Client
-	chatID                int64
-	tgUserID              int64
-	ctx                   context.Context
-	initCampaignUC        *campaign.InitCampaignUseCase
-	handleActionUC        *player_action.HandleActionUseCase
-	createCharacterUC     *characterapp.CreateCharacterUseCase
-	getHistoryUC          *history.GetHistoryUseCase
-	getInventoryUC        *inventoryapp.GetInventoryUseCase
-	addItemUC             *inventoryapp.AddItemUseCase
-	handleCombatUC        *combatapp.HandleCombatUseCase
-	rollDiceUC            *dice.RollDiceUseCase
-	getQuestsUC           *questapp.GetQuestsUseCase
-	getDailyQuestsUC      *questapp.GetDailyQuestsUseCase
-	checkDailyProgressUC  *questapp.CheckDailyQuestProgressUseCase
-	getMapUC              *mapapp.GetMapUseCase
-	getAchievementsUC      *achievementapp.GetAchievementsUseCase
-	getSpellsUC           *spellapp.GetSpellsUseCase
-	useSpellUC            *spellapp.UseSpellUseCase
-	getLeaderboardUC      *ratingapp.GetLeaderboardUseCase
-	updateRatingUC        *ratingapp.UpdateRatingUseCase
-	addExperienceUC       *characterapp.AddExperienceUseCase
-	sessionRepo           session.Repository
+	db                   *gorm.DB
+	qdrantClient         *qdrant.Client
+	chatID               int64
+	tgUserID             int64
+	ctx                  context.Context
+	initCampaignUC       *campaign.InitCampaignUseCase
+	handleActionUC       *player_action.HandleActionUseCase
+	createCharacterUC    *characterapp.CreateCharacterUseCase
+	getHistoryUC         *history.GetHistoryUseCase
+	getInventoryUC       *inventoryapp.GetInventoryUseCase
+	addItemUC            *inventoryapp.AddItemUseCase
+	handleCombatUC       *combatapp.HandleCombatUseCase
+	rollDiceUC           *dice.RollDiceUseCase
+	getQuestsUC          *questapp.GetQuestsUseCase
+	getDailyQuestsUC     *questapp.GetDailyQuestsUseCase
+	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase
+	getMapUC             *mapapp.GetMapUseCase
+	getAchievementsUC    *achievementapp.GetAchievementsUseCase
+	getSpellsUC          *spellapp.GetSpellsUseCase
+	useSpellUC           *spellapp.UseSpellUseCase
+	getLeaderboardUC     *ratingapp.GetLeaderboardUseCase
+	updateRatingUC       *ratingapp.UpdateRatingUseCase
+	addExperienceUC      *characterapp.AddExperienceUseCase
+	sessionRepo          session.Repository
 }
 
 // setupIntegrationTest настраивает окружение для интеграционных тестов
@@ -97,6 +101,15 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	}
 	if err := sqlDB.Ping(); err != nil {
 		t.Fatalf("Не удалось выполнить ping к БД: %v", err)
+	}
+
+	// Интеграционные тесты могут запускаться на БД со старой схемой (volume).
+	// Гарантируем наличие новых колонок перед тестами.
+	if err := db.AutoMigrate(&session.GameSession{}); err != nil {
+		t.Fatalf("Не удалось выполнить AutoMigrate для game_sessions: %v", err)
+	}
+	if err := db.AutoMigrate(&worlddomain.WorldEvent{}); err != nil {
+		t.Fatalf("Не удалось выполнить AutoMigrate для world_events: %v", err)
 	}
 
 	// Подключение к Qdrant
@@ -215,25 +228,29 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	// Создаем адаптер для AchievementRepository для использования в rating пакете
 	achievementRepoAdapter := &ratingAchievementRepoAdapter{repo: achievementRepo}
 	updateRatingUC := ratingapp.NewUpdateRatingUseCase(ratingRepo, sessionRepo, playerRepo, achievementRepoAdapter)
-	
+
 	// Создаем getSubscriptionUC для handleActionUC
 	getSubscriptionUC := subscriptionapp.NewGetSubscriptionUseCase(subscriptionRepo)
 
 	// Адаптер для daily quest progress (как в main.go)
 	dailyQuestProgressAdapter := &dailyQuestProgressAdapterForPlayerAction{uc: checkDailyProgressUC}
-	
+
 	// Адаптер для RatingUpdater из updateRatingUC для player_action
 	ratingUpdaterAdapterForPlayerAction := &ratingUpdaterAdapterForPlayerAction{uc: updateRatingUC}
-	
+
 	// Настраиваем обновление рейтингов при получении опыта
 	ratingUpdaterAdapterForCharacter := &ratingUpdaterAdapter{uc: updateRatingUC}
 	addExperienceUC.SetRatingUpdater(ratingUpdaterAdapterForCharacter)
-	
+
+	analyzePlayerActionUC := dm_analyzer.NewAnalyzePlayerActionUseCase(llm, eventRepo)
+	locationEventGenerator := locationeventapp.NewLocationEventGenerator(worldEventRepo)
+
 	handleActionUC := player_action.NewHandleActionUseCase(
 		llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo,
 		inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC,
 		notificationService, generateImageUC, useSpellUC, responseCache, actionValidator,
 		dailyQuestProgressAdapter, getSubscriptionUC, ratingUpdaterAdapterForPlayerAction,
+		analyzePlayerActionUC, locationEventGenerator,
 	)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
@@ -259,8 +276,7 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	}
 
 	// Тестовые ID
-	chatID := int64(123456789)
-	tgUserID := int64(123456789)
+	chatID, tgUserID := generateTestIDs(t)
 
 	return &testConfig{
 		db:                   db,
@@ -285,7 +301,7 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 		useSpellUC:           useSpellUC,
 		getLeaderboardUC:     getLeaderboardUC,
 		updateRatingUC:       updateRatingUC,
-		addExperienceUC:    addExperienceUC,
+		addExperienceUC:      addExperienceUC,
 		sessionRepo:          sessionRepo,
 	}
 }
@@ -301,9 +317,9 @@ func (a *ratingAchievementRepoAdapter) GetAchievementProgress(ctx context.Contex
 		return nil, err
 	}
 	return &ratingapp.AchievementProgress{
-		PlayerID:     progress.PlayerID,
+		PlayerID:      progress.PlayerID,
 		AchievementID: progress.AchievementID,
-		CurrentValue: progress.CurrentValue,
+		CurrentValue:  progress.CurrentValue,
 	}, nil
 }
 
@@ -360,7 +376,7 @@ func cleanupTest(t *testing.T, cfg *testConfig) {
 		// Получаем ID сессии для удаления связанных записей
 		var sessionID uint
 		cfg.db.Raw("SELECT id FROM game_sessions WHERE chat_id = ?", cfg.chatID).Scan(&sessionID)
-		
+
 		if sessionID > 0 {
 			// Удаляем дочерние записи в правильном порядке (сначала самые глубокие)
 			// 1. Удаляем участников боя перед боями
@@ -380,7 +396,7 @@ func cleanupTest(t *testing.T, cfg *testConfig) {
 			// 8. Удаляем сессию в последнюю очередь
 			cfg.db.Exec("DELETE FROM game_sessions WHERE id = ?", sessionID)
 		}
-		
+
 		// Также удаляем по tg_user_id на случай, если что-то осталось
 		cfg.db.Exec("DELETE FROM players WHERE tg_user_id = ?", cfg.tgUserID)
 		cfg.db.Exec("DELETE FROM characters WHERE id IN (SELECT character_id FROM players WHERE tg_user_id = ?)", cfg.tgUserID)
@@ -557,7 +573,7 @@ func TestGameFlow_CompleteScenario(t *testing.T) {
 
 	t.Run("11. Просмотр достижений", func(t *testing.T) {
 		req := achievementapp.GetAchievementsRequest{
-			ChatID:  chatID,
+			ChatID:   chatID,
 			TgUserID: tgUserID,
 		}
 		achievementsText, err := cfg.getAchievementsUC.Execute(ctx, req)
@@ -572,7 +588,7 @@ func TestGameFlow_CompleteScenario(t *testing.T) {
 
 	t.Run("12. Просмотр заклинаний", func(t *testing.T) {
 		req := spellapp.GetSpellsRequest{
-			ChatID:  chatID,
+			ChatID:   chatID,
 			TgUserID: tgUserID,
 		}
 		spellsText, err := cfg.getSpellsUC.Execute(ctx, req)
@@ -732,8 +748,7 @@ func TestCharacterCreation(t *testing.T) {
 				}
 			}
 
-			// Очищаем после теста
-			cfg.db.Exec("DELETE FROM game_sessions WHERE chat_id = ?", tc.chatID)
+			// Очищаем после теста: общая очистка делается в defer cleanupTest (TRUNCATE ... CASCADE).
 		})
 	}
 }
@@ -1522,4 +1537,15 @@ func parsePort(portStr string) int {
 		return 6334
 	}
 	return port
+}
+
+func generateTestIDs(t *testing.T) (int64, int64) {
+	t.Helper()
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	base := time.Now().UnixNano()
+	// Небольшой джиттер, чтобы избежать одинаковых значений при быстрых вызовах
+	jitter := rng.Int63n(1000)
+	chatID := base + jitter
+	// В приватных чатах Telegram chat_id == user_id.
+	return chatID, chatID
 }

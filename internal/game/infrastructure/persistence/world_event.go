@@ -62,3 +62,12 @@ func (r *WorldEventRepository) GetByID(ctx context.Context, id uint) (*world.Wor
 func (r *WorldEventRepository) Delete(ctx context.Context, id uint) error {
 	return r.db.WithContext(ctx).Delete(&world.WorldEvent{}, id).Error
 }
+
+// GetByLocationID получает события для конкретной локации
+func (r *WorldEventRepository) GetByLocationID(ctx context.Context, locationID uint) ([]world.WorldEvent, error) {
+	var events []world.WorldEvent
+	err := r.db.WithContext(ctx).
+		Where("required_location_id = ?", locationID).
+		Find(&events).Error
+	return events, err
+}

@@ -8,6 +8,26 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 )
 
+// getAbilityNameForContext возвращает русское название характеристики для отображения в контексте
+func getAbilityNameForContext(ability string) string {
+	switch ability {
+	case "strength":
+		return "Проверка Силы (STR)"
+	case "dexterity":
+		return "Проверка Ловкости (DEX)"
+	case "constitution":
+		return "Проверка Телосложения (CON)"
+	case "intelligence":
+		return "Проверка Интеллекта (INT)"
+	case "wisdom":
+		return "Проверка Мудрости (WIS)"
+	case "charisma":
+		return "Проверка Харизмы (CHA)"
+	default:
+		return "Проверка характеристики"
+	}
+}
+
 type SimpleContextBuilder struct{}
 
 func NewSimpleContextBuilder() *SimpleContextBuilder {
@@ -34,25 +54,28 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 		parts = append(parts, fmt.Sprintf("Описание квеста: %s", gs.World.MainQuest.Description))
 	}
 
-	// Активные мировые события
-	if len(gs.World.Events) > 0 {
-		activeEvents := make([]string, 0)
-		for _, event := range gs.World.Events {
-			if event.Status == "active" {
-				activeEvents = append(activeEvents, fmt.Sprintf("- %s (%s): %s", event.Name, event.Type, event.Description))
-			}
-		}
-		if len(activeEvents) > 0 {
-			parts = append(parts, "\nАктивные события в мире:")
-			parts = append(parts, activeEvents...)
-		}
-	}
-
-	// Локации
+	// Локации с предопределенными проверками
 	if len(gs.World.Locations) > 0 {
 		parts = append(parts, "\nЛокации:")
 		for _, loc := range gs.World.Locations {
 			parts = append(parts, fmt.Sprintf("- %s: %s", loc.Name, loc.Description))
+			
+			// Добавляем предопределенные проверки для локации
+			predefinedChecks := loc.PredefinedChecks()
+			if len(predefinedChecks) > 0 {
+				parts = append(parts, fmt.Sprintf("  Предопределенные проверки в локации '%s':", loc.Name))
+				for _, check := range predefinedChecks {
+					abilityName := getAbilityNameForContext(check.Ability)
+					hint := ""
+					if check.LocationHint != "" {
+						hint = fmt.Sprintf(" (%s)", check.LocationHint)
+					}
+					parts = append(parts, fmt.Sprintf("    • %s - %s (DC %d)%s", abilityName, check.Description, check.DC, hint))
+				}
+				parts = append(parts, "  ⚠️ КРИТИЧЕСКИ ВАЖНО: Предопределенные проверки можно использовать ТОЛЬКО когда игрок находится в указанном месте (см. LocationHint).")
+				parts = append(parts, "  ⚠️ НЕ используй предопределенные проверки просто так - они должны срабатывать только когда игрок находится в конкретном месте локации.")
+				parts = append(parts, "  ⚠️ Для предопределенных проверок игрок должен использовать команду /roll d20.")
+			}
 		}
 	}
 

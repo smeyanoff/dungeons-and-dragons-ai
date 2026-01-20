@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
+	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
@@ -32,6 +33,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/rating"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/subscription"
+	"dungeons-and-dragons-ai/internal/game/domain/world"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 	"dungeons-and-dragons-ai/pkg/logger"
 
@@ -61,6 +63,7 @@ type Bot struct {
 	getDailyQuestsUC     *questapp.GetDailyQuestsUseCase
 	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase
 	getMapUC             *mapapp.GetMapUseCase
+	moveToLocationUC     *mapapp.MoveToLocationUseCase
 	getAchievementsUC    *achievementapp.GetAchievementsUseCase
 	getSpellsUC          *spellapp.GetSpellsUseCase
 	useSpellUC           *spellapp.UseSpellUseCase
@@ -69,6 +72,7 @@ type Bot struct {
 	checkLimitsUC        *subscriptionapp.CheckLimitsUseCase
 	getLeaderboardUC     *ratingapp.GetLeaderboardUseCase
 	updateRatingUC       *ratingapp.UpdateRatingUseCase
+	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase
 	sessionRepo          session.Repository
 	combatRepo           CombatRepository
 	feedbackRepo         FeedbackRepository
@@ -130,6 +134,7 @@ func NewBot(
 	getDailyQuestsUC *questapp.GetDailyQuestsUseCase,
 	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase,
 	getMapUC *mapapp.GetMapUseCase,
+	moveToLocationUC *mapapp.MoveToLocationUseCase,
 	getAchievementsUC *achievementapp.GetAchievementsUseCase,
 	getSpellsUC *spellapp.GetSpellsUseCase,
 	useSpellUC *spellapp.UseSpellUseCase,
@@ -138,6 +143,7 @@ func NewBot(
 	checkLimitsUC *subscriptionapp.CheckLimitsUseCase,
 	getLeaderboardUC *ratingapp.GetLeaderboardUseCase,
 	updateRatingUC *ratingapp.UpdateRatingUseCase,
+	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase,
 	sessionRepo session.Repository,
 	combatRepo CombatRepository,
 	feedbackRepo FeedbackRepository,
@@ -149,6 +155,141 @@ func NewBot(
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}
 
+	return newBotWithAPI(
+		api,
+		initCampaignUC,
+		handleActionUC,
+		createCharacterUC,
+		getHistoryUC,
+		getInventoryUC,
+		addItemUC,
+		handleCombatUC,
+		rollDiceUC,
+		getQuestsUC,
+		getDailyQuestsUC,
+		checkDailyProgressUC,
+		getMapUC,
+		moveToLocationUC,
+		getAchievementsUC,
+		getSpellsUC,
+		useSpellUC,
+		generateImageUC,
+		getSubscriptionUC,
+		checkLimitsUC,
+		getLeaderboardUC,
+		updateRatingUC,
+		performAbilityCheckUC,
+		sessionRepo,
+		combatRepo,
+		feedbackRepo,
+		eventRepo,
+		indexDocUC,
+	)
+}
+
+// NewBotWithAPIEndpoint создаёт бота, используя кастомный Telegram API endpoint.
+// Нужен для интеграционных тестов (например, с httptest server) и не влияет на прод-инициализацию.
+//
+// apiEndpoint должен иметь формат как tgbotapi.APIEndpoint (с %s placeholders), например:
+//   http://127.0.0.1:12345/bot%s/%s
+func NewBotWithAPIEndpoint(
+	token string,
+	apiEndpoint string,
+	initCampaignUC *campaign.InitCampaignUseCase,
+	handleActionUC *player_action.HandleActionUseCase,
+	createCharacterUC *characterapp.CreateCharacterUseCase,
+	getHistoryUC *history.GetHistoryUseCase,
+	getInventoryUC *inventoryapp.GetInventoryUseCase,
+	addItemUC *inventoryapp.AddItemUseCase,
+	handleCombatUC *combatapp.HandleCombatUseCase,
+	rollDiceUC *dice.RollDiceUseCase,
+	getQuestsUC *questapp.GetQuestsUseCase,
+	getDailyQuestsUC *questapp.GetDailyQuestsUseCase,
+	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase,
+	getMapUC *mapapp.GetMapUseCase,
+	moveToLocationUC *mapapp.MoveToLocationUseCase,
+	getAchievementsUC *achievementapp.GetAchievementsUseCase,
+	getSpellsUC *spellapp.GetSpellsUseCase,
+	useSpellUC *spellapp.UseSpellUseCase,
+	generateImageUC *imageapp.ImageGenerationUseCase,
+	getSubscriptionUC *subscriptionapp.GetSubscriptionUseCase,
+	checkLimitsUC *subscriptionapp.CheckLimitsUseCase,
+	getLeaderboardUC *ratingapp.GetLeaderboardUseCase,
+	updateRatingUC *ratingapp.UpdateRatingUseCase,
+	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase,
+	sessionRepo session.Repository,
+	combatRepo CombatRepository,
+	feedbackRepo FeedbackRepository,
+	eventRepo EventRepository,
+	indexDocUC IndexDocumentUseCase,
+) (*Bot, error) {
+	api, err := tgbotapi.NewBotAPIWithAPIEndpoint(token, apiEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bot: %w", err)
+	}
+
+	return newBotWithAPI(
+		api,
+		initCampaignUC,
+		handleActionUC,
+		createCharacterUC,
+		getHistoryUC,
+		getInventoryUC,
+		addItemUC,
+		handleCombatUC,
+		rollDiceUC,
+		getQuestsUC,
+		getDailyQuestsUC,
+		checkDailyProgressUC,
+		getMapUC,
+		moveToLocationUC,
+		getAchievementsUC,
+		getSpellsUC,
+		useSpellUC,
+		generateImageUC,
+		getSubscriptionUC,
+		checkLimitsUC,
+		getLeaderboardUC,
+		updateRatingUC,
+		performAbilityCheckUC,
+		sessionRepo,
+		combatRepo,
+		feedbackRepo,
+		eventRepo,
+		indexDocUC,
+	)
+}
+
+func newBotWithAPI(
+	api *tgbotapi.BotAPI,
+	initCampaignUC *campaign.InitCampaignUseCase,
+	handleActionUC *player_action.HandleActionUseCase,
+	createCharacterUC *characterapp.CreateCharacterUseCase,
+	getHistoryUC *history.GetHistoryUseCase,
+	getInventoryUC *inventoryapp.GetInventoryUseCase,
+	addItemUC *inventoryapp.AddItemUseCase,
+	handleCombatUC *combatapp.HandleCombatUseCase,
+	rollDiceUC *dice.RollDiceUseCase,
+	getQuestsUC *questapp.GetQuestsUseCase,
+	getDailyQuestsUC *questapp.GetDailyQuestsUseCase,
+	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase,
+	getMapUC *mapapp.GetMapUseCase,
+	moveToLocationUC *mapapp.MoveToLocationUseCase,
+	getAchievementsUC *achievementapp.GetAchievementsUseCase,
+	getSpellsUC *spellapp.GetSpellsUseCase,
+	useSpellUC *spellapp.UseSpellUseCase,
+	generateImageUC *imageapp.ImageGenerationUseCase,
+	getSubscriptionUC *subscriptionapp.GetSubscriptionUseCase,
+	checkLimitsUC *subscriptionapp.CheckLimitsUseCase,
+	getLeaderboardUC *ratingapp.GetLeaderboardUseCase,
+	updateRatingUC *ratingapp.UpdateRatingUseCase,
+	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase,
+	sessionRepo session.Repository,
+	combatRepo CombatRepository,
+	feedbackRepo FeedbackRepository,
+	eventRepo EventRepository,
+	indexDocUC IndexDocumentUseCase,
+) (*Bot, error) {
 	bot := &Bot{
 		api:                  api,
 		initCampaignUC:       initCampaignUC,
@@ -163,6 +304,7 @@ func NewBot(
 		getDailyQuestsUC:     getDailyQuestsUC,
 		checkDailyProgressUC: checkDailyProgressUC,
 		getMapUC:             getMapUC,
+		moveToLocationUC:     moveToLocationUC,
 		getAchievementsUC:    getAchievementsUC,
 		getSpellsUC:          getSpellsUC,
 		useSpellUC:           useSpellUC,
@@ -171,6 +313,7 @@ func NewBot(
 		checkLimitsUC:        checkLimitsUC,
 		getLeaderboardUC:     getLeaderboardUC,
 		updateRatingUC:       updateRatingUC,
+		performAbilityCheckUC: performAbilityCheckUC,
 		sessionRepo:          sessionRepo,
 		combatRepo:           combatRepo,
 		feedbackRepo:         feedbackRepo,
@@ -188,6 +331,13 @@ func NewBot(
 	}
 
 	return bot, nil
+}
+
+// HandleUpdate — экспортируемая обертка над внутренней обработкой апдейтов.
+// Полезно для интеграционных тестов, где мы хотим прогонять сценарии "как в Telegram",
+// но без запуска polling-цикла b.Start().
+func (b *Bot) HandleUpdate(ctx context.Context, update tgbotapi.Update) error {
+	return b.handleUpdate(ctx, update)
 }
 
 // setupBotCommands настраивает Bot Commands Menu в Telegram
@@ -630,6 +780,79 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) err
 		logger.Uint("session_id", gs.ID),
 	)
 
+	// Инициализируем текущую локацию (по умолчанию первая локация мира)
+	// Это нужно для /map и навигации по кнопкам
+	if gs.CurrentLocationID == nil && len(gs.World.Locations) > 0 {
+		firstID := gs.World.Locations[0].ID
+		if firstID != 0 {
+			gs.CurrentLocationID = &firstID
+			if err := b.sessionRepo.Save(ctx, gs); err != nil {
+				logger.Warn("Failed to set initial current location",
+					logger.ErrorField(err),
+					logger.Int64("chat_id", chatID),
+				)
+			}
+		}
+	}
+
+	// Генерируем красивую карту-изображение мира (если доступна генерация изображений)
+	// Сохраняем путь в сессии, чтобы /map мог показать картинку
+	if b.generateImageUC != nil && gs.MapImagePath == "" && len(gs.World.Locations) > 0 {
+		var sb strings.Builder
+		sb.WriteString("Fantasy world map, top-down, detailed, colored, parchment style, Dungeons & Dragons.\n")
+		sb.WriteString(fmt.Sprintf("World: %s.\n", gs.World.Name))
+		if gs.World.Description != "" {
+			sb.WriteString(fmt.Sprintf("World description: %s.\n", gs.World.Description))
+		}
+		sb.WriteString("Locations:\n")
+		for _, loc := range gs.World.Locations {
+			sb.WriteString(fmt.Sprintf("- %s\n", loc.Name))
+		}
+		sb.WriteString("Connections (direction -> destination):\n")
+		// Строим карту ID->name для удобного отображения связей
+		locNameByID := map[uint]string{}
+		for _, loc := range gs.World.Locations {
+			locNameByID[loc.ID] = loc.Name
+		}
+		for _, loc := range gs.World.Locations {
+			for _, conn := range loc.Connections {
+				toName := locNameByID[conn.ToLocationID]
+				if toName == "" {
+					toName = fmt.Sprintf("Location #%d", conn.ToLocationID)
+				}
+				sb.WriteString(fmt.Sprintf("- %s: %s -> %s\n", loc.Name, conn.Direction, toName))
+			}
+		}
+
+		imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+		defer cancel()
+		req := imageapp.GenerateImageRequest{
+			SystemPrompt:    "You are a fantasy cartographer. Create beautiful D&D-style maps with clear landmarks and readable layout. No text labels on the map itself.",
+			UserPrompt:      sb.String(),
+			Type:            "custom",
+			EntityID:        gs.WorldID,
+			ForceRegenerate: false,
+			UserID:          0,
+			SkipLimitCheck:  true,
+		}
+		resp, err := b.generateImageUC.Execute(imgCtx, req)
+		if err != nil {
+			logger.Warn("Failed to generate world map image",
+				logger.ErrorField(err),
+				logger.Int64("chat_id", chatID),
+				logger.Uint("world_id", gs.WorldID),
+			)
+		} else if resp != nil && resp.ImagePath != "" {
+			gs.MapImagePath = resp.ImagePath
+			if err := b.sessionRepo.Save(ctx, gs); err != nil {
+				logger.Warn("Failed to save map image path to session",
+					logger.ErrorField(err),
+					logger.Int64("chat_id", chatID),
+				)
+			}
+		}
+	}
+
 	// Отправляем приветственное сообщение
 	welcomeText := fmt.Sprintf(`🎮 Игра начата!
 
@@ -715,6 +938,7 @@ func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, text string)
 
 	// Обновляем сообщение с ответом
 	// Если ответ слишком длинный, отправляем новое сообщение вместо редактирования
+	var sendErr error
 	if len(response) > TelegramMaxMessageLength {
 		// Удаляем индикатор печати, если он был отправлен
 		if indicatorSent {
@@ -726,18 +950,21 @@ func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, text string)
 				)
 			}
 		}
-
 		// Отправляем разбитое сообщение
-		return b.sendLongMessage(chatID, response)
+		sendErr = b.sendLongMessage(chatID, response)
+	} else if !indicatorSent {
+		// Если индикатор не был отправлен, просто отправляем новое сообщение
+		sendErr = b.sendLongMessage(chatID, response)
+	} else {
+		edit := tgbotapi.NewEditMessageText(chatID, sentMsg.MessageID, response)
+		sendErr = b.editMessage(edit, chatID, response)
 	}
 
-	// Если индикатор не был отправлен, просто отправляем новое сообщение
-	if !indicatorSent {
-		return b.sendLongMessage(chatID, response)
+	promptErr := b.maybeSendPendingAbilityCheckPrompt(ctx, chatID)
+	if sendErr != nil {
+		return sendErr
 	}
-
-	edit := tgbotapi.NewEditMessageText(chatID, sentMsg.MessageID, response)
-	return b.editMessage(edit, chatID, response)
+	return promptErr
 }
 
 func (b *Bot) handleCreateCharacter(ctx context.Context, chatID int64, args string) error {
@@ -883,8 +1110,11 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 	)
 
 	// Парсим callback data
-	// Формат: race_<race> или class_<race>_<class> или create_<name>_<race>_<class>
-	if strings.HasPrefix(data, "race_") {
+	// Формат: ability_roll_<check_id> | race_<race> | class_<race>_<class> | create_<name>_<race>_<class> | map_to_<location_id>
+	if strings.HasPrefix(data, "ability_roll_") {
+		checkID := strings.TrimPrefix(data, "ability_roll_")
+		return b.handleAbilityCheckRoll(ctx, chatID, query, checkID)
+	} else if strings.HasPrefix(data, "race_") {
 		// Выбор расы
 		race := strings.TrimPrefix(data, "race_")
 		return b.handleRaceSelection(ctx, chatID, query, race)
@@ -916,12 +1146,54 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 	} else if data == "feedback_cancel" {
 		// Отмена диалога feedback
 		return b.handleFeedbackCancel(ctx, chatID, query)
+	} else if strings.HasPrefix(data, "map_to_") {
+		// Навигация по карте: переход в локацию
+		idStr := strings.TrimPrefix(data, "map_to_")
+		locID, err := strconv.ParseUint(idStr, 10, 64)
+		if err != nil || locID == 0 {
+			callback := tgbotapi.NewCallback(query.ID, "Некорректная локация")
+			_, _ = b.api.Request(callback)
+			return nil
+		}
+		return b.handleMapMoveCallback(ctx, query, uint(locID))
 	}
 
 	// Неизвестный callback
 	callback := tgbotapi.NewCallback(query.ID, "Неизвестная команда")
 	_, err := b.api.Request(callback)
 	return err
+}
+
+func (b *Bot) handleMapMoveCallback(ctx context.Context, query *tgbotapi.CallbackQuery, toLocationID uint) error {
+	chatID := query.Message.Chat.ID
+
+	// Отвечаем на callback, чтобы Telegram убрал "loading"
+	callback := tgbotapi.NewCallback(query.ID, "Перемещаюсь...")
+	_, _ = b.api.Request(callback)
+
+	if b.moveToLocationUC == nil {
+		edit := tgbotapi.NewEditMessageText(chatID, query.Message.MessageID, "Навигация по карте временно недоступна.")
+		return b.editMessage(edit, chatID, "Навигация по карте временно недоступна.")
+	}
+
+	resp, err := b.moveToLocationUC.Execute(ctx, mapapp.MoveToLocationRequest{
+		ChatID:        chatID,
+		ToLocationID:  &toLocationID,
+	})
+	if err != nil {
+		edit := tgbotapi.NewEditMessageText(chatID, query.Message.MessageID, fmt.Sprintf("Не удалось переместиться: %v", err))
+		return b.editMessage(edit, chatID, edit.Text)
+	}
+
+	// Перестраиваем клавиатуру под новую локацию
+	gs, _ := b.sessionRepo.GetByChatID(ctx, chatID)
+	markup := b.buildMapNavigationKeyboard(gs)
+
+	edit := tgbotapi.NewEditMessageText(chatID, query.Message.MessageID, resp.Message)
+	if markup != nil {
+		edit.ReplyMarkup = markup
+	}
+	return b.editMessage(edit, chatID, resp.Message)
 }
 
 func (b *Bot) handleRaceSelection(ctx context.Context, chatID int64, query *tgbotapi.CallbackQuery, race string) error {
@@ -1107,6 +1379,85 @@ func (b *Bot) handleCreateCharacterFromCallback(ctx context.Context, chatID int6
 	resultMsg.ReplyMarkup = nil // Убираем кнопки
 
 	return b.editMessage(resultMsg, chatID, charText)
+}
+
+func (b *Bot) handleAbilityCheckRoll(ctx context.Context, chatID int64, query *tgbotapi.CallbackQuery, checkID string) error {
+	if b.performAbilityCheckUC == nil {
+		callback := tgbotapi.NewCallback(query.ID, "Проверки временно недоступны")
+		_, _ = b.api.Request(callback)
+		return nil
+	}
+
+	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil || gs == nil || !gs.HasPendingAbilityCheck() || gs.PendingAbilityCheckID != checkID {
+		callback := tgbotapi.NewCallback(query.ID, "Эта проверка больше не актуальна")
+		_, _ = b.api.Request(callback)
+		return nil
+	}
+
+	callback := tgbotapi.NewCallback(query.ID, "Бросок выполнен")
+	_, _ = b.api.Request(callback)
+
+	result, err := b.performAbilityCheckUC.Execute(ctx, chatID)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	edit := tgbotapi.NewEditMessageText(chatID, query.Message.MessageID, result.Message)
+	edit.ReplyMarkup = nil
+	if _, err := b.api.Send(edit); err != nil {
+		return b.sendLongMessage(chatID, result.Message)
+	}
+
+	return nil
+}
+
+func (b *Bot) maybeSendPendingAbilityCheckPrompt(ctx context.Context, chatID int64) error {
+	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil || gs == nil || !gs.HasPendingAbilityCheck() || gs.PendingAbilityCheckNotified {
+		return err
+	}
+
+	abilityName := formatAbilityName(gs.PendingAbilityCheckAbility)
+	text := fmt.Sprintf("🎲 Проверка %s (DC %d). Нажмите кнопку, чтобы бросить d20.", abilityName, gs.PendingAbilityCheckDC)
+
+	button := tgbotapi.NewInlineKeyboardButtonData("🎲 Бросить d20", fmt.Sprintf("ability_roll_%s", gs.PendingAbilityCheckID))
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup([][]tgbotapi.InlineKeyboardButton{{button}}...)
+
+	if err := b.sendMessage(msg); err != nil {
+		return err
+	}
+
+	gs.PendingAbilityCheckNotified = true
+	if err := b.sessionRepo.Save(ctx, gs); err != nil {
+		logger.Warn("Failed to mark pending check as notified",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+		)
+	}
+
+	return nil
+}
+
+func formatAbilityName(ability string) string {
+	switch ability {
+	case "strength":
+		return "Сила (STR)"
+	case "dexterity":
+		return "Ловкость (DEX)"
+	case "constitution":
+		return "Телосложение (CON)"
+	case "intelligence":
+		return "Интеллект (INT)"
+	case "wisdom":
+		return "Мудрость (WIS)"
+	case "charisma":
+		return "Харизма (CHA)"
+	default:
+		return ability
+	}
 }
 
 func (b *Bot) handleShowCharacter(ctx context.Context, chatID int64, tgUserID int64) error {
@@ -1343,13 +1694,119 @@ func (b *Bot) handleDaily(ctx context.Context, chatID int64, tgUserID int64) err
 }
 
 func (b *Bot) handleMap(ctx context.Context, chatID int64) error {
+	// Получаем сессию (нужно для текущей локации и картинки карты)
+	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении сессии: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+	if gs == nil {
+		msg := tgbotapi.NewMessage(chatID, "Игра не начата. Используйте /newgame для начала новой игры.")
+		return b.sendMessage(msg)
+	}
+
+	// Если есть красивая карта-изображение — показываем её
+	if gs.MapImagePath != "" {
+		if err := b.sendPhoto(ctx, chatID, gs.MapImagePath, "🗺️ Карта мира"); err != nil {
+			logger.Warn("Failed to send map image",
+				logger.ErrorField(err),
+				logger.Int64("chat_id", chatID),
+			)
+		}
+	}
+
 	mapText, err := b.getMapUC.Execute(ctx, chatID)
 	if err != nil {
 		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении карты: %v", err))
 		return b.sendMessage(errorMsg)
 	}
 
-	return b.sendLongMessage(chatID, mapText)
+	// 1) Отправляем текст карты (может быть длинным)
+	if err := b.sendLongMessage(chatID, mapText); err != nil {
+		return err
+	}
+
+	// 2) Отправляем кнопки навигации отдельным коротким сообщением
+	markup := b.buildMapNavigationKeyboard(gs)
+	if markup == nil {
+		return nil
+	}
+	navMsg := tgbotapi.NewMessage(chatID, "🧭 Куда идём дальше?")
+	navMsg.ReplyMarkup = markup
+	return b.sendMessage(navMsg)
+}
+
+func (b *Bot) buildMapNavigationKeyboard(gs *session.GameSession) *tgbotapi.InlineKeyboardMarkup {
+	if gs == nil || len(gs.World.Locations) == 0 {
+		return nil
+	}
+
+	// Быстрый доступ к локациям
+	locationMap := make(map[uint]*world.Location, len(gs.World.Locations))
+	for i := range gs.World.Locations {
+		loc := &gs.World.Locations[i]
+		locationMap[loc.ID] = loc
+	}
+
+	// Текущая локация
+	var current *world.Location
+	if gs.CurrentLocationID != nil {
+		current = locationMap[*gs.CurrentLocationID]
+	}
+	if current == nil {
+		current = &gs.World.Locations[0]
+	}
+	if len(current.Connections) == 0 {
+		return nil
+	}
+
+	var rows [][]tgbotapi.InlineKeyboardButton
+	var row []tgbotapi.InlineKeyboardButton
+
+	// Кнопки по направлениям
+	for _, conn := range current.Connections {
+		toName := "???"
+		if toLoc := locationMap[conn.ToLocationID]; toLoc != nil {
+			toName = toLoc.Name
+		}
+		dirSym := mapDirectionSymbol(conn.Direction)
+		btnText := fmt.Sprintf("%s %s", dirSym, toName)
+		btnData := fmt.Sprintf("map_to_%d", conn.ToLocationID)
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData(btnText, btnData))
+		if len(row) == 2 {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+
+	m := tgbotapi.NewInlineKeyboardMarkup(rows...)
+	return &m
+}
+
+func mapDirectionSymbol(direction string) string {
+	switch strings.ToLower(direction) {
+	case "north", "n":
+		return "⬆️"
+	case "south", "s":
+		return "⬇️"
+	case "east", "e":
+		return "➡️"
+	case "west", "w":
+		return "⬅️"
+	case "up", "u":
+		return "⬆️⬆️"
+	case "down", "d":
+		return "⬇️⬇️"
+	case "portal":
+		return "🌀"
+	case "path", "road":
+		return "🛤️"
+	default:
+		return "→"
+	}
 }
 
 func (b *Bot) handleAchievements(ctx context.Context, chatID int64, tgUserID int64) error {
@@ -2677,7 +3134,7 @@ func (b *Bot) handleLeaderboard(ctx context.Context, chatID int64, tgUserID int6
 	}
 
 	// Добавляем подсказку по командам
-	result.WriteString(fmt.Sprintf("\n\n💡 Использование: /leaderboard [тип] [лимит]\n"))
+	result.WriteString("\n\n💡 Использование: /leaderboard [тип] [лимит]\n")
 	result.WriteString("Типы: level, experience, wins, quests, total\n")
 	result.WriteString("Пример: /leaderboard level 20")
 
@@ -2704,6 +3161,10 @@ type sessionRepoAdapter struct {
 
 func (a *sessionRepoAdapter) GetByChatID(ctx context.Context, chatID int64) (*session.GameSession, error) {
 	return a.sessionRepo.GetByChatID(ctx, chatID)
+}
+
+func (a *sessionRepoAdapter) Save(ctx context.Context, gs *session.GameSession) error {
+	return a.sessionRepo.Save(ctx, gs)
 }
 
 // editMessage редактирует сообщение, обрабатывая ошибку "message is not modified" как не критичную

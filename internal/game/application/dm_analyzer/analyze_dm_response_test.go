@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"unsafe"
 
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
@@ -19,13 +18,6 @@ func intPtr(i int) *int {
 	return &i
 }
 
-// asLLM converts mockLLM to domain.LLM, bypassing compile-time type checking
-// This is needed because the compiler can't resolve dm_tools.Tool in the interface definition
-// The mock correctly implements the interface at runtime, but the compiler can't verify it
-func asLLM(m *mockLLM) domain.LLM {
-	return *(*domain.LLM)(unsafe.Pointer(m))
-}
-
 // Mock LLM
 type mockLLM struct {
 	generateFunc              func(ctx context.Context, prompt string) (string, error)
@@ -36,6 +28,10 @@ type mockLLM struct {
 func (m *mockLLM) Generate(ctx context.Context, prompt string) (string, error) {
 	if m.generateFunc != nil {
 		return m.generateFunc(ctx, prompt)
+	}
+	// Backward-compatible fallback: older tests stub GenerateWithMaxTokens only.
+	if m.generateWithMaxTokensFunc != nil {
+		return m.generateWithMaxTokensFunc(ctx, prompt, 0)
 	}
 	return "{}", nil
 }
@@ -521,7 +517,7 @@ func TestAnalyzeDMResponseUseCase_Execute(t *testing.T) {
 			}
 
 			uc := NewAnalyzeDMResponseUseCase(
-				asLLM(llm),
+				llm,
 				combatRepo,
 				questRepo,
 				inventoryRepo,
@@ -828,7 +824,7 @@ func TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC(t *testing.T) {
 			questRepo := &mockQuestRepo{}
 
 			uc := NewAnalyzeDMResponseUseCase(
-				asLLM(llm),
+				llm,
 				combatRepo,
 				questRepo,
 				nil, // inventoryRepo

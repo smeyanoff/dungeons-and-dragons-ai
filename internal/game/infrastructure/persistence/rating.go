@@ -60,12 +60,14 @@ func (r *RatingRepository) GetLeaderboard(ctx context.Context, metricType rating
 	entries := make([]*rating.LeaderboardEntry, 0, len(ratings))
 	for i, rt := range ratings {
 		// Получаем имя игрока из таблицы players
+		// Используем Order("id DESC") вместо Order("created_at DESC"), так как в модели Player нет поля created_at
+		// Это дает нам последнего созданного игрока с этим tg_user_id
 		var playerName string
 		r.db.WithContext(ctx).
 			Table("players").
 			Select("name").
 			Where("tg_user_id = ?", rt.TgUserID).
-			Order("created_at DESC").
+			Order("id DESC").
 			Limit(1).
 			Scan(&playerName)
 		

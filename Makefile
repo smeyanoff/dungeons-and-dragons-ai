@@ -1,7 +1,13 @@
-.PHONY: fmt build test test-integration docker-build docker-up docker-down docker-logs docker-restart \
+.PHONY: fmt build test test-telegram test-integration docker-build docker-up docker-down docker-logs docker-restart \
 	prod-build prod-up prod-down prod-logs prod-restart prod-ps \
 	deploy backup restore help security-scan scan-docker scan-code scan-dockerfile \
 	full-scan
+
+# Загружаем переменные окружения из .env файла
+ifneq (,$(wildcard .env))
+    include .env
+    export
+endif
 
 # Форматирование кода
 fmt:
@@ -16,9 +22,20 @@ BUILD_TIME ?= $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 build:
 	go build -ldflags="-X dungeons-and-dragons-ai/pkg/version.Version=$(VERSION) -X dungeons-and-dragons-ai/pkg/version.Commit=$(COMMIT) -X dungeons-and-dragons-ai/pkg/version.BuildTime=$(BUILD_TIME)" -o bin/bot ./cmd/bot
 
-# Запуск тестов
+# Запуск всех тестов (загружает .env автоматически)
 test:
-	go test -v -race -coverprofile=coverage.out ./...
+	@echo "Запуск всех тестов с использованием .env..."
+	go test -v -race -coverprofile=coverage.out ./... -timeout 30m
+
+# Запуск Telegram gameplay тестов (загружает .env автоматически)
+test-telegram:
+	@echo "Запуск Telegram gameplay тестов с использованием .env..."
+	go test -v ./tests/integration/... -run TestTelegramGameplay -timeout 30m
+
+# Запуск всех интеграционных тестов (загружает .env автоматически)
+test-integration:
+	@echo "Запуск всех интеграционных тестов с использованием .env..."
+	go test -v ./tests/integration/... -timeout 30m
 
 # Запуск всех интеграционных тестов внутри Docker контейнера
 test-integration-docker:
@@ -124,11 +141,10 @@ help:
 	@echo "Утилиты:"
 	@echo "  make fmt             - Форматирование кода"
 	@echo "  make build           - Сборка приложения"
-	@echo "  make test            - Запуск тестов"
-	@echo "  make test-integration - Запуск интеграционных тестов"
-	@echo "  make test-integration-gameplay - Запуск тестов игрового процесса (как пользователь, на хосте)"
-	@echo "  make test-integration-gameplay-docker - Запуск тестов внутри контейнера (сертификаты настроены)"
-	@echo "  make test-integration-docker - Запуск всех интеграционных тестов внутри контейнера"
+	@echo "  make test            - Запуск всех тестов (использует .env)"
+	@echo "  make test-telegram   - Запуск Telegram gameplay тестов (использует .env)"
+	@echo "  make test-integration - Запуск интеграционных тестов (использует .env)"
+	@echo "  make test-integration-docker - Запуск тестов внутри контейнера"
 	@echo ""
 	@echo "Безопасность:"
 	@echo "  make security-scan   - Полное сканирование безопасности"

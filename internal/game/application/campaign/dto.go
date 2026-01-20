@@ -12,10 +12,18 @@ type QuestDTO struct {
 }
 
 type LocationDTO struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	NPCs        []NPCDTO        `json:"npcs"`
-	Connections []ConnectionDTO `json:"connections,omitempty"`
+	Name             string              `json:"name"`
+	Description      string              `json:"description"`
+	NPCs             []NPCDTO            `json:"npcs"`
+	Connections      []ConnectionDTO     `json:"connections,omitempty"`
+	PredefinedChecks []PredefinedCheckDTO `json:"predefined_checks,omitempty"`
+}
+
+type PredefinedCheckDTO struct {
+	Ability      string `json:"ability"`       // Характеристика: "strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"
+	DC           int    `json:"dc"`            // Сложность проверки (Difficulty Class)
+	Description  string `json:"description"`   // Описание проверки для игрока
+	LocationHint string `json:"location_hint"` // Подсказка о том, где в локации находится проверка
 }
 
 type ConnectionDTO struct {

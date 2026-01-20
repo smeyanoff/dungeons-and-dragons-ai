@@ -12,7 +12,9 @@ import (
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
+	diceapp "dungeons-and-dragons-ai/internal/game/application/dice"
 	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
+	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
@@ -52,6 +54,8 @@ type HandleActionUseCase struct {
 	checkDailyProgressUC DailyQuestProgressChecker               // Для отслеживания ежедневных заданий
 	getSubscriptionUC    *subscriptionapp.GetSubscriptionUseCase // Для проверки Premium статуса для лимитов
 	updateRatingUC       RatingUpdater                           // Опциональная зависимость для обновления рейтингов
+	analyzePlayerActionUC *dm_analyzer.AnalyzePlayerActionUseCase // Анализатор действий игрока для определения необходимости проверок
+	generateLocationEventUC LocationEventGenerator               // Генератор событий локаций
 }
 
 // RatingUpdater интерфейс для обновления рейтингов
@@ -89,6 +93,10 @@ func (a *sessionRepoAdapter) GetByChatID(ctx context.Context, chatID int64) (*se
 	return a.sessionRepo.GetByChatID(ctx, chatID)
 }
 
+func (a *sessionRepoAdapter) Save(ctx context.Context, gs *session.GameSession) error {
+	return a.sessionRepo.Save(ctx, gs)
+}
+
 // eventRepoAdapterForDMTools адаптирует EventRepository к dm_tools.EventRepository
 type eventRepoAdapterForDMTools struct {
 	repo EventRepository
@@ -96,6 +104,44 @@ type eventRepoAdapterForDMTools struct {
 
 func (a *eventRepoAdapterForDMTools) GetBySessionID(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error) {
 	return a.repo.GetBySessionID(ctx, sessionID, limit)
+}
+
+func (a *eventRepoAdapterForDMTools) Save(ctx context.Context, e *event.StoryEvent) error {
+	return a.repo.Save(ctx, e)
+}
+
+// LocationEventGenerator интерфейс для генерации событий локаций
+type LocationEventGenerator interface {
+	Execute(ctx context.Context, req locationeventapp.GenerateLocationEventRequest) (*locationeventapp.GenerateLocationEventResponse, error)
+}
+
+// sessionRepoAdapterForDM адаптирует session.Repository к dm_analyzer.SessionRepository
+type sessionRepoAdapterForDM struct {
+	sessionRepo session.Repository
+}
+
+func (a *sessionRepoAdapterForDM) GetByChatID(ctx context.Context, chatID int64) (*dm_analyzer.SessionSnapshot, error) {
+	gs, err := a.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil || gs == nil {
+		return nil, err
+	}
+	
+	// Преобразуем локации мира в упрощенный формат для dm_analyzer
+	locations := make([]dm_analyzer.LocationSnapshot, 0, len(gs.World.Locations))
+	for _, loc := range gs.World.Locations {
+		locations = append(locations, dm_analyzer.LocationSnapshot{
+			ID:   loc.ID,
+			Name: loc.Name,
+		})
+	}
+	
+	return &dm_analyzer.SessionSnapshot{
+		ID: gs.ID,
+		World: dm_analyzer.WorldSnapshot{
+			ID:        gs.World.ID,
+			Locations: locations,
+		},
+	}, nil
 }
 
 // playerRepoAdapter адаптирует доступ к игроку через session.Repository
@@ -189,6 +235,8 @@ func NewHandleActionUseCase(
 	checkDailyProgressUC DailyQuestProgressChecker,
 	getSubscriptionUC *subscriptionapp.GetSubscriptionUseCase,
 	updateRatingUC RatingUpdater,
+	analyzePlayerActionUC *dm_analyzer.AnalyzePlayerActionUseCase,
+	generateLocationEventUC LocationEventGenerator,
 ) *HandleActionUseCase {
 	return &HandleActionUseCase{
 		llm:                  llm,
@@ -210,6 +258,8 @@ func NewHandleActionUseCase(
 		checkDailyProgressUC: checkDailyProgressUC,
 		getSubscriptionUC:    getSubscriptionUC,
 		updateRatingUC:       updateRatingUC,
+		analyzePlayerActionUC: analyzePlayerActionUC,
+		generateLocationEventUC: generateLocationEventUC,
 	}
 }
 
@@ -240,6 +290,11 @@ func (uc *HandleActionUseCase) Execute(
 		return "Персонаж не создан. Используйте /createcharacter для создания персонажа.", nil
 	}
 
+	// Добавляем контекст с chat_id и tg_user_id для мониторинга LLM запросов
+	llmCtx := context.WithValue(ctx, "chat_id", chatID)
+	llmCtx = context.WithValue(llmCtx, "tg_user_id", player.TgUserID)
+	llmCtx = context.WithValue(llmCtx, "session_id", gs.ID)
+
 	// Информация об активном бое уже включена в контекст RAG
 	// DM сам определит, нужно ли использовать combat tool для обработки атаки
 
@@ -264,11 +319,26 @@ func (uc *HandleActionUseCase) Execute(
 
 	// Проверяем и активируем мировые события перед построением контекста
 	if uc.checkWorldEventsUC != nil {
+		// Если текущая локация еще не установлена (старые сессии), инициализируем первой локацией мира
+		if gs.CurrentLocationID == nil && len(gs.World.Locations) > 0 {
+			firstID := gs.World.Locations[0].ID
+			if firstID != 0 {
+				gs.CurrentLocationID = &firstID
+				// Пытаемся сохранить, но не блокируем обработку действий при ошибке
+				if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+					logger.Warn("Failed to initialize current location in session",
+						logger.ErrorField(err),
+						logger.Uint("session_id", gs.ID),
+					)
+				}
+			}
+		}
+
 		checkCtx, checkCancel := context.WithTimeout(ctx, 5*time.Second)
 		defer checkCancel()
 		checkReq := worldeventapp.CheckWorldEventsRequest{
 			WorldID:           gs.WorldID,
-			CurrentLocationID: nil, // TODO: добавить отслеживание текущей локации игрока
+			CurrentLocationID: gs.CurrentLocationID,
 		}
 		eventsResp, err := uc.checkWorldEventsUC.Execute(checkCtx, checkReq, &gs.World)
 		if err != nil {
@@ -307,6 +377,29 @@ func (uc *HandleActionUseCase) Execute(
 		logger.Uint("session_id", gs.ID),
 		logger.Int("context_length", len(gameContext)),
 	)
+
+	// Анализируем действие игрока для определения необходимости проверок
+	if uc.analyzePlayerActionUC != nil {
+		analysisCtx, analysisCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer analysisCancel()
+		analysis, err := uc.analyzePlayerActionUC.Execute(analysisCtx, gs, playerMessage, gameContext)
+		if err != nil {
+			logger.Warn("Failed to analyze player action",
+				logger.ErrorField(err),
+				logger.Uint("session_id", gs.ID),
+			)
+			// Продолжаем без анализа
+		} else if analysis != nil {
+			logger.Debug("Player action analyzed",
+				logger.Uint("session_id", gs.ID),
+				logger.Bool("needs_ability_check", analysis.NeedsAbilityCheck),
+				logger.Bool("simple_action", analysis.SimpleAction),
+			)
+			// Добавляем результат анализа в контекст для DM
+			analysisContext := buildActionAnalysisContext(analysis)
+			gameContext = gameContext + "\n\n--- Анализ действия игрока ---\n" + analysisContext
+		}
+	}
 
 	// Сохраняем событие действия игрока ДО вызова LLM
 	// Это гарантирует, что действие игрока будет сохранено даже если LLM вернет ошибку
@@ -380,7 +473,7 @@ func (uc *HandleActionUseCase) Execute(
 		toolRegistry := uc.createToolRegistry(gs, player)
 
 		// Формируем промпт для DM
-		prompt := buildDMPrompt(gameContext, playerMessage)
+		prompt := BuildDMPrompt(gameContext, playerMessage)
 
 		// Получаем ответ от DM с поддержкой tools через multi-step loop
 		logger.Info("Generating DM response with tools",
@@ -608,6 +701,14 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		analyzer.SetCheckDailyProgress(dailyQuestAdapter, player.TgUserID)
 	}
 
+	// Настраиваем генератор событий локаций
+	if uc.generateLocationEventUC != nil {
+		analyzer.SetLocationEventGenerator(uc.generateLocationEventUC)
+		// Создаем адаптер для передачи sessionRepo в dm_analyzer
+		sessionRepoAdapter := &sessionRepoAdapterForDM{sessionRepo: uc.sessionRepo}
+		analyzer.SetSessionRepository(sessionRepoAdapter)
+	}
+
 	// Анализируем ответ DM
 	analysis, err := analyzer.Execute(ctx, dmResponse)
 	if err != nil {
@@ -795,13 +896,22 @@ func cleanTechnicalDetails(text string) string {
 	var filteredLines []string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
 		// Пропускаем строки, которые выглядят как технические инструкции
 		if strings.HasPrefix(trimmed, "### ") &&
-			(strings.Contains(strings.ToLower(trimmed), "шаг") ||
-				strings.Contains(strings.ToLower(trimmed), "step") ||
-				strings.Contains(strings.ToLower(trimmed), "описание") ||
-				strings.Contains(strings.ToLower(trimmed), "выполнение") ||
-				strings.Contains(strings.ToLower(trimmed), "результат")) {
+			(strings.Contains(lower, "шаг") ||
+				strings.Contains(lower, "step") ||
+				strings.Contains(lower, "описание") ||
+				strings.Contains(lower, "выполнение") ||
+				strings.Contains(lower, "результат")) {
+			continue
+		}
+		// Пропускаем строки с tool-артефактами
+		if strings.Contains(lower, "<tool") ||
+			strings.Contains(lower, "tool_call") ||
+			strings.Contains(lower, "tool_result") ||
+			strings.Contains(lower, "tool_name") ||
+			strings.Contains(lower, "arguments") {
 			continue
 		}
 		// Пропускаем пустые строки после удаления технических деталей
@@ -848,25 +958,53 @@ func (uc *HandleActionUseCase) buildCombatContext(gs *session.GameSession, activ
 	return strings.Join(parts, "\n")
 }
 
+// buildDMPrompt - алиас для обратной совместимости
+// Deprecated: используйте BuildDMPrompt вместо этого
 func buildDMPrompt(gameContext, playerMessage string) string {
-	// Проверяем, есть ли в контексте информация о активном бое
-	hasActiveCombat := strings.Contains(gameContext, "--- Текущий бой ---") ||
-		strings.Contains(gameContext, "⚔️ КРИТИЧЕСКИ ВАЖНО: Статус боя в ответах")
+	return BuildDMPrompt(gameContext, playerMessage)
+}
 
-	combatInstruction := ""
-	if hasActiveCombat {
-		combatInstruction = "\n\n⚔️ ВАЖНО: Если в контексте указано, что идет активный бой, ВСЕГДА упоминай статус боя в НАЧАЛЕ ответа с префиксом '⚔️ [В БОЮ]' или '⚔️ Бой продолжается.'. Это критично для понимания игроком боевой ситуации."
+// buildActionAnalysisContext формирует контекст для DM на основе анализа действия игрока
+func buildActionAnalysisContext(analysis *dm_analyzer.PlayerActionAnalysis) string {
+	var parts []string
+
+	if analysis.SimpleAction {
+		parts = append(parts, "⚠️ Действие игрока простое - просто опиши результат естественным языком БЕЗ проверки.")
+		if analysis.Recommendation != "" {
+			parts = append(parts, fmt.Sprintf("Рекомендация: %s", analysis.Recommendation))
+		}
+		return strings.Join(parts, "\n")
 	}
 
-	return fmt.Sprintf(`Ты — Dungeon Master в игре Dungeons & Dragons.
+	if analysis.NeedsAbilityCheck && analysis.AbilityCheck != nil {
+		parts = append(parts, "✅ Нужна проверка навыка:")
+		parts = append(parts, fmt.Sprintf("- Характеристика: %s", analysis.AbilityCheck.Ability))
+		parts = append(parts, fmt.Sprintf("- DC: %d", analysis.AbilityCheck.DC))
+		parts = append(parts, fmt.Sprintf("- Причина: %s", analysis.AbilityCheck.Reason))
+		parts = append(parts, "⚠️ ВАЖНО: Используй инструмент 'request_ability_check' с указанными параметрами, затем попроси игрока использовать команду /roll d20.")
+	}
 
-Контекст текущей игры:
-%s
+	if analysis.NeedsPredefinedCheck && analysis.PredefinedCheck != nil {
+		parts = append(parts, "📍 Нужна предопределенная проверка из локации:")
+		parts = append(parts, fmt.Sprintf("- Локация: %s", analysis.PredefinedCheck.LocationName))
+		parts = append(parts, fmt.Sprintf("- Индекс проверки: %d", analysis.PredefinedCheck.CheckIndex))
+		parts = append(parts, fmt.Sprintf("- Причина: %s", analysis.PredefinedCheck.Reason))
+		parts = append(parts, "⚠️ ВАЖНО: Используй предопределенную проверку из локации, попроси игрока использовать команду /roll d20.")
+	}
 
-Игрок написал: "%s"%s
+	if analysis.NeedsRandomRoll && analysis.RandomRoll != nil {
+		parts = append(parts, "🎲 Нужен случайный бросок кубика:")
+		parts = append(parts, fmt.Sprintf("- Выражение: %s", analysis.RandomRoll.DiceExpression))
+		parts = append(parts, fmt.Sprintf("- Причина: %s", analysis.RandomRoll.Reason))
+		parts = append(parts, "⚠️ ВАЖНО: Используй инструмент 'roll_dice' с указанным выражением. НЕ проси игрока бросать кубики.")
+	}
 
-Ответь как DM, описывая что происходит в игре. Будь креативным и вовлекающим. 
-Отвечай на русском языке. Держи ответ в пределах 2-3 предложений, если не требуется больше деталей.`, gameContext, playerMessage, combatInstruction)
+	if analysis.Recommendation != "" {
+		parts = append(parts, "")
+		parts = append(parts, fmt.Sprintf("Рекомендация: %s", analysis.Recommendation))
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 // createToolRegistry создает реестр инструментов и регистрирует все доступные tools
@@ -933,6 +1071,19 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 		sessionAdapter := &sessionRepoAdapter{sessionRepo: uc.sessionRepo}
 		var gameSessionRepo dm_tools.GameSessionRepository = sessionAdapter
 		registry.Register(dm_tools.NewUseSpellTool(uc.useSpellUC, gameSessionRepo, gs.ID, gs.ChatID))
+	}
+
+	// Регистрируем инструмент для бросков кубиков DM
+	if uc.eventRepo != nil {
+		rollDiceUC := diceapp.NewRollDiceUseCase()
+		eventRepoAdapter := &eventRepoAdapterForDMTools{repo: uc.eventRepo}
+		registry.Register(dm_tools.NewRollDiceTool(rollDiceUC, eventRepoAdapter, gs.ID))
+	}
+
+	// Регистрируем инструмент для отправки дополнительных сообщений
+	if uc.eventRepo != nil {
+		eventRepoAdapter := &eventRepoAdapterForDMTools{repo: uc.eventRepo}
+		registry.Register(dm_tools.NewSendFollowupMessageTool(eventRepoAdapter, gs.ID, gs.ChatID))
 	}
 
 	return registry
@@ -1012,6 +1163,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 			if strings.Contains(cleanedResponse, "<tool_call") {
 				cleanedResponse = dm_tools.CleanToolCallTags(cleanedResponse)
 			}
+			cleanedResponse = cleanTechnicalDetails(cleanedResponse)
 			// Возвращаем ответ с собранными результатами combat tools
 			if len(combatResults) > 0 {
 				combatSection := strings.Join(combatResults, "\n\n")

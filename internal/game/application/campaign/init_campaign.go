@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	jsonrepair "dungeons-and-dragons-ai/internal/game/application/jsonrepair"
 	"dungeons-and-dragons-ai/internal/game/domain/item"
 	"dungeons-and-dragons-ai/internal/game/domain/location"
 	"dungeons-and-dragons-ai/internal/game/domain/npc"
@@ -42,13 +43,27 @@ func (uc *InitCampaignUseCase) Execute(
 		return nil, fmt.Errorf("failed to generate main quest: %w", err)
 	}
 
-	// Шаг 2: Генерация списка локаций (базовая информация)
+	// Шаг 2: Генерация списка локаций (базовая информация, без проверок)
 	locations, err := uc.generateLocations(ctx, worldTheme, mainQuest.Title)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate locations: %w", err)
 	}
 
-	// Шаг 3: Генерация деталей для каждой локации (NPC)
+	// Шаг 3: Генерация предопределенных проверок для каждой локации
+	for i := range locations {
+		checks, err := uc.generateLocationPredefinedChecks(ctx, locations[i].Name, locations[i].Description)
+		if err != nil {
+			logger.Warn("Failed to generate predefined checks for location",
+				logger.String("location", locations[i].Name),
+				logger.ErrorField(err),
+			)
+			// Продолжаем без проверок для этой локации
+		} else {
+			locations[i].PredefinedChecks = checks
+		}
+	}
+
+	// Шаг 4: Генерация деталей для каждой локации (NPC)
 	for i := range locations {
 		npcs, err := uc.generateLocationNPCs(ctx, locations[i].Name, locations[i].Description)
 		if err != nil {
@@ -62,7 +77,7 @@ func (uc *InitCampaignUseCase) Execute(
 		}
 	}
 
-	// Шаг 4: Генерация связей между локациями
+	// Шаг 5: Генерация связей между локациями
 	connections, err := uc.generateConnections(ctx, locations)
 	if err != nil {
 		logger.Warn("Failed to generate connections",
@@ -294,6 +309,61 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 	return response.NPCs, nil
 }
 
+// generateLocationPredefinedChecks генерирует предопределенные проверки для локации
+func (uc *InitCampaignUseCase) generateLocationPredefinedChecks(ctx context.Context, locationName, locationDescription string) ([]PredefinedCheckDTO, error) {
+	return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, 0)
+}
+
+// generateLocationPredefinedChecksWithRetry генерирует предопределенные проверки для локации с retry механизмом
+func (uc *InitCampaignUseCase) generateLocationPredefinedChecksWithRetry(ctx context.Context, locationName, locationDescription string, attempt int) ([]PredefinedCheckDTO, error) {
+	const maxRetries = 2
+	if attempt > maxRetries {
+		return nil, fmt.Errorf("failed to generate valid predefined checks after %d attempts", maxRetries)
+	}
+
+	prompt := GenerateLocationPredefinedChecksPrompt(locationName, locationDescription)
+	
+	llmCtx, llmCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer llmCancel()
+	
+	raw, err := uc.llm.Generate(llmCtx, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("LLM error: %w", err)
+	}
+
+	cleaned := cleanJSONResponse(raw)
+	if !json.Valid([]byte(cleaned)) {
+		logger.Warn("LLM response for predefined checks is not valid JSON, attempting to repair",
+			logger.Int("attempt", attempt),
+			logger.String("location", locationName),
+		)
+		cleaned = tryRepairTruncatedJSON(cleaned)
+		if !json.Valid([]byte(cleaned)) {
+			logger.Warn("Failed to repair JSON for predefined checks, retrying",
+				logger.Int("attempt", attempt),
+			)
+			return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, attempt+1)
+		} else {
+			logger.Info("Successfully repaired truncated JSON for predefined checks",
+				logger.Int("attempt", attempt),
+			)
+		}
+	}
+
+	var response struct {
+		PredefinedChecks []PredefinedCheckDTO `json:"predefined_checks"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &response); err != nil {
+		logger.Warn("Failed to parse predefined checks JSON",
+			logger.Int("attempt", attempt),
+			logger.ErrorField(err),
+		)
+		return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, attempt+1)
+	}
+
+	return response.PredefinedChecks, nil
+}
+
 // generateConnections генерирует связи между локациями
 func (uc *InitCampaignUseCase) generateConnections(ctx context.Context, locations []LocationDTO) (map[string][]ConnectionDTO, error) {
 	return uc.generateConnectionsWithRetry(ctx, locations, 0)
@@ -381,7 +451,30 @@ func (uc *InitCampaignUseCase) buildWorld(
 		for _, npcDTO := range locDTO.NPCs {
 			loc.AddNPC(npc.New(npcDTO.Name, npcDTO.Role))
 		}
-		w.AddLocation(loc)
+		
+		// Конвертируем предопределенные проверки из DTO в world.PredefinedCheck
+		var predefinedChecks []world.PredefinedCheck
+		for _, checkDTO := range locDTO.PredefinedChecks {
+			predefinedChecks = append(predefinedChecks, world.PredefinedCheck{
+				Ability:      checkDTO.Ability,
+				DC:           checkDTO.DC,
+				Description:  checkDTO.Description,
+				LocationHint: checkDTO.LocationHint,
+			})
+		}
+		
+		// Конвертируем NPCs из location.NPC в world.NPC
+		var worldNPCs []world.NPC
+		for _, npc := range loc.NPCs {
+			worldNPCs = append(worldNPCs, world.NPC{
+				Name:        npc.Name,
+				Role:        npc.Role,
+				Personality: "",
+			})
+		}
+		
+		// Используем новый метод AddLocationWithChecks для добавления локации с проверками
+		w.AddLocationWithChecks(locDTO.Name, locDTO.Description, worldNPCs, predefinedChecks)
 	}
 
 	// 4️⃣ сохраняем мир (чтобы получить ID для локаций)
@@ -429,14 +522,7 @@ func (uc *InitCampaignUseCase) buildWorld(
 
 // cleanJSONResponse очищает ответ LLM от markdown блоков кода
 func cleanJSONResponse(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if strings.HasPrefix(raw, "```json") {
-		raw = strings.TrimPrefix(raw, "```json")
-	} else if strings.HasPrefix(raw, "```") {
-		raw = strings.TrimPrefix(raw, "```")
-	}
-	raw = strings.TrimSuffix(raw, "```")
-	return strings.TrimSpace(raw)
+	return jsonrepair.Clean(raw)
 }
 
 // tryRepairTruncatedJSON пытается восстановить обрезанный JSON
@@ -445,6 +531,12 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 	if jsonStr == "" {
 		return "{}"
 	}
+
+	repaired := jsonrepair.Repair(jsonStr)
+	if json.Valid([]byte(repaired)) {
+		return repaired
+	}
+	jsonStr = repaired
 
 	// Сначала пытаемся найти последний валидный объект в массиве или map
 	// Это более агрессивная стратегия - обрезаем до последнего полного объекта

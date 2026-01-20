@@ -5,16 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/pkg/logger"
+
+	"github.com/google/uuid"
 )
 
 // SessionRepository интерфейс для работы с сессиями
 type SessionRepository interface {
 	GetByChatID(ctx context.Context, chatID int64) (*session.GameSession, error)
+	Save(ctx context.Context, gs *session.GameSession) error
 }
 
 // GetCharacterStatsTool позволяет DM получить характеристики персонажа
@@ -208,6 +212,18 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 		return nil, fmt.Errorf("session not found")
 	}
 
+	if gs.HasPendingAbilityCheck() {
+		return map[string]interface{}{
+			"ability":         abilityStr,
+			"ability_name":    abilityStr,
+			"ability_value":   0,
+			"modifier":        0,
+			"character_name":  "Персонаж",
+			"already_pending": true,
+			"warning":         "У игрока уже есть активная проверка. Дождись результата или опиши исход без новой проверки.",
+		}, nil
+	}
+
 	player := gs.GetFirstPlayer()
 	if player == nil {
 		logger.Warn("RequestAbilityCheckTool: player not found",
@@ -302,18 +318,43 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 						}
 						return result, nil
 					}
+
+					// Базовый cooldown: если похожая проверка была очень недавно, не запрашиваем повтор
+					if hasAbility && time.Since(evt.CreatedAt) < 2*time.Minute {
+						return map[string]interface{}{
+							"ability":         abilityStr,
+							"ability_name":    abilityName,
+							"ability_value":   abilityValue,
+							"modifier":        modifier,
+							"character_name":  char.Name,
+							"cooldown":        true,
+							"warning":         "Эта проверка выполнялась совсем недавно. Опиши исход сцены или предложи другой подход, вместо повторной проверки.",
+						}, nil
+					}
 				}
 			}
 		}
 	}
 
+	// Сохраняем ожидаемую проверку в сессии
+	checkID := uuid.New().String()
+	gs.SetPendingAbilityCheck(checkID, abilityStr, dc)
+	if err := t.sessionRepo.Save(ctx, gs); err != nil {
+		logger.Error("RequestAbilityCheckTool: failed to save pending check",
+			logger.Int64("chat_id", t.chatID),
+			logger.ErrorField(err),
+		)
+		return nil, fmt.Errorf("failed to save pending ability check: %w", err)
+	}
+
 	// Формируем результат
 	result := map[string]interface{}{
-		"ability":      abilityStr,
-		"ability_name": abilityName,
-		"ability_value": abilityValue,
-		"modifier":     modifier,
-		"character_name": char.Name,
+		"check_id":        checkID,
+		"ability":         abilityStr,
+		"ability_name":    abilityName,
+		"ability_value":   abilityValue,
+		"modifier":        modifier,
+		"character_name":  char.Name,
 	}
 
 	// Если указана DC, вычисляем вероятность успеха
