@@ -137,7 +137,7 @@
 
 ### Мониторинг
 
-- Health check endpoints (`/health`, `/ready`, `/version`)
+- Health check endpoints (`/health`, `/healthz`, `/readyz`, `/version`)
 - Structured logging
 - Log rotation
 - Готовность к интеграции с Prometheus/Grafana

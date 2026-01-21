@@ -346,7 +346,7 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 	attempt int,
 	maxRetries int,
 ) (*DMResponseAnalysis, error) {
-	prompt := buildAnalysisPrompt(dmResponse)
+	prompt := buildAnalysisPrompt(dmResponse, attempt > 0)
 
 	// Увеличено до 30 секунд, так как без ограничения токенов ответ может быть длиннее
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -385,10 +385,9 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 					return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
 				}
 
-				// Возвращаем пустой анализ вместо ошибки (fallback механизм)
-				// Это позволяет системе продолжать работать даже при проблемах с парсингом
-				log.Printf("[DM Analyzer] Returning empty analysis as fallback after %d attempts", attempt+1)
-				return &DMResponseAnalysis{}, nil
+				// Возвращаем детерминированный fallback вместо ошибки
+				log.Printf("[DM Analyzer] Returning fallback analysis after %d attempts", attempt+1)
+				return fallbackAnalysisFromResponse(dmResponse), nil
 			}
 		}
 	}
@@ -406,13 +405,20 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
 		}
 
-		// Возвращаем пустой анализ вместо ошибки (fallback механизм)
-		log.Printf("[DM Analyzer] Returning empty analysis as fallback after %d attempts", attempt+1)
-		return &DMResponseAnalysis{}, nil
+		// Возвращаем детерминированный fallback вместо ошибки
+		log.Printf("[DM Analyzer] Returning fallback analysis after %d attempts", attempt+1)
+		return fallbackAnalysisFromResponse(dmResponse), nil
 	}
 
 	if isEmptyAnalysis(analysis) {
 		recordAnalyzerJSONFailure("empty_json")
+		log.Printf("[DM Analyzer] Empty analysis detected (attempt: %d)", attempt+1)
+		if attempt < maxRetries {
+			log.Printf("[DM Analyzer] Retrying LLM request due to empty analysis (attempt %d/%d)", attempt+2, maxRetries+1)
+			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
+		}
+		log.Printf("[DM Analyzer] Returning fallback analysis after %d attempts (empty analysis)", attempt+1)
+		return fallbackAnalysisFromResponse(dmResponse), nil
 	}
 
 	return analysis, nil
@@ -996,7 +1002,13 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 }
 
 // buildAnalysisPrompt создает промпт для анализа ответа DM
-func buildAnalysisPrompt(dmResponse string) string {
+func buildAnalysisPrompt(dmResponse string, strict bool) string {
+	skeleton := ` + "`" + `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}` + "`" + `
+	criticalFooter := ""
+	if strict {
+		criticalFooter = "\n\nСТРОГОЕ ПРАВИЛО ДЛЯ РЕТРАЯ:\n- НЕ возвращай пустой JSON {} или пустой ответ\n- Если нет событий, верни этот скелет без изменений: " + skeleton
+	}
+
 	return fmt.Sprintf(`Ты анализируешь ответ Dungeon Master в игре D&D и извлекаешь структурированную информацию.
 
 Ответ DM:
@@ -1053,6 +1065,7 @@ func buildAnalysisPrompt(dmResponse string) string {
 - location_visited указывай только если DM описывает новую локацию, которую игрок впервые посещает (ключевые слова: "входишь", "приходишь", "оказываешься", "достигаешь", "перед тобой", "новое место")
 - npc_met указывай только если DM описывает встречу с новым NPC (ключевые слова: "встречаешь", "видишь", "подходит", "появляется", "знакомишься")
 - Если информации недостаточно, используй значения по умолчанию (false, 0, пустые строки, пустые массивы, null)
+- ВСЕГДА возвращай полный JSON со всеми полями (даже если все значения по умолчанию)
 
 КРИТИЧЕСКИ ВАЖНО:
 - Верни ТОЛЬКО валидный JSON, без дополнительного текста до или после JSON
@@ -1061,11 +1074,11 @@ func buildAnalysisPrompt(dmResponse string) string {
 - Убедись, что все строки в кавычках, все числа без кавычек, все булевы значения - true/false
 - Убедись, что все скобки и массивы закрыты
 - ОБЯЗАТЕЛЬНО заверши JSON полностью - все открывающие скобки { должны быть закрыты }, все массивы [ должны быть закрыты ]
-- Если не можешь завершить JSON полностью, верни пустой JSON объект {}
+- НЕ возвращай пустой JSON объект {} и не возвращай пустую строку
 - НЕ обрезай JSON в середине структуры - если не хватает места, верни сокращенную но полную структуру
 
 Пример правильного ответа:
-{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null}`, dmResponse)
+%s%s`, dmResponse, skeleton, criticalFooter)
 }
 
 // cleanJSONResponse очищает ответ LLM от markdown блоков кода и лишнего текста
@@ -1088,6 +1101,39 @@ func decodeStrictAnalysis(input string) (*DMResponseAnalysis, error) {
 	}
 
 	return &analysis, nil
+}
+
+func fallbackAnalysisFromResponse(dmResponse string) *DMResponseAnalysis {
+	analysis := &DMResponseAnalysis{}
+	if detectsCombatMarker(dmResponse) {
+		defaultHP := 15
+		defaultAC := 13
+		defaultAttackBonus := 3
+		analysis.CombatDetected = true
+		analysis.Enemies = []Enemy{
+			{
+				Name:        "Неизвестный противник",
+				HP:          &defaultHP,
+				AC:          &defaultAC,
+				AttackBonus: &defaultAttackBonus,
+			},
+		}
+	}
+	return analysis
+}
+
+func detectsCombatMarker(dmResponse string) bool {
+	lower := strings.ToLower(dmResponse)
+	markers := []string{
+		"бой", "сражен", "битва", "атака", "атакует", "нападает",
+		"враг", "противник", "монстр", "инициатив", "удар",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isEmptyAnalysis(analysis *DMResponseAnalysis) bool {

@@ -108,7 +108,7 @@ docker ps
 ### Ошибка подключения к Qdrant
 Проверьте, что Qdrant доступен:
 ```bash
-curl http://localhost:6334/health
+curl http://localhost:6334/healthz
 ```
 
 ### Пропуск тестов из-за отсутствия GigaChat credentials

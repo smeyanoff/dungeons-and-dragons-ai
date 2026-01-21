@@ -115,6 +115,7 @@ func (t *GetCharacterStatsTool) Execute(ctx context.Context, args map[string]int
 // EventRepository интерфейс для работы с событиями игры
 type EventRepository interface {
 	GetBySessionID(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)
+	Save(ctx context.Context, e *event.StoryEvent) error
 }
 
 // RequestAbilityCheckTool позволяет DM запросить проверку характеристики у игрока
@@ -144,10 +145,13 @@ func (t *RequestAbilityCheckTool) Description() string {
 - Параметр 'dc' (Difficulty Class) ОБЯЗАТЕЛЕН для правильной оценки результата проверки. БЕЗ DC невозможно определить успех/провал проверки.
 - После вызова этого инструмента ОБЯЗАТЕЛЬНО попроси игрока бросить кубик d20 (команда /roll d20).
 - После броска игрока ОБЯЗАТЕЛЬНО используй инструмент 'evaluate_check' для определения успеха/провала.
+- Обязательно укажи 'reason' (почему нужна проверка) и 'stakes' (что на кону). Без этого проверка будет отклонена.
 
 Параметры:
 - ability: характеристика для проверки ("strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma")
 - dc (ОБЯЗАТЕЛЬНО): сложность проверки (Difficulty Class). Должна быть указана для правильной оценки результата.
+- reason (ОБЯЗАТЕЛЬНО): коротко, зачем нужна проверка (что игрок делает).
+- stakes (ОБЯЗАТЕЛЬНО): ставки/риск результата (что произойдет при провале/успехе).
 
 Используй этот инструмент, когда описываешь ситуацию, требующую проверки характеристики (например, "проверка силы для открытия двери", "проверка ловкости для уклонения").`
 }
@@ -165,9 +169,19 @@ func (t *RequestAbilityCheckTool) Parameters() json.RawMessage {
 			Description: "Сложность проверки (Difficulty Class). ОБЯЗАТЕЛЬНО укажи DC для правильной оценки результата (10-легко, 13-средне, 16-сложно, 19-очень сложно)",
 			Required:    true,
 		},
+		"reason": {
+			Type:        "string",
+			Description: "Почему нужна проверка (что именно делает игрок).",
+			Required:    true,
+		},
+		"stakes": {
+			Type:        "string",
+			Description: "Ставки проверки: что произойдет при успехе/провале.",
+			Required:    true,
+		},
 	}
 
-	return BuildJSONSchema(properties, []string{"ability", "dc"})
+	return BuildJSONSchema(properties, []string{"ability", "dc", "reason", "stakes"})
 }
 
 func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -193,6 +207,30 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 
 	if dc <= 0 || dc > 30 {
 		return nil, fmt.Errorf("dc must be between 1 and 30 (typical range: 10-20)")
+	}
+
+	reason, ok := args["reason"].(string)
+	if !ok || strings.TrimSpace(reason) == "" {
+		logger.Warn("RequestAbilityCheckTool: missing reason",
+			logger.Int64("chat_id", t.chatID),
+		)
+		return map[string]interface{}{
+			"rejected": true,
+			"reason":   "missing_reason",
+			"warning":  "Проверка отклонена: обязательно укажи причину (reason) и ставки (stakes). Опиши сцену без броска или переформулируй запрос.",
+		}, nil
+	}
+
+	stakes, ok := args["stakes"].(string)
+	if !ok || strings.TrimSpace(stakes) == "" {
+		logger.Warn("RequestAbilityCheckTool: missing stakes",
+			logger.Int64("chat_id", t.chatID),
+		)
+		return map[string]interface{}{
+			"rejected": true,
+			"reason":   "missing_stakes",
+			"warning":  "Проверка отклонена: обязательно укажи причину (reason) и ставки (stakes). Опиши сцену без броска или переформулируй запрос.",
+		}, nil
 	}
 
 	// Получаем сессию
@@ -270,6 +308,7 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 	if t.eventRepo != nil {
 		recentEvents, err := t.eventRepo.GetBySessionID(ctx, gs.ID, 50) // Проверяем последние 50 событий для поиска предыдущих проверок
 		if err == nil && len(recentEvents) > 0 {
+			recentChecks := 0
 			// Ищем предыдущие проверки той же характеристики
 			// Проверяем события на наличие результатов evaluate_check
 			for i := len(recentEvents) - 1; i >= 0; i-- {
@@ -331,9 +370,54 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 							"warning":        "Эта проверка выполнялась совсем недавно. Опиши исход сцены или предложи другой подход, вместо повторной проверки.",
 						}, nil
 					}
+
+					if isAbilityCheckEvent(content, evt.CreatedAt) {
+						recentChecks++
+					}
 				}
 			}
+
+			if recentChecks >= abilityCheckBudgetMax {
+				logger.Info("RequestAbilityCheckTool: budget exceeded",
+					logger.Int64("chat_id", t.chatID),
+					logger.Int("recent_checks", recentChecks),
+				)
+				return map[string]interface{}{
+					"ability":          abilityStr,
+					"ability_name":     abilityName,
+					"ability_value":    abilityValue,
+					"modifier":         modifier,
+					"character_name":   char.Name,
+					"budget_exceeded":  true,
+					"warning":          "Слишком много проверок за короткое время. Опиши исход сцены без нового броска или эскалируй ставки.",
+					"budget_window":    abilityCheckBudgetWindow.String(),
+					"budget_max_count": abilityCheckBudgetMax,
+				}, nil
+			}
 		}
+	}
+
+	if isTrivialCheck(dc, stakes) {
+		message := fmt.Sprintf("✅ Проверка не требуется: %s. Низкие ставки (%s) — действие выполняется автоматически.",
+			strings.TrimSpace(reason), strings.TrimSpace(stakes))
+		if t.eventRepo != nil {
+			_ = t.eventRepo.Save(ctx, &event.StoryEvent{
+				GameSessionID: gs.ID,
+				AuthorType:    event.AuthorTypeDM,
+				Content:       message,
+				CreatedAt:     time.Now(),
+			})
+		}
+		return map[string]interface{}{
+			"ability":        abilityStr,
+			"ability_name":   abilityName,
+			"ability_value":  abilityValue,
+			"modifier":       modifier,
+			"character_name": char.Name,
+			"auto_resolved":  true,
+			"outcome":        "success",
+			"message":        message,
+		}, nil
 	}
 
 	// Сохраняем ожидаемую проверку в сессии
@@ -355,6 +439,8 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 		"ability_value":  abilityValue,
 		"modifier":       modifier,
 		"character_name": char.Name,
+		"reason":         strings.TrimSpace(reason),
+		"stakes":         strings.TrimSpace(stakes),
 	}
 
 	// Если указана DC, вычисляем вероятность успеха
@@ -397,6 +483,44 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 	)
 
 	return result, nil
+}
+
+const (
+	abilityCheckBudgetWindow = 5 * time.Minute
+	abilityCheckBudgetMax    = 3
+)
+
+func isAbilityCheckEvent(content string, createdAt time.Time) bool {
+	if time.Since(createdAt) > abilityCheckBudgetWindow {
+		return false
+	}
+	if strings.Contains(content, "🎲") && strings.Contains(content, "проверка") {
+		return true
+	}
+	if strings.Contains(content, "проверка") && (strings.Contains(content, "dc") || strings.Contains(content, "d20")) {
+		return true
+	}
+	return false
+}
+
+func isTrivialCheck(dc int, stakes string) bool {
+	if dc > 0 && dc <= 8 {
+		return true
+	}
+	stakesLower := strings.ToLower(strings.TrimSpace(stakes))
+	if stakesLower == "" {
+		return false
+	}
+	trivialMarkers := []string{
+		"низк", "мелк", "незнач", "без риска", "безопасн", "рутин",
+		"trivial", "low", "minor", "no risk",
+	}
+	for _, marker := range trivialMarkers {
+		if strings.Contains(stakesLower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // RequestSavingThrowTool позволяет DM запросить спасбросок у игрока

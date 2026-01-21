@@ -94,7 +94,7 @@ docker-compose -f docker-compose.prod.yml exec postgres pg_isready -U dnd_user
 
 ```bash
 # Проверьте health check
-curl http://localhost:6334/health
+curl http://localhost:6334/healthz
 ```
 
 ## Следующие шаги

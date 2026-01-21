@@ -331,6 +331,9 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 	}
 
 	prompt := GenerateLocationNPCsPrompt(locationName, locationDescription)
+	if attempt > 0 {
+		prompt = GenerateLocationNPCsPromptStrict(locationName, locationDescription)
+	}
 
 	llmCtx, llmCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer llmCancel()
@@ -397,6 +400,9 @@ func (uc *InitCampaignUseCase) generateLocationPredefinedChecksWithRetry(ctx con
 	}
 
 	prompt := GenerateLocationPredefinedChecksPrompt(locationName, locationDescription)
+	if attempt > 0 {
+		prompt = GenerateLocationPredefinedChecksPromptStrict(locationName, locationDescription)
+	}
 
 	llmCtx, llmCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer llmCancel()
@@ -462,6 +468,9 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 	}
 
 	prompt := GenerateConnectionsPrompt(locations)
+	if attempt > 0 {
+		prompt = GenerateConnectionsPromptStrict(locations)
+	}
 
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()

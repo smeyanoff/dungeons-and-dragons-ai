@@ -140,5 +140,10 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 		}
 	}
 
+	if gs.HasPendingAbilityCheck() {
+		parts = append(parts, "\n--- Ожидается проверка навыка ---")
+		parts = append(parts, fmt.Sprintf("%s, DC %d", getAbilityNameForContext(gs.PendingAbilityCheckAbility), gs.PendingAbilityCheckDC))
+	}
+
 	return strings.Join(parts, "\n"), nil
 }

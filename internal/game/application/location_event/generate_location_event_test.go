@@ -69,7 +69,15 @@ func TestLocationEventGenerator_Execute(t *testing.T) {
 			},
 			setupRepo: func(r *mockLocationEventRepo) {
 				r.getByLocationIDFunc = func(ctx context.Context, locationID uint) ([]world.WorldEvent, error) {
-					return []world.WorldEvent{{ID: 123, WorldID: 1, RequiredLocationID: &locationID}}, nil
+					now := time.Now()
+					return []world.WorldEvent{{
+						ID:                 123,
+						WorldID:            1,
+						RequiredLocationID: &locationID,
+						Metadata:           buildLocationEventMetadata("hook", nil, nil, "", locationEventStatusPending),
+						CreatedAt:          now,
+						UpdatedAt:          now,
+					}}, nil
 				}
 			},
 			wantRespNil:   true,
@@ -179,6 +187,10 @@ func TestLocationEventGenerator_Execute(t *testing.T) {
 				}
 				if ev.ActivatedAt == nil || ev.ActivatedAt.IsZero() {
 					t.Fatalf("expected ActivatedAt to be set")
+				}
+				meta, ok := parseLocationEventMetadata(ev)
+				if !ok || meta.Status != locationEventStatusPending {
+					t.Fatalf("expected metadata status=%s, got %+v", locationEventStatusPending, meta)
 				}
 			}
 

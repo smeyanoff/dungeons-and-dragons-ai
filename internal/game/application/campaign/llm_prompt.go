@@ -129,6 +129,33 @@ func GenerateLocationPredefinedChecksPrompt(locationName, locationDescription st
 - Проверка Интеллекта (Intelligence) DC 13 - разгадать древнюю загадку на стене`, locationName, locationDescription)
 }
 
+// GenerateLocationPredefinedChecksPromptStrict создает более строгий промпт для retry
+func GenerateLocationPredefinedChecksPromptStrict(locationName, locationDescription string) string {
+	return fmt.Sprintf(`Ты — Dungeon Master в D&D. ВАЖНО: Ответь ТОЛЬКО валидным JSON без markdown и комментариев.
+
+Создай 1-2 предопределенные проверки навыков для локации.
+Локация: %s
+Описание: %s
+
+Ответ ТОЛЬКО в JSON:
+{
+  "predefined_checks": [
+    {
+      "ability": "wisdom|dexterity|strength|constitution|intelligence|charisma",
+      "dc": 12,
+      "description": "короткое описание проверки",
+      "location_hint": "конкретное место в локации"
+    }
+  ]
+}
+
+Требования:
+- ability и dc обязательны
+- dc в диапазоне 8-20
+- description короткая (до 120 символов)
+- location_hint обязателен`, locationName, locationDescription)
+}
+
 // GenerateLocationNPCsPrompt создает промпт для генерации NPC локации
 func GenerateLocationNPCsPrompt(locationName, locationDescription string) string {
 	return fmt.Sprintf(`Ты — Dungeon Master в D&D. Создай NPC для локации.
@@ -145,6 +172,26 @@ func GenerateLocationNPCsPrompt(locationName, locationDescription string) string
     { "name": "имя NPC", "role": "роль NPC (например: торговец, страж, маг)" }
   ]
 }`, locationName, locationDescription)
+}
+
+// GenerateLocationNPCsPromptStrict создает более строгий промпт для retry
+func GenerateLocationNPCsPromptStrict(locationName, locationDescription string) string {
+	return fmt.Sprintf(`Ты — Dungeon Master в D&D. ВАЖНО: Ответь ТОЛЬКО валидным JSON без markdown и комментариев.
+
+Создай 1-3 NPC для локации.
+Локация: %s
+Описание: %s
+
+Ответ ТОЛЬКО в JSON:
+{
+  "npcs": [
+    { "name": "имя NPC", "role": "роль NPC" }
+  ]
+}
+
+Требования:
+- Имя и роль обязательны
+- Никакого дополнительного текста вне JSON`, locationName, locationDescription)
 }
 
 // GenerateConnectionsPrompt создает промпт для генерации связей между локациями
@@ -177,4 +224,36 @@ func GenerateConnectionsPrompt(locations []LocationDTO) string {
 }
 
 Используй только названия локаций из списка выше.`, strings.Join(locationNames, "\n- "))
+}
+
+// GenerateConnectionsPromptStrict создает более строгий промпт для retry
+func GenerateConnectionsPromptStrict(locations []LocationDTO) string {
+	var locationNames []string
+	for _, loc := range locations {
+		locationNames = append(locationNames, loc.Name)
+	}
+
+	return fmt.Sprintf(`Ты — Dungeon Master в D&D. ВАЖНО: Ответь ТОЛЬКО валидным JSON без markdown и комментариев.
+
+Создай связи между локациями (каждая локация 1-3 связи).
+Локации:
+%s
+
+Ответ ТОЛЬКО в JSON:
+{
+  "connections": {
+    "название_локации_1": [
+      {
+        "to_location": "название_другой_локации",
+        "direction": "north|south|east|west|up|down|portal|path",
+        "description": "короткое описание пути"
+      }
+    ]
+  }
+}
+
+Требования:
+- Используй только названия из списка
+- direction строго из перечисления
+- description до 80 символов`, strings.Join(locationNames, "\n- "))
 }

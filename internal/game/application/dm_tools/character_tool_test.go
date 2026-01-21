@@ -47,6 +47,10 @@ func (m *mockEventRepoForCharacter) GetBySessionID(ctx context.Context, sessionI
 	return []event.StoryEvent{}, nil
 }
 
+func (m *mockEventRepoForCharacter) Save(ctx context.Context, e *event.StoryEvent) error {
+	return nil
+}
+
 func TestGetCharacterStatsTool_Name(t *testing.T) {
 	tool := NewGetCharacterStatsTool(nil, 1)
 	if tool.Name() != "get_character_stats" {
@@ -342,11 +346,67 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 			expectedError: true, // DC is required
 		},
 		{
+			name:   "ability check rejected when reason missing",
+			chatID: 12345,
+			args: map[string]interface{}{
+				"ability": "strength",
+				"dc":      12,
+				"stakes":  "низкие ставки",
+			},
+			setupMock: func(repo *mockSessionRepoForCharacter) {
+				char, _ := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{
+					Strength: 16,
+				})
+				repo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					return createTestSessionWithCharacter(t, char), nil
+				}
+			},
+			expectedError: false,
+			validate: func(t *testing.T, result interface{}) {
+				resultMap, ok := result.(map[string]interface{})
+				if !ok {
+					t.Fatalf("expected map[string]interface{}, got %T", result)
+				}
+				if rejected, ok := resultMap["rejected"].(bool); !ok || !rejected {
+					t.Errorf("expected rejected=true, got %v", resultMap["rejected"])
+				}
+			},
+		},
+		{
+			name:   "ability check rejected when stakes missing",
+			chatID: 12345,
+			args: map[string]interface{}{
+				"ability": "strength",
+				"dc":      12,
+				"reason":  "пытается поднять тяжесть",
+			},
+			setupMock: func(repo *mockSessionRepoForCharacter) {
+				char, _ := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{
+					Strength: 16,
+				})
+				repo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					return createTestSessionWithCharacter(t, char), nil
+				}
+			},
+			expectedError: false,
+			validate: func(t *testing.T, result interface{}) {
+				resultMap, ok := result.(map[string]interface{})
+				if !ok {
+					t.Fatalf("expected map[string]interface{}, got %T", result)
+				}
+				if rejected, ok := resultMap["rejected"].(bool); !ok || !rejected {
+					t.Errorf("expected rejected=true, got %v", resultMap["rejected"])
+				}
+			},
+		},
+		{
 			name:   "successful ability check with DC",
 			chatID: 12345,
 			args: map[string]interface{}{
 				"ability": "dexterity",
 				"dc":      15,
+				"reason":  "пытается проскользнуть незаметно",
+				"stakes":  "средние ставки: стражи могут заметить",
 			},
 			setupMock: func(repo *mockSessionRepoForCharacter) {
 				char, _ := character.NewCharacter("Test Hero", character.ClassRogue, character.RaceHuman, character.Stats{
@@ -377,11 +437,41 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 			},
 		},
 		{
+			name:   "trivial ability check auto resolved",
+			chatID: 12345,
+			args: map[string]interface{}{
+				"ability": "strength",
+				"dc":      6,
+				"reason":  "пытается открыть незапертую дверь",
+				"stakes":  "низкие ставки: ничего не сломается",
+			},
+			setupMock: func(repo *mockSessionRepoForCharacter) {
+				char, _ := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{
+					Strength: 12,
+				})
+				repo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					return createTestSessionWithCharacter(t, char), nil
+				}
+			},
+			expectedError: false,
+			validate: func(t *testing.T, result interface{}) {
+				resultMap, ok := result.(map[string]interface{})
+				if !ok {
+					t.Fatalf("expected map[string]interface{}, got %T", result)
+				}
+				if autoResolved, ok := resultMap["auto_resolved"].(bool); !ok || !autoResolved {
+					t.Errorf("expected auto_resolved=true, got %v", resultMap["auto_resolved"])
+				}
+			},
+		},
+		{
 			name:   "ability check rejected when pending exists",
 			chatID: 12345,
 			args: map[string]interface{}{
 				"ability": "strength",
 				"dc":      12,
+				"reason":  "пытается сдвинуть камень",
+				"stakes":  "средние ставки: шум привлечет внимание",
 			},
 			setupMock: func(repo *mockSessionRepoForCharacter) {
 				char, _ := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{
@@ -410,6 +500,8 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 			args: map[string]interface{}{
 				"ability": "dexterity",
 				"dc":      13,
+				"reason":  "пытается пройти по канату",
+				"stakes":  "средние ставки: можно упасть",
 			},
 			setupMock: func(repo *mockSessionRepoForCharacter) {
 				char, _ := character.NewCharacter("Test Hero", character.ClassRogue, character.RaceHuman, character.Stats{
@@ -447,6 +539,8 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 			args: map[string]interface{}{
 				"ability": "wisdom",
 				"dc":      14,
+				"reason":  "пытается заметить ловушки",
+				"stakes":  "средние ставки: можно попасть в ловушку",
 			},
 			setupMock: func(repo *mockSessionRepoForCharacter) {
 				char, _ := character.NewCharacter("Test Hero", character.ClassCleric, character.RaceHuman, character.Stats{
@@ -483,6 +577,9 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 			chatID: 12345,
 			args: map[string]interface{}{
 				"ability": "invalid",
+				"dc":      10,
+				"reason":  "пытается сделать невозможное",
+				"stakes":  "средние ставки",
 			},
 			setupMock: func(repo *mockSessionRepoForCharacter) {
 				char, _ := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{})
@@ -508,6 +605,9 @@ func TestRequestAbilityCheckTool_Execute(t *testing.T) {
 			chatID: 12345,
 			args: map[string]interface{}{
 				"ability": "strength",
+				"dc":      10,
+				"reason":  "пытается поднять предмет",
+				"stakes":  "низкие ставки",
 			},
 			setupMock: func(repo *mockSessionRepoForCharacter) {
 				repo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {

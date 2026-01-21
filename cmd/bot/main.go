@@ -62,6 +62,7 @@ import (
 	"github.com/qdrant/go-client/qdrant"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormLogger "gorm.io/gorm/logger"
 )
 
 // dailyQuestProgressAdapterForPlayerAction адаптирует questapp.CheckDailyQuestProgressUseCase к интерфейсу player_action.DailyQuestProgressChecker
@@ -613,7 +614,19 @@ func (a *ratingUpdaterAdapterAction) Execute(ctx context.Context, req player_act
 }
 
 func initDB(dsn string) (*gorm.DB, error) {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	dbLogger := gormLogger.New(
+		log.New(os.Stdout, "", log.LstdFlags),
+		gormLogger.Config{
+			SlowThreshold:             2 * time.Second,
+			LogLevel:                  gormLogger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		},
+	)
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: dbLogger,
+	})
 	if err != nil {
 		return nil, err
 	}

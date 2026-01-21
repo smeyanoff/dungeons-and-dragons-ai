@@ -123,6 +123,8 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	qdrantClient, err := qdrant.NewClient(&qdrant.Config{
 		Host: qdrantHost,
 		Port: parsePort(qdrantGrpcPort),
+		// Qdrant сервер может быть старее клиента; пропускаем проверку совместимости осознанно.
+		SkipCompatibilityCheck: true,
 	})
 	if err != nil {
 		t.Fatalf("Не удалось подключиться к Qdrant: %v", err)
@@ -452,6 +454,8 @@ func isContainersRunning(t *testing.T) bool {
 	client, err := qdrant.NewClient(&qdrant.Config{
 		Host: qdrantHost,
 		Port: parsePort(qdrantGrpcPort),
+		// Qdrant сервер может быть старее клиента; пропускаем проверку совместимости осознанно.
+		SkipCompatibilityCheck: true,
 	})
 	if err != nil {
 		return false

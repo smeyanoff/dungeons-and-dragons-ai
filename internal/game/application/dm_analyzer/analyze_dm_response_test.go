@@ -292,6 +292,24 @@ func TestAnalyzeDMResponseUseCase_Execute(t *testing.T) {
 			},
 		},
 		{
+			name:       "empty analysis triggers combat fallback",
+			dmResponse: "Начался бой, гоблин атакует!",
+			setupMocks: func(llm *mockLLM, combatRepo *mockCombatRepo, questRepo *mockQuestRepo) {
+				llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
+					return "{}", nil
+				}
+			},
+			expectedError: false,
+			validate: func(t *testing.T, analysis *DMResponseAnalysis, combatRepo *mockCombatRepo, questRepo *mockQuestRepo) {
+				if !analysis.CombatDetected {
+					t.Error("expected combat detected from fallback")
+				}
+				if len(analysis.Enemies) == 0 {
+					t.Error("expected enemies from fallback analysis")
+				}
+			},
+		},
+		{
 			name:       "LLM error - returns empty analysis",
 			dmResponse: "Тестовый ответ",
 			setupMocks: func(llm *mockLLM, combatRepo *mockCombatRepo, questRepo *mockQuestRepo) {
@@ -664,7 +682,7 @@ func TestTryRepairTruncatedJSON(t *testing.T) {
 
 func TestBuildAnalysisPrompt(t *testing.T) {
 	dmResponse := "Вы видите трех гоблинов!"
-	prompt := buildAnalysisPrompt(dmResponse)
+	prompt := buildAnalysisPrompt(dmResponse, false)
 
 	if prompt == "" {
 		t.Error("expected non-empty prompt")

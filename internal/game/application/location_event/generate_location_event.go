@@ -48,6 +48,19 @@ const (
 	EventTypeEncounter LocationEventType = "encounter" // Случайная встреча/бой
 )
 
+const (
+	locationEventStatusPending  = "pending"
+	locationEventStatusResolved = "resolved"
+	locationEventStatusExpired  = "expired"
+)
+
+const (
+	locationEventCooldown        = 20 * time.Minute
+	locationEventPendingTTL      = 30 * time.Minute
+	locationEventWindow          = 24 * time.Hour
+	maxEventsPerLocationPerWindow = 3
+)
+
 // GenerateLocationEventResponse ответ с сгенерированным событием
 type GenerateLocationEventResponse struct {
 	Event       *world.WorldEvent
@@ -76,9 +89,47 @@ func (g *LocationEventGenerator) Execute(
 		return nil, fmt.Errorf("failed to check existing events: %w", err)
 	}
 
-	// Если событие уже было сгенерировано для этой локации, не генерируем новое
+	now := time.Now()
 	if len(existingEvents) > 0 {
-		return nil, nil
+		recentCount := 0
+		for i := range existingEvents {
+			ev := existingEvents[i]
+			if now.Sub(ev.CreatedAt) <= locationEventWindow {
+				recentCount++
+			}
+		}
+		if recentCount >= maxEventsPerLocationPerWindow {
+			return nil, nil
+		}
+
+		hasActivePending := false
+		var latestEvent *world.WorldEvent
+		for i := range existingEvents {
+			ev := &existingEvents[i]
+			if latestEvent == nil || ev.CreatedAt.After(latestEvent.CreatedAt) {
+				latestEvent = ev
+			}
+			meta, ok := parseLocationEventMetadata(ev)
+			if !ok || meta.Status == "" {
+				meta.Status = locationEventStatusPending
+			}
+			if meta.Status == locationEventStatusPending {
+				if now.Sub(ev.CreatedAt) <= locationEventPendingTTL {
+					hasActivePending = true
+				} else {
+					if err := g.expireLocationEvent(ctx, ev); err != nil {
+						return nil, fmt.Errorf("failed to expire location event: %w", err)
+					}
+				}
+			}
+		}
+
+		if hasActivePending {
+			return nil, nil
+		}
+		if latestEvent != nil && now.Sub(latestEvent.CreatedAt) < locationEventCooldown {
+			return nil, nil
+		}
 	}
 
 	// Генерируем случайный тип события (веса для разнообразия)
@@ -173,7 +224,7 @@ func (g *LocationEventGenerator) createLocationEvent(
 		Status:             world.WorldEventStatusActive,
 		Name:               name,
 		Description:        description,
-		Metadata:           buildLocationEventMetadata(description, options, checks, stakes),
+		Metadata:           buildLocationEventMetadata(description, options, checks, stakes, locationEventStatusPending),
 		RequiredLocationID: &locationID,
 		ActivatedAt:        &now,
 		CreatedAt:          now,
@@ -183,17 +234,42 @@ func (g *LocationEventGenerator) createLocationEvent(
 	return event, description
 }
 
-func buildLocationEventMetadata(hook string, options []string, checks []string, stakes string) []byte {
+func buildLocationEventMetadata(hook string, options []string, checks []string, stakes string, status string) []byte {
 	meta := world.LocationEventMetadata{
 		Hook:            hook,
 		Options:         options,
 		SuggestedChecks: checks,
 		Stakes:          stakes,
-		Status:          "active",
+		Status:          status,
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
 		return nil
 	}
 	return raw
+}
+
+func parseLocationEventMetadata(event *world.WorldEvent) (world.LocationEventMetadata, bool) {
+	if event == nil || len(event.Metadata) == 0 {
+		return world.LocationEventMetadata{}, false
+	}
+	var meta world.LocationEventMetadata
+	if err := json.Unmarshal(event.Metadata, &meta); err != nil {
+		return world.LocationEventMetadata{}, false
+	}
+	return meta, true
+}
+
+func (g *LocationEventGenerator) expireLocationEvent(ctx context.Context, ev *world.WorldEvent) error {
+	meta, ok := parseLocationEventMetadata(ev)
+	if !ok {
+		meta = world.LocationEventMetadata{}
+	}
+	meta.Status = locationEventStatusExpired
+	updated := buildLocationEventMetadata(meta.Hook, meta.Options, meta.SuggestedChecks, meta.Stakes, meta.Status)
+	ev.Metadata = updated
+	ev.Status = world.WorldEventStatusCancelled
+	now := time.Now()
+	ev.UpdatedAt = now
+	return g.eventRepo.Save(ctx, ev)
 }

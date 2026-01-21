@@ -296,7 +296,7 @@ docker-compose -f docker-compose.prod.yml exec postgres pg_isready -U dnd_user
 
 1. Проверьте статус:
 ```bash
-curl http://localhost:6334/health
+curl http://localhost:6334/healthz
 ```
 
 2. Проверьте логи:

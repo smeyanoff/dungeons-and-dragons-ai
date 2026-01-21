@@ -121,7 +121,7 @@ docker ps | grep postgres
 ### Ошибка подключения к Qdrant
 Проверьте, что Qdrant доступен:
 ```bash
-curl http://localhost:6334/health
+curl http://localhost:6334/healthz
 ```
 
 ### Отсутствуют GigaChat credentials

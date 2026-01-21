@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
@@ -11,11 +12,19 @@ import (
 
 type GetMapUseCase struct {
 	sessionRepo session.Repository
+	cacheMu     sync.RWMutex
+	cache       map[uint]cachedMap
+}
+
+type cachedMap struct {
+	signature string
+	text      string
 }
 
 func NewGetMapUseCase(sessionRepo session.Repository) *GetMapUseCase {
 	return &GetMapUseCase{
 		sessionRepo: sessionRepo,
+		cache:       make(map[uint]cachedMap),
 	}
 }
 
@@ -33,8 +42,15 @@ func (uc *GetMapUseCase) Execute(
 		return "Игра не начата. Используйте /newgame для начала новой игры.", nil
 	}
 
+	signature := uc.buildMapSignature(&gs.World, gs.CurrentLocationID)
+	if cached, ok := uc.getCachedMap(gs.World.ID, signature); ok {
+		return cached, nil
+	}
+
 	// Формируем карту мира
-	return uc.generateMap(&gs.World, gs.CurrentLocationID), nil
+	mapText := uc.generateMap(&gs.World, gs.CurrentLocationID)
+	uc.setCachedMap(gs.World.ID, signature, mapText)
+	return mapText, nil
 }
 
 // generateMap создает ASCII визуализацию карты мира на основе связей между локациями
@@ -152,6 +168,58 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+func (uc *GetMapUseCase) getCachedMap(worldID uint, signature string) (string, bool) {
+	if worldID == 0 {
+		return "", false
+	}
+	uc.cacheMu.RLock()
+	defer uc.cacheMu.RUnlock()
+	cached, ok := uc.cache[worldID]
+	if !ok || cached.signature != signature {
+		return "", false
+	}
+	return cached.text, true
+}
+
+func (uc *GetMapUseCase) setCachedMap(worldID uint, signature, text string) {
+	if worldID == 0 || signature == "" || text == "" {
+		return
+	}
+	uc.cacheMu.Lock()
+	defer uc.cacheMu.Unlock()
+	uc.cache[worldID] = cachedMap{signature: signature, text: text}
+}
+
+func (uc *GetMapUseCase) buildMapSignature(w *world.World, currentLocationID *uint) string {
+	if w == nil {
+		return ""
+	}
+	totalConnections := 0
+	totalNPCs := 0
+	totalMonsters := 0
+	for _, loc := range w.Locations {
+		totalConnections += len(loc.Connections)
+		totalNPCs += len(loc.NPCs)
+		totalMonsters += len(loc.Monsters)
+	}
+	currentID := uint(0)
+	if currentLocationID != nil {
+		currentID = *currentLocationID
+	}
+	return fmt.Sprintf("%d:%d:%d:%d:%d:%s:%s:%d:%d:%d",
+		w.ID,
+		currentID,
+		len(w.Locations),
+		totalConnections,
+		totalNPCs+totalMonsters,
+		w.TimeOfDay,
+		w.Weather,
+		w.Day,
+		w.Week,
+		w.Month,
+	)
 }
 
 // getDirectionSymbol возвращает символ для направления

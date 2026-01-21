@@ -99,8 +99,8 @@ func (staticContextBuilder) BuildContext(ctx context.Context, gs *session.GameSe
 }
 
 // TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow проверяет полный UX “tool-first ability check”:
-// сообщение игрока -> LLM tool call request_ability_check -> pending check в сессии -> бот шлёт inline кнопку ->
-// callback -> perform ability check -> pending cleared + событие в истории + редактирование сообщения.
+// сообщение игрока -> LLM tool call request_ability_check -> pending check в сессии -> бот шлёт текстовую подсказку ->
+// /roll d20 -> perform ability check -> pending cleared + событие в истории.
 //
 // Важно: тест НЕ дергает реальный LLM/embeddings, чтобы оставаться стабильным и не DDOSить модель.
 func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) {
@@ -250,24 +250,21 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 		t.Fatalf("Ожидали PendingAbilityCheckNotified=true после prompt, но false")
 	}
 
-	// Find the pending check prompt message and extract callback data
+	// Find the pending check prompt message (text-only)
 	calls := fakeAPI.snapshotCalls()
 	promptMsgID := 0
-	promptMarkup := ""
 	for _, c := range calls {
-		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") && strings.TrimSpace(c.ReplyMarkup) != "" {
+		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") {
 			promptMsgID = c.MessageID
-			promptMarkup = c.ReplyMarkup
 		}
 	}
-	cbData, ok := extractFirstCallbackData(promptMarkup)
-	if promptMsgID == 0 || !ok || !strings.HasPrefix(cbData, "ability_roll_") {
-		t.Fatalf("Не удалось найти prompt с inline кнопкой ability_roll_* (msg_id=%d, cb=%q, markup=%s)", promptMsgID, cbData, promptMarkup)
+	if promptMsgID == 0 {
+		t.Fatalf("Не удалось найти prompt с текстовой подсказкой ability check (msg_id=%d)", promptMsgID)
 	}
 
-	// Simulate button press
-	if err := bot.HandleUpdate(ctx, makeCallbackUpdate(chatID, tgUserID, promptMsgID, cbData)); err != nil {
-		t.Fatalf("ability_roll callback: %v", err)
+	// Simulate /roll d20
+	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/roll d20")); err != nil {
+		t.Fatalf("/roll d20: %v", err)
 	}
 
 	// Verify pending cleared
@@ -276,7 +273,7 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 		t.Fatalf("Не удалось получить сессию после callback: %v", err)
 	}
 	if gs.HasPendingAbilityCheck() {
-		t.Fatalf("Pending ability check не очищен после callback (id=%s ability=%s dc=%d)", gs.PendingAbilityCheckID, gs.PendingAbilityCheckAbility, gs.PendingAbilityCheckDC)
+		t.Fatalf("Pending ability check не очищен после /roll (id=%s ability=%s dc=%d)", gs.PendingAbilityCheckID, gs.PendingAbilityCheckAbility, gs.PendingAbilityCheckDC)
 	}
 
 	// Verify event persisted to history
@@ -295,16 +292,16 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 		t.Fatalf("Не найдено событие проверки в истории (ожидали текст вида '🎲 Проверка ... (DC ...)')")
 	}
 
-	// Verify Telegram edit performed with result
+	// Verify Telegram message sent with result
 	calls = fakeAPI.snapshotCalls()
-	edited := false
+	foundResult := false
 	for _, c := range calls {
-		if c.Method == "editMessageText" && c.ChatID == chatID && c.MessageID == promptMsgID && strings.Contains(c.Text, "🎲 Проверка") {
-			edited = true
+		if c.Method == "sendMessage" && c.ChatID == chatID && c.MessageID != promptMsgID && strings.Contains(c.Text, "🎲 Проверка") {
+			foundResult = true
 			break
 		}
 	}
-	if !edited {
-		t.Fatalf("Бот не отредактировал сообщение результатом ability check (editMessageText с '🎲 Проверка')")
+	if !foundResult {
+		t.Fatalf("Бот не отправил сообщение с результатом ability check")
 	}
 }

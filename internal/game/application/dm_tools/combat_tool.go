@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
@@ -746,8 +747,10 @@ func (t *GetBattlefieldStatusTool) formatTable(combat *combat.Combat) string {
 		"#", "Имя", "HP", "AC", "Иниц.", "Статус"))
 	lines = append(lines, strings.Repeat("-", 60))
 
-	// Участники
-	for i, participant := range combat.Participants {
+	// Участники (детерминированная сортировка)
+	entries := buildBattlefieldEntries(combat)
+	for i, entry := range entries {
+		participant := entry.participant
 		var name string
 		var hp, maxHP int
 		var ac int
@@ -768,7 +771,7 @@ func (t *GetBattlefieldStatusTool) formatTable(combat *combat.Combat) string {
 		// Определяем статус
 		if !participant.IsAlive() {
 			status = "💀 Мертв"
-		} else if i == combat.CurrentTurn {
+		} else if entry.isCurrent {
 			status = "⚡ ХОД"
 		} else {
 			status = "⏳ Ожидает"
@@ -786,8 +789,13 @@ func (t *GetBattlefieldStatusTool) formatTable(combat *combat.Combat) string {
 	lines = append(lines, strings.Repeat("-", 60))
 	currentParticipant := combat.GetCurrentParticipant()
 	if currentParticipant != nil {
-		lines = append(lines, fmt.Sprintf("Текущий ход: #%d (%s)",
-			combat.CurrentTurn+1, currentParticipant.GetName()))
+		currentIndex := findCurrentEntryIndex(entries)
+		if currentIndex >= 0 {
+			lines = append(lines, fmt.Sprintf("Текущий ход: #%d (%s)",
+				currentIndex+1, currentParticipant.GetName()))
+		} else {
+			lines = append(lines, fmt.Sprintf("Текущий ход: %s", currentParticipant.GetName()))
+		}
 	}
 
 	return strings.Join(lines, "\n")
@@ -799,9 +807,11 @@ func (t *GetBattlefieldStatusTool) formatCompact(combat *combat.Combat) string {
 	lines = append(lines, "⚔️ ПОЛЕ БОЯ (компактный вид)")
 	lines = append(lines, "")
 
-	for i, participant := range combat.Participants {
+	entries := buildBattlefieldEntries(combat)
+	for _, entry := range entries {
+		participant := entry.participant
 		var prefix string
-		if i == combat.CurrentTurn {
+		if entry.isCurrent {
 			prefix = "⚡"
 		} else if !participant.IsAlive() {
 			prefix = "💀"
@@ -826,7 +836,9 @@ func (t *GetBattlefieldStatusTool) formatDetailed(combat *combat.Combat) string 
 	lines = append(lines, strings.Repeat("=", 60))
 	lines = append(lines, "")
 
-	for i, participant := range combat.Participants {
+	entries := buildBattlefieldEntries(combat)
+	for i, entry := range entries {
+		participant := entry.participant
 		var name string
 		var hp, maxHP int
 		var ac int
@@ -847,7 +859,7 @@ func (t *GetBattlefieldStatusTool) formatDetailed(combat *combat.Combat) string 
 		}
 
 		var turnIndicator string
-		if i == combat.CurrentTurn {
+		if entry.isCurrent {
 			turnIndicator = " ⚡ ТЕКУЩИЙ ХОД"
 		}
 
@@ -878,11 +890,61 @@ func (t *GetBattlefieldStatusTool) formatDetailed(combat *combat.Combat) string 
 	lines = append(lines, strings.Repeat("=", 60))
 	currentParticipant := combat.GetCurrentParticipant()
 	if currentParticipant != nil {
-		lines = append(lines, fmt.Sprintf("Текущий ход: #%d (%s)",
-			combat.CurrentTurn+1, currentParticipant.GetName()))
+		currentIndex := findCurrentEntryIndex(entries)
+		if currentIndex >= 0 {
+			lines = append(lines, fmt.Sprintf("Текущий ход: #%d (%s)",
+				currentIndex+1, currentParticipant.GetName()))
+		} else {
+			lines = append(lines, fmt.Sprintf("Текущий ход: %s", currentParticipant.GetName()))
+		}
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+type battlefieldEntry struct {
+	participant *combat.CombatParticipant
+	isCurrent   bool
+	name        string
+	initiative  int
+}
+
+func buildBattlefieldEntries(combatState *combat.Combat) []battlefieldEntry {
+	if combatState == nil {
+		return nil
+	}
+	entries := make([]battlefieldEntry, 0, len(combatState.Participants))
+	for i := range combatState.Participants {
+		participant := &combatState.Participants[i]
+		name := participant.GetName()
+		entries = append(entries, battlefieldEntry{
+			participant: participant,
+			isCurrent:   i == combatState.CurrentTurn,
+			name:        name,
+			initiative:  participant.Initiative,
+		})
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].initiative != entries[j].initiative {
+			return entries[i].initiative > entries[j].initiative
+		}
+		if entries[i].participant.IsPlayer != entries[j].participant.IsPlayer {
+			return entries[i].participant.IsPlayer
+		}
+		return entries[i].name < entries[j].name
+	})
+
+	return entries
+}
+
+func findCurrentEntryIndex(entries []battlefieldEntry) int {
+	for i, entry := range entries {
+		if entry.isCurrent {
+			return i
+		}
+	}
+	return -1
 }
 
 // PerformEnemyAttackTool позволяет DM выполнить атаку противника во время боя

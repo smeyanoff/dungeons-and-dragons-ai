@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -481,13 +482,15 @@ func (uc *HandleActionUseCase) Execute(
 		// важных частей контекста (локации/связи/квесты) и эффекту "обрезания" мира DM.
 		maxContextLength := getEnvInt("DM_MAX_CONTEXT_CHARS", 16000)
 		maxPromptLength := getEnvInt("DM_MAX_PROMPT_CHARS", 24000)
-		contextForPrompt := truncateMiddle(gameContext, maxContextLength)
+		contextForPrompt, removedBlocks, hardTruncated := truncateContextByPriority(gameContext, maxContextLength)
 		if contextForPrompt != gameContext {
 			logger.Warn("Game context truncated for prompt",
 				logger.Uint("session_id", gs.ID),
 				logger.Int("original_length", len(gameContext)),
 				logger.Int("truncated_length", len(contextForPrompt)),
 				logger.Int("max_context_length", maxContextLength),
+				logger.Any("removed_blocks", removedBlocks),
+				logger.Bool("hard_truncated", hardTruncated),
 			)
 		}
 		prompt := BuildDMPrompt(contextForPrompt, playerMessage)
@@ -1053,6 +1056,161 @@ func truncateMiddle(text string, maxLen int) string {
 	return strings.TrimSpace(head) + marker + strings.TrimSpace(tail)
 }
 
+type contextBlock struct {
+	title    string
+	content  string
+	priority int
+}
+
+func truncateContextByPriority(gameContext string, maxLen int) (string, []string, bool) {
+	if len(gameContext) <= maxLen {
+		return gameContext, nil, false
+	}
+
+	blocks := splitContextBlocks(gameContext)
+	if len(blocks) == 0 {
+		return truncateMiddle(gameContext, maxLen), []string{"all"}, true
+	}
+
+	totalLen := totalBlocksLength(blocks)
+	if totalLen <= maxLen {
+		return joinBlocks(blocks), nil, false
+	}
+
+	removed := map[int]bool{}
+	removedTitles := []string{}
+
+	removable := []int{}
+	for i, block := range blocks {
+		if block.priority > 1 {
+			removable = append(removable, i)
+		}
+	}
+
+	sort.Slice(removable, func(i, j int) bool {
+		left := blocks[removable[i]]
+		right := blocks[removable[j]]
+		if left.priority != right.priority {
+			return left.priority > right.priority
+		}
+		return len(left.content) > len(right.content)
+	})
+
+	for _, idx := range removable {
+		if totalLen <= maxLen {
+			break
+		}
+		removed[idx] = true
+		removedTitles = append(removedTitles, blocks[idx].title)
+		totalLen -= len(blocks[idx].content)
+	}
+
+	resultBlocks := []contextBlock{}
+	for i, block := range blocks {
+		if !removed[i] {
+			resultBlocks = append(resultBlocks, block)
+		}
+	}
+
+	result := joinBlocks(resultBlocks)
+	if len(result) > maxLen {
+		return truncateMiddle(result, maxLen), removedTitles, true
+	}
+
+	return result, removedTitles, false
+}
+
+func splitContextBlocks(gameContext string) []contextBlock {
+	segments := strings.Split(gameContext, "\n--- ")
+	blocks := []contextBlock{}
+
+	if len(segments) == 0 {
+		return blocks
+	}
+
+	base := strings.TrimSpace(segments[0])
+	if base != "" {
+		blocks = append(blocks, contextBlock{
+			title:    "base",
+			content:  base,
+			priority: contextBlockPriority("base"),
+		})
+	}
+
+	for i := 1; i < len(segments); i++ {
+		segment := segments[i]
+		header := segment
+		body := ""
+		if idx := strings.Index(segment, "\n"); idx >= 0 {
+			header = segment[:idx]
+			body = segment[idx+1:]
+		}
+		title := strings.TrimSuffix(strings.TrimSpace(header), " ---")
+		content := strings.TrimSpace("--- " + header)
+		if strings.TrimSpace(body) != "" {
+			content = content + "\n" + strings.TrimSpace(body)
+		}
+		if title == "" {
+			title = "unknown"
+		}
+		blocks = append(blocks, contextBlock{
+			title:    title,
+			content:  content,
+			priority: contextBlockPriority(title),
+		})
+	}
+
+	return blocks
+}
+
+func contextBlockPriority(title string) int {
+	switch title {
+	case "Инструкции по проверкам навыков (ABILITY CHECKS)":
+		return 1
+	case "Текущая локация":
+		return 1
+	case "Текущий бой":
+		return 1
+	case "Ожидается проверка навыка":
+		return 1
+	case "Персонаж игрока":
+		return 2
+	case "Последние сообщения":
+		return 2
+	case "Инвентарь персонажа":
+		return 2
+	case "Релевантная история игры (найдено через поиск)":
+		return 3
+	case "Игроки в сессии":
+		return 4
+	case "base":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func totalBlocksLength(blocks []contextBlock) int {
+	length := 0
+	for _, block := range blocks {
+		length += len(block.content)
+	}
+	if len(blocks) > 1 {
+		length += len(blocks) - 1
+	}
+	return length
+}
+
+func joinBlocks(blocks []contextBlock) string {
+	parts := []string{}
+	for _, block := range blocks {
+		if strings.TrimSpace(block.content) != "" {
+			parts = append(parts, block.content)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // buildCombatContext строит контекст боя для DM
 func (uc *HandleActionUseCase) buildCombatContext(gs *session.GameSession, activeCombat *combat.Combat) string {
 	var parts []string
@@ -1107,7 +1265,7 @@ func buildActionAnalysisContext(analysis *dm_analyzer.PlayerActionAnalysis) stri
 		parts = append(parts, fmt.Sprintf("- Характеристика: %s", analysis.AbilityCheck.Ability))
 		parts = append(parts, fmt.Sprintf("- DC: %d", analysis.AbilityCheck.DC))
 		parts = append(parts, fmt.Sprintf("- Причина: %s", analysis.AbilityCheck.Reason))
-		parts = append(parts, "⚠️ ВАЖНО: Используй инструмент 'request_ability_check' с указанными параметрами, затем попроси игрока использовать команду /roll d20.")
+		parts = append(parts, "⚠️ ВАЖНО: Используй инструмент 'request_ability_check' с параметрами ability, dc, reason, stakes, затем попроси игрока использовать команду /roll d20.")
 	}
 
 	if analysis.NeedsPredefinedCheck && analysis.PredefinedCheck != nil {

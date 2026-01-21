@@ -117,7 +117,7 @@ log_info "Ожидание готовности Qdrant..."
 # Используем curl из хоста, так как в контейнере Qdrant может не быть wget
 for i in $(seq 1 30); do
     # Проверяем через health check статус контейнера или через curl с хоста
-    if curl -sf http://localhost:6334/health > /dev/null 2>&1 || \
+    if curl -sf http://localhost:6334/healthz > /dev/null 2>&1 || \
        docker inspect dnd-qdrant-prod --format='{{.State.Health.Status}}' 2>/dev/null | grep -q "healthy"; then
         log_info "Qdrant готов"
         break
