@@ -98,21 +98,27 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 	return fileID, nil
 }
 
-// DownloadImage скачивает изображение по file_id с retry механизмом для 403 ошибок
+// DownloadImage скачивает изображение по file_id с улучшенной retry логикой для 403 ошибок
 // (изображение может быть еще не готово сразу после генерации)
 func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, error) {
 	url := fmt.Sprintf("%s/files/%s/content", c.cfg.APIBaseURL, fileID)
 
-	const maxRetries = 3
-	const retryDelay = 2 * time.Second
+	const maxRetries = 5 // Увеличиваем количество попыток для изображений
+	const initialDelay = 1 * time.Second // Начинаем с меньшей задержки
+	const maxDelay = 8 * time.Second // Максимальная задержка
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			// Задержка перед повторной попыткой (изображение может быть еще не готово)
+			// Exponential backoff для изображений: 1s, 2s, 4s, 8s
+			delay := initialDelay * time.Duration(1<<uint(attempt-1))
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(retryDelay):
+			case <-time.After(delay):
 			}
 		}
 

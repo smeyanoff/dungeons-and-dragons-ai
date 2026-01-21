@@ -114,3 +114,41 @@
 2. LocationEvent: событие локации есть в world_events (id=9), но не найдено ни в одном StoryEvent (history) — игрок/DM могут его не увидеть
 
 ---
+
+## Результаты тестирования основных механик (2026-01-21 22:58:38)
+
+### ✅ Stub-тесты (без реального LLM)
+Все stub-тесты прошли успешно:
+- TestTelegramGameplay_BotSimulation_AbilityCheckOneTap
+- TestTelegramGameplay_BotSimulation_UserJourney
+- TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit
+- TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow
+- TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM
+
+**Выявлено:** 0 проблем в stub-тестах
+
+### ⚠️ Тесты с реальными ответами LLM
+Тесты с реальными ответами LLM пропущены из-за отсутствия GigaChat credentials:
+- TestTelegramGameplay_CompleteFlow
+- TestTelegramGameplay_CombatFlow
+- TestTelegramGameplay_RealLLM_PendingAbilityCheck_ManualAndRoll
+- TestTelegramGameplay_RealLLM_UserJourney_MainMechanics
+- TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM
+
+**Причина:** GIGACHAT_CLIENT_ID и GIGACHAT_CLIENT_SECRET не установлены
+
+### 📝 Создан новый тест
+Написан TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM - комплексный тест, проверяющий полный пользовательский journey:
+- /help
+- /newgame (с реальным LLM)
+- /createcharacter
+- Игровые действия
+- Pending ability checks (/roll d20)
+- Боевая система (/battlefield, /attack)
+- Просмотр всех команд (/inventory, /quests, /daily, /achievements, /spells, /map, /history)
+- Проверка на утечки tool-текста
+- /endgame
+
+**Статус:** Требует GigaChat credentials для полного тестирования
+
+---

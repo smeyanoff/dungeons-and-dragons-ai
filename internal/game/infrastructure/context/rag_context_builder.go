@@ -12,17 +12,19 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/rag/application"
 	"dungeons-and-dragons-ai/pkg/logger"
 )
 
 type RAGContextBuilder struct {
-	simpleBuilder *SimpleContextBuilder
-	retrieveUC    *application.RetrieveContext
-	eventRepo     EventRepository
-	inventoryRepo InventoryRepository
-	combatRepo    CombatRepository
-	config        ragContextConfig
+	simpleBuilder    *SimpleContextBuilder
+	retrieveUC       *application.RetrieveContext
+	eventRepo        EventRepository
+	inventoryRepo    InventoryRepository
+	combatRepo       CombatRepository
+	worldEventRepo   WorldEventRepository
+	config           ragContextConfig
 }
 
 type EventRepository interface {
@@ -35,6 +37,10 @@ type InventoryRepository interface {
 
 type CombatRepository interface {
 	GetActiveBySessionID(ctx context.Context, sessionID uint) (*combat.Combat, error)
+}
+
+type WorldEventRepository interface {
+	GetActiveByWorldID(ctx context.Context, worldID uint) ([]world.WorldEvent, error)
 }
 
 func NewRAGContextBuilder(
@@ -52,6 +58,11 @@ func NewRAGContextBuilder(
 		combatRepo:    combatRepo,
 		config:        loadRAGContextConfig(),
 	}
+}
+
+// SetWorldEventRepository устанавливает репозиторий мировых событий
+func (b *RAGContextBuilder) SetWorldEventRepository(repo WorldEventRepository) {
+	b.worldEventRepo = repo
 }
 
 func (b *RAGContextBuilder) BuildContext(
@@ -310,6 +321,34 @@ func (b *RAGContextBuilder) BuildContext(
 		logger.Debug("No RAG documents found",
 			logger.Uint("session_id", gs.ID),
 		)
+	}
+
+	// Добавляем активные мировые события (location events) в контекст
+	if b.worldEventRepo != nil {
+		activeEvents, err := b.worldEventRepo.GetActiveByWorldID(ctx, gs.WorldID)
+		if err != nil {
+			logger.Warn("Failed to get active world events for context",
+				logger.ErrorField(err),
+				logger.Uint("world_id", gs.WorldID),
+			)
+		} else if len(activeEvents) > 0 {
+			parts = append(parts, "\n--- Активные события локаций ---")
+			for _, evt := range activeEvents {
+				// Показываем только события, связанные с текущей локацией
+				if gs.CurrentLocationID != nil && evt.RequiredLocationID != nil && *evt.RequiredLocationID == *gs.CurrentLocationID {
+					// Форматируем событие для контекста DM
+					eventDesc := fmt.Sprintf("📍 %s", evt.Name)
+					if evt.Description != "" {
+						eventDesc += fmt.Sprintf(": %s", truncateText(evt.Description, 200))
+					}
+					parts = append(parts, eventDesc)
+				}
+			}
+			logger.Debug("Added active location events to context",
+				logger.Uint("session_id", gs.ID),
+				logger.Int("events_count", len(activeEvents)),
+			)
+		}
 	}
 
 	return strings.Join(parts, "\n"), nil

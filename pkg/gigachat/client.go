@@ -7,16 +7,22 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 type Client struct {
-	auth   *authClient
-	cfg    Config
-	client *http.Client
+	auth          *authClient
+	cfg           Config
+	client        *http.Client
+	semaphore     chan struct{} // Concurrency control semaphore
+	requestCount  int64         // Counter for metrics
+	errorCount    int64         // Counter for error metrics
+	rateLimitCount int64        // Counter for 429 responses
 }
 
 func NewClient(cfg Config) *Client {
@@ -35,13 +41,23 @@ func NewClient(cfg Config) *Client {
 		}
 	}
 
+	// Concurrency limit: по умолчанию 5 одновременных запросов
+	concurrencyLimit := 5
+	if cfg.ConcurrencyLimit > 0 {
+		concurrencyLimit = cfg.ConcurrencyLimit
+	}
+
 	return &Client{
-		auth: newAuthClient(cfg),
-		cfg:  cfg,
+		auth:          newAuthClient(cfg),
+		cfg:           cfg,
 		client: &http.Client{
 			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
+		semaphore:     make(chan struct{}, concurrencyLimit),
+		requestCount:  0,
+		errorCount:    0,
+		rateLimitCount: 0,
 	}
 }
 
@@ -51,17 +67,35 @@ func (c *Client) GetToken(ctx context.Context) (string, error) {
 	return c.auth.getToken(ctx)
 }
 
+// GetMetrics возвращает текущие метрики клиента
+func (c *Client) GetMetrics() map[string]int64 {
+	return map[string]int64{
+		"requests":     atomic.LoadInt64(&c.requestCount),
+		"errors":       atomic.LoadInt64(&c.errorCount),
+		"rate_limits":  atomic.LoadInt64(&c.rateLimitCount),
+	}
+}
+
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
+	// Acquire semaphore for concurrency control
+	select {
+	case c.semaphore <- struct{}{}:
+		defer func() { <-c.semaphore }() // Release semaphore
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
 	// Добавляем X-Client-ID для image-related запросов (генерация и скачивание изображений)
 	isImageRequest := strings.Contains(url, "/files/") || (strings.Contains(url, "/chat/completions") && len(body) > 0 && strings.Contains(string(body), "text2image"))
 	const maxRetries = 3
 	const initialBackoff = 2 * time.Second
 	const maxBackoff = 30 * time.Second
+	const jitterFactor = 0.1 // 10% jitter
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			// Вычисляем exponential backoff: 2s, 4s, 8s
+			// Вычисляем exponential backoff с jitter: 2s, 4s, 8s
 			shift := attempt - 1
 			const maxSafeShift = 30
 			if shift < 0 {
@@ -73,11 +107,17 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
-			log.Printf("GigaChat: Rate limited (429), retry attempt %d/%d after %v...", attempt, maxRetries, backoff)
+
+			// Add jitter to prevent thundering herd
+			jitter := time.Duration(float64(backoff) * jitterFactor * rand.Float64())
+			totalBackoff := backoff + jitter
+
+			log.Printf("GigaChat: Rate limited (429), retry attempt %d/%d after %v (backoff: %v + jitter: %v)...",
+				attempt, maxRetries, totalBackoff, backoff, jitter)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(backoff):
+			case <-time.After(totalBackoff):
 			}
 		}
 
@@ -99,8 +139,12 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
 		}
 
+		// Increment request counter
+		atomic.AddInt64(&c.requestCount, 1)
+
 		resp, err := c.client.Do(req)
 		if err != nil {
+			atomic.AddInt64(&c.errorCount, 1)
 			lastErr = err
 			// Для сетевых ошибок продолжаем retry
 			continue
@@ -132,6 +176,11 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			req.Header.Set("Authorization", "Bearer "+newToken)
 			req.Header.Set("Accept", "application/json")
 			req.Header.Set("Content-Type", "application/json")
+
+			// Добавляем X-Client-ID для image-related запросов
+			if isImageRequest && c.cfg.ClientID != "" {
+				req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
+			}
 
 			resp, err = c.client.Do(req)
 			if err != nil {
@@ -186,6 +235,11 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 				req.Header.Set("Accept", "application/json")
 				req.Header.Set("Content-Type", "application/json")
 
+				// Добавляем X-Client-ID для image-related запросов
+				if isImageRequest && c.cfg.ClientID != "" {
+					req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
+				}
+
 				resp, err = c.client.Do(req)
 				if err != nil {
 					lastErr = err
@@ -206,6 +260,9 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 
 		// Если получили 429 Too Many Requests, пробуем повторить с задержкой
 		if resp.StatusCode == 429 {
+			// Increment rate limit counter
+			atomic.AddInt64(&c.rateLimitCount, 1)
+
 			// Проверяем заголовок Retry-After, если он есть
 			retryAfter := resp.Header.Get("Retry-After")
 			if retryAfter != "" {

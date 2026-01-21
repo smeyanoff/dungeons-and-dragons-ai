@@ -1445,7 +1445,7 @@ func (b *Bot) maybeSendPendingAbilityCheckPrompt(ctx context.Context, chatID int
 	}
 
 	abilityName := formatAbilityName(gs.PendingAbilityCheckAbility)
-	text := fmt.Sprintf("🎲 Проверка %s (DC %d). Напишите /roll d20, чтобы бросить кубик. Можно отправить результат числом (например: 17).", abilityName, gs.PendingAbilityCheckDC)
+	text := fmt.Sprintf("🎲 Проверка %s (DC %d). Напишите /roll, чтобы бросить кубик. Можно отправить результат числом (например: 17).", abilityName, gs.PendingAbilityCheckDC)
 
 	msg := tgbotapi.NewMessage(chatID, text)
 
@@ -1485,7 +1485,16 @@ func (b *Bot) tryHandleManualAbilityCheck(ctx context.Context, chatID int64, tex
 		return true, b.sendMessage(errorMsg)
 	}
 
-	return true, b.sendLongMessage(chatID, result.Message)
+	// Отправляем результат проверки
+	if err := b.sendLongMessage(chatID, result.Message); err != nil {
+		return true, err
+	}
+
+	// Автоматически продолжаем повествование после проверки (если DM доступен)
+	if b.handleActionUC != nil {
+		return true, b.handlePlayerAction(ctx, chatID, "[Продолжение после проверки навыка]")
+	}
+	return true, nil
 }
 
 func parseManualAbilityCheckInput(text string) (int, bool) {
@@ -1692,7 +1701,17 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
 					return b.sendMessage(errorMsg)
 				}
-				return b.sendLongMessage(chatID, result.Message)
+
+				// Отправляем результат проверки
+				if err := b.sendLongMessage(chatID, result.Message); err != nil {
+					return err
+				}
+
+				// Автоматически продолжаем повествование после проверки (если DM доступен)
+				if b.handleActionUC != nil {
+					return b.handlePlayerAction(ctx, chatID, "[Продолжение после проверки навыка]")
+				}
+				return nil
 			}
 
 			if manualRoll, ok := parseManualAbilityCheckInput(cleanedArgs); ok {
@@ -1701,7 +1720,17 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
 					return b.sendMessage(errorMsg)
 				}
-				return b.sendLongMessage(chatID, result.Message)
+
+				// Отправляем результат проверки
+				if err := b.sendLongMessage(chatID, result.Message); err != nil {
+					return err
+				}
+
+				// Автоматически продолжаем повествование после проверки (если DM доступен)
+				if b.handleActionUC != nil {
+					return b.handlePlayerAction(ctx, chatID, "[Продолжение после проверки навыка]")
+				}
+				return nil
 			}
 		}
 	}

@@ -721,6 +721,7 @@ func (t *GetBattlefieldStatusTool) Execute(ctx context.Context, args map[string]
 		"active":       true,
 		"format":       format,
 		"battlefield":  battlefieldView,
+		"combat_id":    activeCombat.ID, // Добавляем ID боя для стабильного отслеживания
 		"current_turn": activeCombat.CurrentTurn,
 		"participants": len(activeCombat.Participants),
 		"turn_count":   len(activeCombat.Participants),

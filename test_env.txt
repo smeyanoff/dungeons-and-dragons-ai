@@ -1,0 +1,10 @@
+# Test environment variables for development
+TELEGRAM_BOT_TOKEN=test_token_placeholder
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/dnd_test?sslmode=disable
+GIGACHAT_CLIENT_ID=test_client_id
+GIGACHAT_CLIENT_SECRET=test_client_secret
+GIGACHAT_MODEL=GigaChat
+QDRANT_HOST=localhost
+QDRANT_PORT=6334
+LOG_LEVEL=info
+MONITORING_PORT=8081

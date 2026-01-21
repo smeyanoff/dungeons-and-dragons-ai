@@ -330,6 +330,64 @@ func (uc *AnalyzeDMResponseUseCase) Execute(
 	return analysis, nil
 }
 
+// validateCombatAnalysis проверяет корректность анализа боя
+func validateCombatAnalysis(analysis *DMResponseAnalysis) (*DMResponseAnalysis, error) {
+	if !analysis.CombatDetected {
+		return analysis, nil
+	}
+
+	// Если бой обнаружен, но нет врагов - это ошибка
+	if len(analysis.Enemies) == 0 {
+		log.Printf("[DM Analyzer] Combat detected but no enemies specified, setting combat_detected=false")
+		analysis.CombatDetected = false
+		return analysis, nil
+	}
+
+	// Валидируем каждого врага
+	validEnemies := make([]Enemy, 0, len(analysis.Enemies))
+	for i, enemy := range analysis.Enemies {
+		// Проверяем имя врага
+		if enemy.Name == "" || strings.TrimSpace(enemy.Name) == "" {
+			log.Printf("[DM Analyzer] Enemy %d has empty name, skipping", i)
+			continue
+		}
+
+		// Валидируем HP
+		if enemy.HP == nil || *enemy.HP <= 0 {
+			defaultHP := 10
+			log.Printf("[DM Analyzer] Enemy '%s' has invalid HP (%v), setting default %d", enemy.Name, enemy.HP, defaultHP)
+			enemy.HP = &defaultHP
+		}
+
+		// Валидируем AC
+		if enemy.AC == nil || *enemy.AC <= 0 {
+			defaultAC := 12
+			log.Printf("[DM Analyzer] Enemy '%s' has invalid AC (%v), setting default %d", enemy.Name, enemy.AC, defaultAC)
+			enemy.AC = &defaultAC
+		}
+
+		// Валидируем attack_bonus
+		if enemy.AttackBonus == nil {
+			defaultBonus := 2
+			log.Printf("[DM Analyzer] Enemy '%s' has null attack_bonus, setting default %d", enemy.Name, defaultBonus)
+			enemy.AttackBonus = &defaultBonus
+		}
+
+		validEnemies = append(validEnemies, enemy)
+	}
+
+	// Если после валидации не осталось врагов, отключаем бой
+	if len(validEnemies) == 0 {
+		log.Printf("[DM Analyzer] All enemies failed validation, setting combat_detected=false")
+		analysis.CombatDetected = false
+		analysis.Enemies = nil
+		return analysis, nil
+	}
+
+	analysis.Enemies = validEnemies
+	return analysis, nil
+}
+
 // analyzeWithLLM использует LLM для анализа ответа DM
 func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 	ctx context.Context,
@@ -418,6 +476,13 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
 		}
 		log.Printf("[DM Analyzer] Returning fallback analysis after %d attempts (empty analysis)", attempt+1)
+		return fallbackAnalysisFromResponse(dmResponse), nil
+	}
+
+	// Валидируем анализ боя
+	analysis, err = validateCombatAnalysis(analysis)
+	if err != nil {
+		log.Printf("[DM Analyzer] Combat analysis validation failed: %v, returning fallback", err)
 		return fallbackAnalysisFromResponse(dmResponse), nil
 	}
 

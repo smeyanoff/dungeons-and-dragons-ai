@@ -1,7 +1,8 @@
 # Задачи команды разработки (Sprint Backlog)
 
 **Последнее обновление:** 2026-01-21
-**Текущий спринт:** Январь 2026 — analyzer-first проверки (без участия DM), стабилизация JSON/контекста/RAG
+**Завершенный спринт:** Январь 2026 — analyzer-first проверки (без участия DM), стабилизация JSON/контекста/RAG ✅
+**Текущий спринт:** Февраль 2026 — новый функционал и оптимизации
 
 **Правило приоритета:** P0 баги → P1 риски → P2 улучшения.
 **Главный фокус:** уйти от запроса проверок DM-ом, вынести в tools и анализатор DM-а.
@@ -16,28 +17,28 @@
 
 ---
 
-## 📋 Активные задачи
+## ✅ Выполненные задачи
 
-### P0 — Критично для игрового баланса
+### P0 — Критично для игрового баланса ✅
 
-- **Analyzer-first checks**: Перенести решение о проверках из LLM-DM в код (tools/анализатор). DM только ведёт художественный текст.
-- **Guardrails против спама**: budget/cooldown/anti-trivial + обязательные reason/stakes для каждой проверки.
-- **DM не просит /roll**: никаких "кинь проверку", "нужен бросок" в тексте сцен. Только pending check → `/roll`.
+- **Analyzer-first checks**: ✅ Перенести решение о проверках из LLM-DM в код (tools/анализатор). DM только ведёт художественный текст.
+- **Guardrails против спама**: ✅ budget/cooldown/anti-trivial + обязательные reason/stakes для каждой проверки.
+- **DM не просит /roll**: ✅ никаких "кинь проверку", "нужен бросок" в тексте сцен. Только pending check → `/roll`.
 
-### P1 — Качество и стабильность
+### P1 — Качество и стабильность ✅
 
-- **Output sanitizer**: Убрать утечки tool-текста/JSON/инструкций из player-facing сообщений.
-- **Context truncation fix**: Приоритизация блоков (pin персонаж/локация/бой/квест) + summarization вместо удаления.
-- **JSON contracts**: Ужесточить валидацию для InitCampaign, меньше repair/retry/fallback.
-- **Location events integration**: Подключить world_events в DM prompt (history/RAG), убрать t.Skip из теста.
+- **Output sanitizer**: ✅ Убрать утечки tool-текста/JSON/инструкций из player-facing сообщений.
+- **Context truncation fix**: ✅ Приоритизация блоков (pin персонаж/локация/бой/квест) + summarization вместо удаления.
+- **JSON contracts**: ✅ Ужесточить валидацию для InitCampaign, меньше repair/retry/fallback.
+- **Location events integration**: ✅ Подключить world_events в DM prompt (history/RAG), убрать t.Skip из теста.
 
-### P2 — Улучшения инфраструктуры
+### P2 — Улучшения инфраструктуры ✅
 
-- **Image downloads**: Исправить 403 Permission denied (X-Client-ID header + retry логика).
-- **Rate limiting**: Оптимизировать GigaChat (concurrency limits + jitter-backoff + метрики).
-- **RAG reliability**: Логирование ошибок индексации + graceful fallback на историю из БД.
-- **DM Analyzer validation**: Валидация анализа боя (имя/HP/сторона) + fallback на "combat_detected=false".
-- **Battlefield stability**: Детерминированный вывод без LLM, стабильный формат для дебага.
+- **Image downloads**: ✅ Исправить 403 Permission denied (X-Client-ID header + retry логика).
+- **Rate limiting**: ✅ Оптимизировать GigaChat (concurrency limits + jitter-backoff + метрики).
+- **RAG reliability**: ✅ Логирование ошибок индексации + graceful fallback на историю из БД.
+- **DM Analyzer validation**: ✅ Валидация анализа боя (имя/HP/сторона) + fallback на "combat_detected=false".
+- **Battlefield stability**: ✅ Детерминированный вывод без LLM, стабильный формат для дебага.
 
 ---
 

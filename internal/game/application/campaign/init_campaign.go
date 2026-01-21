@@ -137,7 +137,7 @@ func (uc *InitCampaignUseCase) generateMainQuest(ctx context.Context, worldTheme
 
 // generateMainQuestWithRetry генерирует главный квест с retry механизмом
 func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, worldTheme string, attempt int) (*QuestDTO, error) {
-	const maxRetries = 2
+	const maxRetries = 1 // Уменьшаем количество retry для ужесточения контрактов
 	if attempt > maxRetries {
 		logger.Warn("Failed to generate valid main quest, using fallback",
 			logger.Int("attempts", maxRetries+1),
@@ -167,29 +167,29 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 
 	cleaned := cleanJSONResponse(raw)
 	if !json.Valid([]byte(cleaned)) {
-		logger.Warn("LLM response is not valid JSON, attempting to repair",
-			logger.Int("attempt", attempt),
-			logger.Int("response_length", len(cleaned)),
-		)
-		if len(cleaned) > 0 {
-			preview := cleaned
-			if len(cleaned) > 300 {
-				preview = cleaned[:300] + "..."
-			}
-			logger.Debug("JSON preview", logger.String("preview", preview))
-		}
-
-		cleaned = tryRepairTruncatedJSON(cleaned)
-		if !json.Valid([]byte(cleaned)) {
-			logger.Warn("Failed to repair JSON, retrying",
+		// Для ужесточения контрактов: repair только на первой попытке и только для потенциально truncated JSON
+		if attempt == 0 && looksLikeTruncatedJSON(cleaned) {
+			logger.Warn("LLM response looks like truncated JSON, attempting minimal repair",
 				logger.Int("attempt", attempt),
-				logger.String("raw_preview", raw[:min(500, len(raw))]),
+				logger.Int("response_length", len(cleaned)),
+			)
+			cleaned = tryRepairTruncatedJSON(cleaned)
+			if !json.Valid([]byte(cleaned)) {
+				logger.Warn("Failed to repair truncated JSON, will retry with stricter prompt",
+					logger.Int("attempt", attempt),
+				)
+				return uc.generateMainQuestWithRetry(ctx, worldTheme, attempt+1)
+			} else {
+				logger.Info("Successfully repaired truncated JSON",
+					logger.Int("attempt", attempt),
+				)
+			}
+		} else {
+			logger.Warn("LLM response is not valid JSON, retrying with stricter prompt",
+				logger.Int("attempt", attempt),
+				logger.Int("response_length", len(cleaned)),
 			)
 			return uc.generateMainQuestWithRetry(ctx, worldTheme, attempt+1)
-		} else {
-			logger.Info("Successfully repaired truncated JSON",
-				logger.Int("attempt", attempt),
-			)
 		}
 	}
 
@@ -229,7 +229,7 @@ func (uc *InitCampaignUseCase) generateLocations(ctx context.Context, worldTheme
 
 // generateLocationsWithRetry генерирует список локаций с retry механизмом
 func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, worldTheme, mainQuestTitle string, attempt int) ([]LocationDTO, error) {
-	const maxRetries = 2
+	const maxRetries = 1 // Уменьшаем количество retry для ужесточения контрактов
 	if attempt > maxRetries {
 		logger.Warn("Failed to generate valid locations, using fallback",
 			logger.Int("attempts", maxRetries+1),
@@ -259,29 +259,29 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 
 	cleaned := cleanJSONResponse(raw)
 	if !json.Valid([]byte(cleaned)) {
-		logger.Warn("LLM response for locations is not valid JSON, attempting to repair",
-			logger.Int("attempt", attempt),
-			logger.Int("response_length", len(cleaned)),
-			logger.String("raw_preview", raw[:min(500, len(raw))]),
-		)
-		// Логируем последние символы для диагностики
-		if len(cleaned) > 200 {
-			logger.Debug("End of response",
-				logger.String("last_200_chars", cleaned[len(cleaned)-200:]),
-			)
-		}
-
-		cleaned = tryRepairTruncatedJSON(cleaned)
-		if !json.Valid([]byte(cleaned)) {
-			logger.Warn("Failed to repair JSON for locations, retrying",
+		// Для ужесточения контрактов: repair только на первой попытке и только для потенциально truncated JSON
+		if attempt == 0 && looksLikeTruncatedJSON(cleaned) {
+			logger.Warn("LLM response for locations looks like truncated JSON, attempting minimal repair",
 				logger.Int("attempt", attempt),
-				logger.String("repaired_preview", cleaned[:min(500, len(cleaned))]),
+				logger.Int("response_length", len(cleaned)),
+			)
+			cleaned = tryRepairTruncatedJSON(cleaned)
+			if !json.Valid([]byte(cleaned)) {
+				logger.Warn("Failed to repair truncated JSON for locations, will retry with stricter prompt",
+					logger.Int("attempt", attempt),
+				)
+				return uc.generateLocationsWithRetry(ctx, worldTheme, mainQuestTitle, attempt+1)
+			} else {
+				logger.Info("Successfully repaired truncated JSON for locations",
+					logger.Int("attempt", attempt),
+				)
+			}
+		} else {
+			logger.Warn("LLM response for locations is not valid JSON, retrying with stricter prompt",
+				logger.Int("attempt", attempt),
+				logger.Int("response_length", len(cleaned)),
 			)
 			return uc.generateLocationsWithRetry(ctx, worldTheme, mainQuestTitle, attempt+1)
-		} else {
-			logger.Info("Successfully repaired truncated JSON for locations",
-				logger.Int("attempt", attempt),
-			)
 		}
 	}
 
@@ -321,7 +321,7 @@ func (uc *InitCampaignUseCase) generateLocationNPCs(ctx context.Context, locatio
 
 // generateLocationNPCsWithRetry генерирует NPC для локации с retry механизмом
 func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context, locationName, locationDescription string, attempt int) ([]NPCDTO, error) {
-	const maxRetries = 2
+	const maxRetries = 1 // Уменьшаем количество retry для ужесточения контрактов
 	if attempt > maxRetries {
 		logger.Warn("Failed to generate valid NPCs, using empty fallback",
 			logger.Int("attempts", maxRetries+1),
@@ -352,20 +352,28 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 
 	cleaned := cleanJSONResponse(raw)
 	if !json.Valid([]byte(cleaned)) {
-		logger.Warn("LLM response for NPCs is not valid JSON, attempting to repair",
-			logger.Int("attempt", attempt),
-			logger.String("location", locationName),
-		)
-		cleaned = tryRepairTruncatedJSON(cleaned)
-		if !json.Valid([]byte(cleaned)) {
-			logger.Warn("Failed to repair JSON for NPCs, retrying",
+		// Для ужесточения контрактов: repair только на первой попытке и только для потенциально truncated JSON
+		if attempt == 0 && looksLikeTruncatedJSON(cleaned) {
+			logger.Warn("LLM response for NPCs looks like truncated JSON, attempting minimal repair",
+				logger.Int("attempt", attempt),
+				logger.String("location", locationName),
+			)
+			cleaned = tryRepairTruncatedJSON(cleaned)
+			if !json.Valid([]byte(cleaned)) {
+				logger.Warn("Failed to repair truncated JSON for NPCs, will retry with stricter prompt",
+					logger.Int("attempt", attempt),
+				)
+				return uc.generateLocationNPCsWithRetry(ctx, locationName, locationDescription, attempt+1)
+			} else {
+				logger.Info("Successfully repaired truncated JSON for NPCs",
+					logger.Int("attempt", attempt),
+				)
+			}
+		} else {
+			logger.Warn("LLM response for NPCs is not valid JSON, retrying with stricter prompt",
 				logger.Int("attempt", attempt),
 			)
 			return uc.generateLocationNPCsWithRetry(ctx, locationName, locationDescription, attempt+1)
-		} else {
-			logger.Info("Successfully repaired truncated JSON for NPCs",
-				logger.Int("attempt", attempt),
-			)
 		}
 	}
 
@@ -390,7 +398,7 @@ func (uc *InitCampaignUseCase) generateLocationPredefinedChecks(ctx context.Cont
 
 // generateLocationPredefinedChecksWithRetry генерирует предопределенные проверки для локации с retry механизмом
 func (uc *InitCampaignUseCase) generateLocationPredefinedChecksWithRetry(ctx context.Context, locationName, locationDescription string, attempt int) ([]PredefinedCheckDTO, error) {
-	const maxRetries = 2
+	const maxRetries = 1 // Уменьшаем количество retry для ужесточения контрактов
 	if attempt > maxRetries {
 		logger.Warn("Failed to generate valid predefined checks, using empty fallback",
 			logger.Int("attempts", maxRetries+1),
@@ -421,20 +429,28 @@ func (uc *InitCampaignUseCase) generateLocationPredefinedChecksWithRetry(ctx con
 
 	cleaned := cleanJSONResponse(raw)
 	if !json.Valid([]byte(cleaned)) {
-		logger.Warn("LLM response for predefined checks is not valid JSON, attempting to repair",
-			logger.Int("attempt", attempt),
-			logger.String("location", locationName),
-		)
-		cleaned = tryRepairTruncatedJSON(cleaned)
-		if !json.Valid([]byte(cleaned)) {
-			logger.Warn("Failed to repair JSON for predefined checks, retrying",
+		// Для ужесточения контрактов: repair только на первой попытке и только для потенциально truncated JSON
+		if attempt == 0 && looksLikeTruncatedJSON(cleaned) {
+			logger.Warn("LLM response for predefined checks looks like truncated JSON, attempting minimal repair",
+				logger.Int("attempt", attempt),
+				logger.String("location", locationName),
+			)
+			cleaned = tryRepairTruncatedJSON(cleaned)
+			if !json.Valid([]byte(cleaned)) {
+				logger.Warn("Failed to repair truncated JSON for predefined checks, will retry with stricter prompt",
+					logger.Int("attempt", attempt),
+				)
+				return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, attempt+1)
+			} else {
+				logger.Info("Successfully repaired truncated JSON for predefined checks",
+					logger.Int("attempt", attempt),
+				)
+			}
+		} else {
+			logger.Warn("LLM response for predefined checks is not valid JSON, retrying with stricter prompt",
 				logger.Int("attempt", attempt),
 			)
 			return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, attempt+1)
-		} else {
-			logger.Info("Successfully repaired truncated JSON for predefined checks",
-				logger.Int("attempt", attempt),
-			)
 		}
 	}
 
@@ -459,7 +475,7 @@ func (uc *InitCampaignUseCase) generateConnections(ctx context.Context, location
 
 // generateConnectionsWithRetry генерирует связи между локациями с retry механизмом
 func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context, locations []LocationDTO, attempt int) (map[string][]ConnectionDTO, error) {
-	const maxRetries = 2
+	const maxRetries = 1 // Уменьшаем количество retry для ужесточения контрактов
 	if attempt > maxRetries {
 		logger.Warn("Failed to generate valid connections, using fallback",
 			logger.Int("attempts", maxRetries+1),
@@ -488,29 +504,29 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 
 	cleaned := cleanJSONResponse(raw)
 	if !json.Valid([]byte(cleaned)) {
-		logger.Warn("LLM response for connections is not valid JSON, attempting to repair",
-			logger.Int("attempt", attempt),
-			logger.Int("response_length", len(cleaned)),
-			logger.String("raw_preview", raw[:min(500, len(raw))]),
-		)
-		// Логируем последние символы для диагностики
-		if len(cleaned) > 200 {
-			logger.Debug("End of response",
-				logger.String("last_200_chars", cleaned[len(cleaned)-200:]),
-			)
-		}
-
-		cleaned = tryRepairTruncatedJSON(cleaned)
-		if !json.Valid([]byte(cleaned)) {
-			logger.Warn("Failed to repair JSON for connections, retrying",
+		// Для ужесточения контрактов: repair только на первой попытке и только для потенциально truncated JSON
+		if attempt == 0 && looksLikeTruncatedJSON(cleaned) {
+			logger.Warn("LLM response for connections looks like truncated JSON, attempting minimal repair",
 				logger.Int("attempt", attempt),
-				logger.String("repaired_preview", cleaned[:min(500, len(cleaned))]),
+				logger.Int("response_length", len(cleaned)),
+			)
+			cleaned = tryRepairTruncatedJSON(cleaned)
+			if !json.Valid([]byte(cleaned)) {
+				logger.Warn("Failed to repair truncated JSON for connections, will retry with stricter prompt",
+					logger.Int("attempt", attempt),
+				)
+				return uc.generateConnectionsWithRetry(ctx, locations, attempt+1)
+			} else {
+				logger.Info("Successfully repaired truncated JSON for connections",
+					logger.Int("attempt", attempt),
+				)
+			}
+		} else {
+			logger.Warn("LLM response for connections is not valid JSON, retrying with stricter prompt",
+				logger.Int("attempt", attempt),
+				logger.Int("response_length", len(cleaned)),
 			)
 			return uc.generateConnectionsWithRetry(ctx, locations, attempt+1)
-		} else {
-			logger.Info("Successfully repaired truncated JSON for connections",
-				logger.Int("attempt", attempt),
-			)
 		}
 	}
 
@@ -690,6 +706,36 @@ func fallbackConnections(locations []LocationDTO) map[string][]ConnectionDTO {
 		})
 	}
 	return connections
+}
+
+// looksLikeTruncatedJSON проверяет, выглядит ли JSON как обрезанный (незакрытые скобки, незавершенные строки)
+func looksLikeTruncatedJSON(jsonStr string) bool {
+	jsonStr = strings.TrimSpace(jsonStr)
+	if jsonStr == "" {
+		return false
+	}
+
+	openBraces := strings.Count(jsonStr, "{") - strings.Count(jsonStr, "}")
+	openBrackets := strings.Count(jsonStr, "[") - strings.Count(jsonStr, "]")
+
+	// Если есть незакрытые скобки, вероятно truncated
+	if openBraces > 0 || openBrackets > 0 {
+		return true
+	}
+
+	// Если заканчивается на незавершенную строку (нечетное количество кавычек)
+	quoteCount := strings.Count(jsonStr, `"`)
+	if quoteCount%2 != 0 {
+		return true
+	}
+
+	// Если заканчивается на запятую или двоеточие
+	lastChar := jsonStr[len(jsonStr)-1]
+	if lastChar == ',' || lastChar == ':' {
+		return true
+	}
+
+	return false
 }
 
 // tryRepairTruncatedJSON пытается восстановить обрезанный JSON

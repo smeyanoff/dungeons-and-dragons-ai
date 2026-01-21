@@ -260,9 +260,9 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 		t.Fatalf("Не удалось найти prompt с текстовой подсказкой ability check (msg_id=%d)", promptMsgID)
 	}
 
-	// Simulate /roll d20
-	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/roll d20")); err != nil {
-		t.Fatalf("/roll d20: %v", err)
+	// Simulate /roll (now works without specifying d20)
+	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/roll")); err != nil {
+		t.Fatalf("/roll: %v", err)
 	}
 
 	// Verify pending cleared

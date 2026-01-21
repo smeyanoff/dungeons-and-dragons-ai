@@ -443,6 +443,8 @@ func (uc *HandleActionUseCase) Execute(
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
 				logger.Uint("event_id", playerEvent.ID),
+				logger.String("doc_source", string(doc.Source)),
+				logger.String("doc_timestamp", doc.Timestamp.Format(time.RFC3339)),
 			)
 			// Событие сохранено в БД, но не проиндексировано в RAG
 			// Это не критично - событие все равно доступно через историю
@@ -496,7 +498,9 @@ func (uc *HandleActionUseCase) Execute(
 	if uc.responseCache != nil {
 		cachedResponse, found := uc.responseCache.Get(ctx, gs.ID, gameContext, playerMessage)
 		if found {
-			response = cachedResponse
+			// Очищаем кэшированный ответ от технических деталей
+			response = cleanTechnicalDetails(cachedResponse)
+			response = sanitizePlayerFacingResponse(response)
 			fromCache = true
 			logger.Info("DM response retrieved from cache",
 				logger.Uint("session_id", gs.ID),
@@ -628,6 +632,8 @@ func (uc *HandleActionUseCase) Execute(
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
 				logger.Uint("event_id", dmEvent.ID),
+				logger.String("doc_source", string(doc.Source)),
+				logger.String("doc_timestamp", doc.Timestamp.Format(time.RFC3339)),
 			)
 			// Событие сохранено в БД, но не проиндексировано в RAG
 			// Это не критично - событие все равно доступно через историю
@@ -1115,19 +1121,29 @@ func truncateContextByPriority(gameContext string, maxLen int) (string, []string
 		return joinBlocks(blocks), nil, false
 	}
 
+	// Сначала пытаемся суммировать блоки вместо их удаления
+	summarizedBlocks := summarizeBlocks(blocks, maxLen)
+
+	// Проверяем, удалось ли уложиться в лимит после summarization
+	totalLen = totalBlocksLength(summarizedBlocks)
+	if totalLen <= maxLen {
+		return joinBlocks(summarizedBlocks), nil, false
+	}
+
+	// Если summarization недостаточно, удаляем блоки с самым низким приоритетом
 	removed := map[int]bool{}
 	removedTitles := []string{}
 
 	removable := []int{}
-	for i, block := range blocks {
+	for i, block := range summarizedBlocks {
 		if block.priority > 1 {
 			removable = append(removable, i)
 		}
 	}
 
 	sort.Slice(removable, func(i, j int) bool {
-		left := blocks[removable[i]]
-		right := blocks[removable[j]]
+		left := summarizedBlocks[removable[i]]
+		right := summarizedBlocks[removable[j]]
 		if left.priority != right.priority {
 			return left.priority > right.priority
 		}
@@ -1139,12 +1155,12 @@ func truncateContextByPriority(gameContext string, maxLen int) (string, []string
 			break
 		}
 		removed[idx] = true
-		removedTitles = append(removedTitles, blocks[idx].title)
-		totalLen -= len(blocks[idx].content)
+		removedTitles = append(removedTitles, summarizedBlocks[idx].title)
+		totalLen -= len(summarizedBlocks[idx].content)
 	}
 
 	resultBlocks := []contextBlock{}
-	for i, block := range blocks {
+	for i, block := range summarizedBlocks {
 		if !removed[i] {
 			resultBlocks = append(resultBlocks, block)
 		}
@@ -1199,6 +1215,145 @@ func splitContextBlocks(gameContext string) []contextBlock {
 	}
 
 	return blocks
+}
+
+// summarizeBlocks сокращает содержимое блоков для экономии места
+func summarizeBlocks(blocks []contextBlock, targetMaxLen int) []contextBlock {
+	result := make([]contextBlock, len(blocks))
+
+	for i, block := range blocks {
+		result[i] = contextBlock{
+			title:    block.title,
+			priority: block.priority,
+			content:  summarizeBlockContent(block.title, block.content, targetMaxLen/len(blocks)), // Распределяем лимит между блоками
+		}
+	}
+
+	return result
+}
+
+// summarizeBlockContent сокращает содержимое конкретного блока
+func summarizeBlockContent(title, content string, maxLen int) string {
+	if len(content) <= maxLen {
+		return content
+	}
+
+	switch title {
+	case "Последние сообщения":
+		return summarizeRecentMessages(content, maxLen)
+	case "Релевантная история игры (найдено через поиск)":
+		return summarizeRAGHistory(content, maxLen)
+	case "Инвентарь персонажа":
+		return summarizeInventory(content, maxLen)
+	case "Игроки в сессии":
+		return summarizePlayers(content, maxLen)
+	default:
+		// Для остальных блоков используем простое усечение
+		return truncateMiddle(content, maxLen)
+	}
+}
+
+// summarizeRecentMessages сокращает блок последних сообщений
+func summarizeRecentMessages(content string, maxLen int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= 3 {
+		return truncateMiddle(content, maxLen)
+	}
+
+	// Оставляем только последние 3 сообщения
+	header := lines[0] // "--- Последние сообщения ---"
+	recentLines := lines[len(lines)-3:]
+	result := header + "\n" + strings.Join(recentLines, "\n")
+
+	if len(result) > maxLen {
+		return truncateMiddle(result, maxLen)
+	}
+
+	return result
+}
+
+// summarizeRAGHistory сокращает блок RAG истории
+func summarizeRAGHistory(content string, maxLen int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= 5 {
+		return truncateMiddle(content, maxLen)
+	}
+
+	// Оставляем заголовок и 3 наиболее релевантных результата
+	header := lines[0] // "--- Релевантная история игры (найдено через поиск) ---"
+	resultLines := []string{header}
+
+	// Пропускаем пустые строки и берем первые 3 результата
+	count := 0
+	for i := 1; i < len(lines) && count < 3; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line != "" && !strings.HasPrefix(line, "-") {
+			resultLines = append(resultLines, lines[i])
+			count++
+		}
+	}
+
+	result := strings.Join(resultLines, "\n")
+	if len(result) > maxLen {
+		return truncateMiddle(result, maxLen)
+	}
+
+	return result
+}
+
+// summarizeInventory сокращает блок инвентаря
+func summarizeInventory(content string, maxLen int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= 5 {
+		return truncateMiddle(content, maxLen)
+	}
+
+	// Оставляем заголовок, общее описание и 3 наиболее важных предмета
+	headerLines := []string{}
+	itemLines := []string{}
+
+	for _, line := range lines {
+		if strings.Contains(line, "---") || strings.Contains(line, "Общий вес") || strings.Contains(line, "Инвентарь пуст") {
+			headerLines = append(headerLines, line)
+		} else if strings.HasPrefix(line, "- ") && len(itemLines) < 3 {
+			itemLines = append(itemLines, line)
+		}
+	}
+
+	result := strings.Join(headerLines, "\n")
+	if len(itemLines) > 0 {
+		result += "\nПредметы (выборка):\n" + strings.Join(itemLines, "\n")
+		if len(lines) > len(headerLines)+len(itemLines) {
+			result += "\n... и другие предметы"
+		}
+	}
+
+	if len(result) > maxLen {
+		return truncateMiddle(result, maxLen)
+	}
+
+	return result
+}
+
+// summarizePlayers сокращает блок информации об игроках
+func summarizePlayers(content string, maxLen int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= 3 {
+		return truncateMiddle(content, maxLen)
+	}
+
+	// Оставляем только количество игроков
+	for _, line := range lines {
+		if strings.Contains(line, "Количество игроков") {
+			result := lines[0] + "\n" + line // header + count
+			if len(result) > maxLen {
+				return truncateMiddle(result, maxLen)
+			}
+			return result
+		}
+	}
+
+	return truncateMiddle(content, maxLen)
 }
 
 func contextBlockPriority(title string) int {

@@ -168,7 +168,7 @@ func buildPlayerActionAnalysisPrompt(playerMessage, gameContext string, recentEv
 	parts = append(parts, "- Заметить ловушку, скрытую дверь, секретный проход → 'intelligence' или 'wisdom' (DC 12-15)")
 	parts = append(parts, "- Убедить/обмануть/запугать NPC в ВАЖНОЙ ситуации → 'charisma' (DC 12-18)")
 	parts = append(parts, "- Вспомнить важную информацию, расшифровать древний текст → 'intelligence' (DC 12-18)")
-	parts = append(parts, "- Проверка восприятия для поиска скрытых вещей → 'wisdom' (DC 10-15)")
+	parts = append(parts, "- Скрыться, спрятаться, избежать обнаружения → 'wisdom' (DC 10-15)")
 	parts = append(parts, "")
 	parts = append(parts, "📍 Предопределенные проверки из локации:")
 	parts = append(parts, "- Используй ТОЛЬКО когда игрок находится в указанном месте (см. LocationHint)")

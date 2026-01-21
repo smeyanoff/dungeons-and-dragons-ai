@@ -324,6 +324,7 @@ func main() {
 	initCampaignUC := campaign.NewInitCampaignUseCase(llm, worldRepo)
 	simpleContextBuilder := contextbuilder.NewSimpleContextBuilder()
 	ragContextBuilder := contextbuilder.NewRAGContextBuilder(simpleContextBuilder, retrieveContextUC, eventRepo, inventoryRepo, combatRepo)
+	ragContextBuilder.SetWorldEventRepository(worldEventRepo)
 	addExperienceUC := characterapp.NewAddExperienceUseCase(playerRepo, sessionRepo)
 	checkAchievementsUC := achievementapp.NewCheckAchievementsUseCase(achievementRepo, playerRepo)
 

@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -155,6 +154,7 @@ func TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit(t *testing.T) {
 		nil, // inventoryRepo
 		nil, // combatRepo
 	)
+	contextBuilder.SetWorldEventRepository(worldEventRepo)
 
 	// LLM stub: first DM response triggers analyzer "first visit to Cave", second is a normal response.
 	llm := &recordingScriptedLLM{
@@ -260,9 +260,7 @@ func TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit(t *testing.T) {
 		t.Fatalf("не удалось захватить второй prompt для DM (ожидали 2 вызова GenerateWithTools)")
 	}
 	if !strings.Contains(secondPrompt, created.Name) && !strings.Contains(secondPrompt, created.Description) {
-		msg := fmt.Sprintf("LocationEvent: событие локации создано (world_event_id=%d, location_id=%d, name=%q), но не найдено в следующем DM prompt — вероятно, не подключено к контексту/RAG/истории", created.ID, caveID, created.Name)
-		writeToTestingReport([]string{msg})
-		t.Skip(msg)
+		t.Fatalf("LocationEvent: событие локации создано (world_event_id=%d, location_id=%d, name=%q), но не найдено в следующем DM prompt", created.ID, caveID, created.Name)
 	}
 
 	// Also check whether a StoryEvent was created that mentions the location event (common integration path).
@@ -280,9 +278,7 @@ func TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit(t *testing.T) {
 				}
 			}
 			if !found {
-				msg := fmt.Sprintf("LocationEvent: событие локации есть в world_events (id=%d, location_id=%d), но не найдено ни в одном StoryEvent (history) — DM может не видеть его в следующем ходе", created.ID, caveID)
-				writeToTestingReport([]string{msg})
-				t.Skip(msg)
+				t.Fatalf("LocationEvent: событие локации есть в world_events (id=%d, location_id=%d), но не найдено ни в одном StoryEvent (history)", created.ID, caveID)
 			}
 		}
 	}
