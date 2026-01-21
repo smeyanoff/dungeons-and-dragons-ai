@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,12 +40,31 @@ const (
 	// Важно: в GigaChat без явного max_tokens сервер может применять небольшой дефолт,
 	// из-за чего JSON часто "обрезается" (особенно locations/connections).
 	// Эти лимиты задают ВЕРХНЮЮ границу ответа; модель может остановиться раньше.
-	maxTokensMainQuest   = 2500
-	maxTokensLocations   = 2500
-	maxTokensNPCs        = 1600
-	maxTokensChecks      = 1800
-	maxTokensConnections = 3200
+	//
+	// Можно переопределить через env:
+	// - INIT_CAMPAIGN_MAX_TOKENS_MAIN_QUEST
+	// - INIT_CAMPAIGN_MAX_TOKENS_LOCATIONS
+	// - INIT_CAMPAIGN_MAX_TOKENS_NPCS
+	// - INIT_CAMPAIGN_MAX_TOKENS_CHECKS
+	// - INIT_CAMPAIGN_MAX_TOKENS_CONNECTIONS
+	defaultMaxTokensMainQuest   = 3500
+	defaultMaxTokensLocations   = 3500
+	defaultMaxTokensNPCs        = 2200
+	defaultMaxTokensChecks      = 2400
+	defaultMaxTokensConnections = 5000
 )
+
+func getEnvInt(name string, defaultValue int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return defaultValue
+	}
+	return v
+}
 
 func (uc *InitCampaignUseCase) Execute(
 	ctx context.Context,
@@ -134,11 +155,12 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 	defer llmCancel()
 
 	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_MAIN_QUEST", defaultMaxTokensMainQuest)
 	logger.Debug("Generating main quest",
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokensMainQuest),
+		logger.Int("max_tokens", maxTokens),
 	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensMainQuest)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -225,11 +247,12 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 	defer llmCancel()
 
 	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_LOCATIONS", defaultMaxTokensLocations)
 	logger.Debug("Generating locations",
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokensLocations),
+		logger.Int("max_tokens", maxTokens),
 	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensLocations)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -313,12 +336,13 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 	defer llmCancel()
 
 	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_NPCS", defaultMaxTokensNPCs)
 	logger.Debug("Generating NPCs for location",
 		logger.String("location_name", locationName),
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokensNPCs),
+		logger.Int("max_tokens", maxTokens),
 	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensNPCs)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -378,12 +402,13 @@ func (uc *InitCampaignUseCase) generateLocationPredefinedChecksWithRetry(ctx con
 	defer llmCancel()
 
 	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_CHECKS", defaultMaxTokensChecks)
 	logger.Debug("Generating predefined checks",
 		logger.String("location_name", locationName),
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokensChecks),
+		logger.Int("max_tokens", maxTokens),
 	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensChecks)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -442,11 +467,12 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 	defer llmCancel()
 
 	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_CONNECTIONS", defaultMaxTokensConnections)
 	logger.Debug("Generating location connections",
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokensConnections),
+		logger.Int("max_tokens", maxTokens),
 	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensConnections)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}

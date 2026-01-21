@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
@@ -1012,7 +1013,15 @@ func truncateMiddle(text string, maxLen int) string {
 	}
 	marker := "\n...[context truncated]...\n"
 	if maxLen <= len(marker)+10 {
-		return trimmed[:maxLen]
+		// ВАЖНО: не режем UTF-8 в середине руны — иначе получаем невалидные байты (и падаем при записи в Postgres).
+		n := maxLen
+		if n > len(trimmed) {
+			n = len(trimmed)
+		}
+		for n > 0 && !utf8.ValidString(trimmed[:n]) {
+			n--
+		}
+		return trimmed[:n]
 	}
 	headLen := (maxLen - len(marker)) * 2 / 3
 	tailLen := maxLen - len(marker) - headLen
@@ -1022,8 +1031,25 @@ func truncateMiddle(text string, maxLen int) string {
 	if tailLen < 0 {
 		tailLen = 0
 	}
-	head := trimmed[:headLen]
-	tail := trimmed[len(trimmed)-tailLen:]
+	// Подбираем границы так, чтобы обе части были валидным UTF-8.
+	headN := headLen
+	if headN > len(trimmed) {
+		headN = len(trimmed)
+	}
+	for headN > 0 && !utf8.ValidString(trimmed[:headN]) {
+		headN--
+	}
+	head := trimmed[:headN]
+
+	tailStart := len(trimmed) - tailLen
+	if tailStart < 0 {
+		tailStart = 0
+	}
+	for tailStart < len(trimmed) && !utf8.ValidString(trimmed[tailStart:]) {
+		tailStart++
+	}
+	tail := trimmed[tailStart:]
+
 	return strings.TrimSpace(head) + marker + strings.TrimSpace(tail)
 }
 

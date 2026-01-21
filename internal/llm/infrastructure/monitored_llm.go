@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -17,6 +18,18 @@ import (
 type MonitoredLLM struct {
 	llm     domain.LLM
 	logRepo LLMLogRepository
+}
+
+// sanitizeUTF8ForDB гарантирует, что строка валидна UTF-8.
+// Это важно: Postgres с UTF-8 кодировкой падает на невалидных байтах (SQLSTATE 22021).
+func sanitizeUTF8ForDB(s string) string {
+	if s == "" {
+		return s
+	}
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "\uFFFD")
 }
 
 // LLMLogRepository интерфейс для сохранения логов
@@ -57,18 +70,18 @@ func (m *MonitoredLLM) Generate(ctx context.Context, prompt string) (string, err
 		TgUserID:   tgUserID,
 		SessionID:  sessionIDPtr,
 		Model:      "GigaChat", // Можно извлечь из конфига или контекста
-		Prompt:     prompt,
-		Response:   response,
+		Prompt:     sanitizeUTF8ForDB(prompt),
+		Response:   sanitizeUTF8ForDB(response),
 		DurationMs: duration.Milliseconds(),
 		HasTools:   false,
 	}
 	applyTokensUsage(usage, prompt, response, logEntry)
 
 	if err != nil {
-		errStr := err.Error()
+		errStr := sanitizeUTF8ForDB(err.Error())
 		logEntry.Error = &errStr
 	} else {
-		logEntry.Response = response
+		logEntry.Response = sanitizeUTF8ForDB(response)
 	}
 
 	// Сохраняем лог асинхронно (не блокируем основной поток)
@@ -110,19 +123,19 @@ func (m *MonitoredLLM) GenerateWithMaxTokens(ctx context.Context, prompt string,
 		TgUserID:   tgUserID,
 		SessionID:  sessionIDPtr,
 		Model:      "GigaChat",
-		Prompt:     prompt,
+		Prompt:     sanitizeUTF8ForDB(prompt),
 		MaxTokens:  &maxTokens,
-		Response:   response,
+		Response:   sanitizeUTF8ForDB(response),
 		DurationMs: duration.Milliseconds(),
 		HasTools:   false,
 	}
 	applyTokensUsage(usage, prompt, response, logEntry)
 
 	if err != nil {
-		errStr := err.Error()
+		errStr := sanitizeUTF8ForDB(err.Error())
 		logEntry.Error = &errStr
 	} else {
-		logEntry.Response = response
+		logEntry.Response = sanitizeUTF8ForDB(response)
 	}
 
 	// Сохраняем лог асинхронно
@@ -172,7 +185,8 @@ func (m *MonitoredLLM) GenerateWithTools(ctx context.Context, prompt string, too
 			toolsJSON, marshalErr := json.Marshal(response.ToolCalls)
 			if marshalErr == nil {
 				jsonStr := string(toolsJSON)
-				toolsCallsJSON = &jsonStr
+				s := sanitizeUTF8ForDB(jsonStr)
+				toolsCallsJSON = &s
 			}
 		}
 	}
@@ -183,8 +197,8 @@ func (m *MonitoredLLM) GenerateWithTools(ctx context.Context, prompt string, too
 		TgUserID:        tgUserID,
 		SessionID:       sessionIDPtr,
 		Model:           "GigaChat",
-		Prompt:          prompt,
-		Response:        responseContent,
+		Prompt:          sanitizeUTF8ForDB(prompt),
+		Response:        sanitizeUTF8ForDB(responseContent),
 		DurationMs:      duration.Milliseconds(),
 		HasTools:        hasTools,
 		ToolsCalls:      toolsCallsJSON,
@@ -193,7 +207,7 @@ func (m *MonitoredLLM) GenerateWithTools(ctx context.Context, prompt string, too
 	applyTokensUsage(usage, prompt, responseContent, logEntry)
 
 	if err != nil {
-		errStr := err.Error()
+		errStr := sanitizeUTF8ForDB(err.Error())
 		logEntry.Error = &errStr
 	}
 

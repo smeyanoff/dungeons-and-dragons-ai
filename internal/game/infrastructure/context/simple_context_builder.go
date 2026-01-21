@@ -4,9 +4,26 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/world"
 )
+
+func truncateRunes(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if maxRunes <= 0 || s == "" {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	runes := []rune(s)
+	if maxRunes > len(runes) {
+		maxRunes = len(runes)
+	}
+	return strings.TrimSpace(string(runes[:maxRunes])) + "…"
+}
 
 // getAbilityNameForContext возвращает русское название характеристики для отображения в контексте
 func getAbilityNameForContext(ability string) string {
@@ -54,27 +71,71 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 		parts = append(parts, fmt.Sprintf("Описание квеста: %s", gs.World.MainQuest.Description))
 	}
 
-	// Локации с предопределенными проверками
+	// Локации (список) — БЕЗ предопределенных проверок, чтобы не раздувать контекст и не провоцировать обрезание.
 	if len(gs.World.Locations) > 0 {
-		parts = append(parts, "\nЛокации:")
+		parts = append(parts, "\nЛокации (карта мира):")
 		for _, loc := range gs.World.Locations {
-			parts = append(parts, fmt.Sprintf("- %s: %s", loc.Name, loc.Description))
+			desc := truncateRunes(loc.Description, 24) // коротко: держим контекст компактным
+			if desc != "" {
+				parts = append(parts, fmt.Sprintf("- %s: %s", loc.Name, desc))
+			} else {
+				parts = append(parts, fmt.Sprintf("- %s", loc.Name))
+			}
+		}
+	}
 
-			// Добавляем предопределенные проверки для локации
-			predefinedChecks := loc.PredefinedChecks()
-			if len(predefinedChecks) > 0 {
-				parts = append(parts, fmt.Sprintf("  Предопределенные проверки в локации '%s':", loc.Name))
-				for _, check := range predefinedChecks {
-					abilityName := getAbilityNameForContext(check.Ability)
-					hint := ""
-					if check.LocationHint != "" {
-						hint = fmt.Sprintf(" (%s)", check.LocationHint)
-					}
-					parts = append(parts, fmt.Sprintf("    • %s - %s (DC %d)%s", abilityName, check.Description, check.DC, hint))
+	// Текущая локация — подробности + проверки + выходы.
+	// Важно: показываем предопределенные проверки ТОЛЬКО для текущей локации.
+	var currentLoc *world.Location
+	if gs.CurrentLocationID != nil {
+		for i := range gs.World.Locations {
+			if gs.World.Locations[i].ID == *gs.CurrentLocationID {
+				currentLoc = &gs.World.Locations[i]
+				break
+			}
+		}
+	}
+	if currentLoc == nil && len(gs.World.Locations) > 0 {
+		currentLoc = &gs.World.Locations[0]
+	}
+	if currentLoc != nil {
+		parts = append(parts, "\n--- Текущая локация ---")
+		parts = append(parts, fmt.Sprintf("Локация: %s", currentLoc.Name))
+		if strings.TrimSpace(currentLoc.Description) != "" {
+			parts = append(parts, fmt.Sprintf("Описание: %s", truncateRunes(currentLoc.Description, 80)))
+		}
+
+		// Карта ID → название, чтобы выводить связи читаемо.
+		idToName := map[uint]string{}
+		for i := range gs.World.Locations {
+			idToName[gs.World.Locations[i].ID] = gs.World.Locations[i].Name
+		}
+		if len(currentLoc.Connections) > 0 {
+			parts = append(parts, "Выходы/пути:")
+			for _, c := range currentLoc.Connections {
+				toName := idToName[c.ToLocationID]
+				if toName == "" {
+					toName = fmt.Sprintf("location#%d", c.ToLocationID)
 				}
-				parts = append(parts, "  ⚠️ КРИТИЧЕСКИ ВАЖНО: Предопределенные проверки можно использовать ТОЛЬКО когда игрок находится в указанном месте (см. LocationHint).")
-				parts = append(parts, "  ⚠️ НЕ используй предопределенные проверки просто так - они должны срабатывать только когда игрок находится в конкретном месте локации.")
-				parts = append(parts, "  ⚠️ Для предопределенных проверок игрок должен использовать команду /roll d20.")
+				desc := truncateRunes(c.Description, 40)
+				if desc != "" {
+					parts = append(parts, fmt.Sprintf("- %s → %s: %s", c.Direction, toName, desc))
+				} else {
+					parts = append(parts, fmt.Sprintf("- %s → %s", c.Direction, toName))
+				}
+			}
+		}
+
+		predefinedChecks := currentLoc.PredefinedChecks()
+		if len(predefinedChecks) > 0 {
+			parts = append(parts, "Предопределенные проверки (используй только если игрок в указанном месте):")
+			for _, check := range predefinedChecks {
+				abilityName := getAbilityNameForContext(check.Ability)
+				hint := ""
+				if check.LocationHint != "" {
+					hint = fmt.Sprintf(" — место: %s", truncateRunes(check.LocationHint, 60))
+				}
+				parts = append(parts, fmt.Sprintf("- %s, DC %d: %s%s", abilityName, check.DC, truncateRunes(check.Description, 80), hint))
 			}
 		}
 	}
