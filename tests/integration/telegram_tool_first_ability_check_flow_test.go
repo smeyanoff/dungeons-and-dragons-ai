@@ -9,6 +9,7 @@ import (
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
+	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	dm_tools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
@@ -23,38 +24,49 @@ import (
 	"net/http/httptest"
 )
 
-// scriptedLLM — детерминированная заглушка LLM для стабильных E2E тестов tool-first механик.
-// 1) На первом GenerateWithTools вызывает request_ability_check
-// 2) На втором GenerateWithTools возвращает финальный текст без tools
-type scriptedLLM struct {
-	toolCall domain.LLMResponseWithTools
-	final    domain.LLMResponseWithTools
-	calls    int
-}
+// noopDMLLM — заглушка DM-LLM: в этом тесте она не должна вызываться,
+// потому что запрос проверки делает анализатор действий (без tools).
+type noopDMLLM struct{}
 
-func (l *scriptedLLM) Generate(ctx context.Context, prompt string) (string, error) {
+func (noopDMLLM) Generate(ctx context.Context, prompt string) (string, error) {
 	_ = ctx
 	_ = prompt
-	// DM Analyzer ожидает JSON; возвращаем валидный "пустой" анализ,
-	// чтобы тест не создавал ложные сигналы "invalid analyzer json".
-	return `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`, nil
+	return "Ок.", nil
 }
 
-func (l *scriptedLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, maxTokens int) (string, error) {
+func (n noopDMLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, maxTokens int) (string, error) {
+	_ = maxTokens
+	return n.Generate(ctx, prompt)
+}
+
+func (noopDMLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+	_ = ctx
+	_ = prompt
+	_ = tools
+	return &domain.LLMResponseWithTools{Content: "Ок.", Finished: true}, nil
+}
+
+// analysisLLM — заглушка LLM для AnalyzePlayerActionUseCase (возвращает JSON анализа).
+type analysisLLM struct {
+	json string
+}
+
+func (l analysisLLM) Generate(ctx context.Context, prompt string) (string, error) {
+	_ = ctx
+	_ = prompt
+	return l.json, nil
+}
+
+func (l analysisLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, maxTokens int) (string, error) {
 	_ = maxTokens
 	return l.Generate(ctx, prompt)
 }
 
-func (l *scriptedLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (analysisLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+	_ = ctx
+	_ = prompt
 	_ = tools
-
-	l.calls++
-	if l.calls == 1 {
-		resp := l.toolCall
-		return &resp, nil
-	}
-	resp := l.final
-	return &resp, nil
+	return &domain.LLMResponseWithTools{Content: "{}", Finished: true}, nil
 }
 
 // --- No-op RAG dependencies to avoid network calls in tests ---
@@ -98,8 +110,8 @@ func (staticContextBuilder) BuildContext(ctx context.Context, gs *session.GameSe
 	return fmt.Sprintf("WORLD: %s\nPLAYER: %s", gs.World.Name, playerMessage), nil
 }
 
-// TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow проверяет полный UX “tool-first ability check”:
-// сообщение игрока -> LLM tool call request_ability_check -> pending check в сессии -> бот шлёт текстовую подсказку ->
+// TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow проверяет полный UX “analyzer-first ability check”:
+// сообщение игрока -> анализатор решает, что нужна проверка -> pending check в сессии -> бот шлёт текстовую подсказку ->
 // /roll d20 -> perform ability check -> pending cleared + событие в истории.
 //
 // Важно: тест НЕ дергает реальный LLM/embeddings, чтобы оставаться стабильным и не DDOSить модель.
@@ -146,28 +158,12 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 	defer srv.Close()
 	apiEndpointFmt := strings.TrimRight(srv.URL, "/") + "/bot%s/%s"
 
-	// Deterministic LLM: request ability check, then narrate.
-	llm := &scriptedLLM{
-		toolCall: domain.LLMResponseWithTools{
-			Content:  "Мне нужна проверка.",
-			Finished: false,
-			ToolCalls: []dm_tools.ToolCall{
-				{
-					Name: "request_ability_check",
-					Arguments: map[string]interface{}{
-						"ability": "dexterity",
-						"dc":      13,
-						"reason":  "вскрытие замка",
-						"stakes":  "если провал — сработает ловушка",
-					},
-				},
-			},
-		},
-		final: domain.LLMResponseWithTools{
-			Content:  "Замок поддается не сразу — нужно проверить ловкость.",
-			Finished: true,
-		},
-	}
+	// DM LLM не должен запрашивать проверки — их создаёт анализатор.
+	llm := noopDMLLM{}
+	analyzeUC := dm_analyzer.NewAnalyzePlayerActionUseCase(
+		analysisLLM{json: `{"needs_ability_check":true,"ability_check":{"ability":"dexterity","dc":13,"reason":"вскрытие замка","stakes":"если провал — сработает ловушка"},"needs_predefined_check":false,"needs_random_roll":false,"simple_action":false,"recommendation":""}`},
+		cfg.eventRepo,
+	)
 
 	// No-op RAG indexer to satisfy HandleActionUseCase contract (it is called unconditionally).
 	indexDocUC := ragapp.NewIndexDocument(noopEmbedder{}, noopVectorStore{})
@@ -192,7 +188,7 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 		nil, // checkDailyProgressUC
 		nil, // getSubscriptionUC
 		nil, // updateRatingUC
-		nil, // analyzePlayerActionUC
+		analyzeUC, // analyzePlayerActionUC
 		nil, // generateLocationEventUC
 	)
 
@@ -233,7 +229,7 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)
 	}
 
-	// Trigger player action (this should create pending check via tool)
+	// Trigger player action (this should create pending check via analyzer)
 	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "Пытаюсь вскрыть замок на сундуке")); err != nil {
 		t.Fatalf("player action: %v", err)
 	}
@@ -254,7 +250,9 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 	calls := fakeAPI.snapshotCalls()
 	promptMsgID := 0
 	for _, c := range calls {
-		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") {
+		if (c.Method == "sendMessage" || c.Method == "editMessageText") &&
+			c.ChatID == chatID &&
+			strings.Contains(c.Text, "Нужна проверка") {
 			promptMsgID = c.MessageID
 		}
 	}

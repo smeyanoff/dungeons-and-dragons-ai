@@ -11,6 +11,7 @@ import (
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
+	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	dm_tools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/application/history"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
@@ -136,28 +137,12 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 	// No-op indexer: HandleActionUseCase indexes unconditionally.
 	indexDocUC := ragapp.NewIndexDocument(noopEmbedder{}, noopVectorStore{})
 
-	// Deterministic tool-first LLM for player action -> ability check.
-	actionLLM := &scriptedLLM{
-		toolCall: domain.LLMResponseWithTools{
-			Content:  "Мне нужна проверка.",
-			Finished: false,
-			ToolCalls: []dm_tools.ToolCall{
-				{
-					Name: "request_ability_check",
-					Arguments: map[string]interface{}{
-						"ability": "dexterity",
-						"dc":      13,
-						"reason":  "вскрытие замка",
-						"stakes":  "если провал — сработает ловушка",
-					},
-				},
-			},
-		},
-		final: domain.LLMResponseWithTools{
-			Content:  "Замок поддается не сразу — нужна ловкость.",
-			Finished: true,
-		},
-	}
+	// DM LLM не должен запрашивать проверки — их создаёт анализатор действий.
+	actionLLM := noopDMLLM{}
+	analyzeUC := dm_analyzer.NewAnalyzePlayerActionUseCase(
+		analysisLLM{json: `{"needs_ability_check":true,"ability_check":{"ability":"dexterity","dc":13,"reason":"вскрытие замка","stakes":"если провал — сработает ловушка"},"needs_predefined_check":false,"needs_random_roll":false,"simple_action":false,"recommendation":""}`},
+		eventRepo,
+	)
 
 	handleActionUC := player_action.NewHandleActionUseCase(
 		actionLLM,
@@ -179,7 +164,7 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 		nil, // checkDailyProgressUC
 		nil, // getSubscriptionUC
 		nil, // updateRatingUC
-		nil, // analyzePlayerActionUC
+		analyzeUC, // analyzePlayerActionUC
 		nil, // generateLocationEventUC
 	)
 
@@ -254,7 +239,9 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 	calls := fakeAPI.snapshotCalls()
 	promptFound := false
 	for _, c := range calls {
-		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") {
+		if (c.Method == "sendMessage" || c.Method == "editMessageText") &&
+			c.ChatID == chatID &&
+			strings.Contains(c.Text, "Нужна проверка") {
 			promptFound = true
 			break
 		}

@@ -384,6 +384,7 @@ func (uc *HandleActionUseCase) Execute(
 	)
 
 	// Анализируем действие игрока для определения необходимости проверок
+	var actionAnalysis *dm_analyzer.PlayerActionAnalysis
 	if uc.analyzePlayerActionUC != nil {
 		analysisCtx, analysisCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer analysisCancel()
@@ -395,6 +396,7 @@ func (uc *HandleActionUseCase) Execute(
 			)
 			// Продолжаем без анализа
 		} else if analysis != nil {
+			actionAnalysis = analysis
 			logger.Debug("Player action analyzed",
 				logger.Uint("session_id", gs.ID),
 				logger.Bool("needs_ability_check", analysis.NeedsAbilityCheck),
@@ -449,6 +451,42 @@ func (uc *HandleActionUseCase) Execute(
 				logger.Uint("session_id", gs.ID),
 				logger.String("doc_id", doc.ID),
 			)
+		}
+	}
+
+	// Если анализатор решил, что нужна проверка навыка — создаем pending check СИСТЕМОЙ
+	// и возвращаем игроку текстовую подсказку. LLM-DM не участвует и не должен просить /roll.
+	if actionAnalysis != nil && actionAnalysis.NeedsAbilityCheck && actionAnalysis.AbilityCheck != nil && !actionAnalysis.SimpleAction {
+		checkMsg, handled, err := uc.createAbilityCheckFromAnalyzer(ctx, gs, actionAnalysis.AbilityCheck)
+		if err != nil {
+			logger.Warn("Failed to create pending ability check from analyzer",
+				logger.ErrorField(err),
+				logger.Uint("session_id", gs.ID),
+			)
+		} else if handled && strings.TrimSpace(checkMsg) != "" {
+			// Сохраняем "DM/system" сообщение о необходимости проверки в историю и RAG
+			dmEvent := &event.StoryEvent{
+				GameSessionID: gs.ID,
+				AuthorType:    event.AuthorTypeDM,
+				Content:       checkMsg,
+				CreatedAt:     time.Now(),
+			}
+			if err := uc.eventRepo.Save(ctx, dmEvent); err != nil {
+				logger.Warn("Failed to save analyzer ability check prompt event",
+					logger.ErrorField(err),
+					logger.Uint("session_id", gs.ID),
+				)
+			} else if uc.indexDocUC != nil {
+				doc := ragdomain.Document{
+					ID:        uuid.New().String(),
+					Source:    ragdomain.SourceEvent,
+					SessionID: gs.ID,
+					Text:      checkMsg,
+					Timestamp: time.Now(),
+				}
+				_ = uc.indexDocUC.Execute(ctx, doc)
+			}
+			return checkMsg, nil
 		}
 	}
 
@@ -1265,7 +1303,10 @@ func buildActionAnalysisContext(analysis *dm_analyzer.PlayerActionAnalysis) stri
 		parts = append(parts, fmt.Sprintf("- Характеристика: %s", analysis.AbilityCheck.Ability))
 		parts = append(parts, fmt.Sprintf("- DC: %d", analysis.AbilityCheck.DC))
 		parts = append(parts, fmt.Sprintf("- Причина: %s", analysis.AbilityCheck.Reason))
-		parts = append(parts, "⚠️ ВАЖНО: Используй инструмент 'request_ability_check' с параметрами ability, dc, reason, stakes, затем попроси игрока использовать команду /roll d20.")
+		if strings.TrimSpace(analysis.AbilityCheck.Stakes) != "" {
+			parts = append(parts, fmt.Sprintf("- Ставки: %s", analysis.AbilityCheck.Stakes))
+		}
+		parts = append(parts, "⚠️ ВАЖНО: НЕ проси игрока бросать кубики. Система сама запросит /roll, если нужно.")
 	}
 
 	if analysis.NeedsPredefinedCheck && analysis.PredefinedCheck != nil {
@@ -1273,7 +1314,7 @@ func buildActionAnalysisContext(analysis *dm_analyzer.PlayerActionAnalysis) stri
 		parts = append(parts, fmt.Sprintf("- Локация: %s", analysis.PredefinedCheck.LocationName))
 		parts = append(parts, fmt.Sprintf("- Индекс проверки: %d", analysis.PredefinedCheck.CheckIndex))
 		parts = append(parts, fmt.Sprintf("- Причина: %s", analysis.PredefinedCheck.Reason))
-		parts = append(parts, "⚠️ ВАЖНО: Используй предопределенную проверку из локации, попроси игрока использовать команду /roll d20.")
+		parts = append(parts, "⚠️ ВАЖНО: НЕ проси игрока бросать кубики. Система сама запросит /roll, если нужно.")
 	}
 
 	if analysis.NeedsRandomRoll && analysis.RandomRoll != nil {
@@ -1289,6 +1330,103 @@ func buildActionAnalysisContext(analysis *dm_analyzer.PlayerActionAnalysis) stri
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+func formatAbilityNameForPlayer(ability string) string {
+	switch ability {
+	case "strength":
+		return "Силы (STR)"
+	case "dexterity":
+		return "Ловкости (DEX)"
+	case "constitution":
+		return "Телосложения (CON)"
+	case "intelligence":
+		return "Интеллекта (INT)"
+	case "wisdom":
+		return "Мудрости (WIS)"
+	case "charisma":
+		return "Харизмы (CHA)"
+	default:
+		return ability
+	}
+}
+
+// createAbilityCheckFromAnalyzer создает pending ability check на основе вывода анализатора,
+// без участия LLM-DM (DM не должен вызывать request_ability_check и не должен просить /roll).
+func (uc *HandleActionUseCase) createAbilityCheckFromAnalyzer(
+	ctx context.Context,
+	gs *session.GameSession,
+	check *dm_analyzer.AbilityCheckDetails,
+) (string, bool, error) {
+	if uc.sessionRepo == nil || gs == nil || check == nil {
+		return "", false, nil
+	}
+	ability := strings.TrimSpace(check.Ability)
+	reason := strings.TrimSpace(check.Reason)
+	stakes := strings.TrimSpace(check.Stakes)
+	dc := check.DC
+	if ability == "" || dc <= 0 {
+		return "", false, nil
+	}
+	if reason == "" {
+		reason = "попытка с неопределенным исходом"
+	}
+	if stakes == "" {
+		stakes = "успех даст преимущество, провал усложнит ситуацию"
+	}
+
+	eventRepoAdapter := &eventRepoAdapterForDMTools{repo: uc.eventRepo}
+	tool := dm_tools.NewRequestAbilityCheckTool(uc.sessionRepo, eventRepoAdapter, gs.ChatID)
+
+	result, err := tool.Execute(ctx, map[string]interface{}{
+		"ability": ability,
+		"dc":      dc,
+		"reason":  reason,
+		"stakes":  stakes,
+	})
+	if err != nil {
+		return "", false, err
+	}
+
+	m, ok := result.(map[string]interface{})
+	if !ok {
+		// Если формат неожиданный — просто не перехватываем поток, чтобы не ломать игру.
+		return "", false, nil
+	}
+
+	// Ветки отказов/авто-резолва/лимитов: возвращаем предупреждение как player-facing ответ.
+	if autoResolved, _ := m["auto_resolved"].(bool); autoResolved {
+		msg, _ := m["message"].(string)
+		if strings.TrimSpace(msg) == "" {
+			msg = "✅ Проверка не требуется — действие выполняется автоматически."
+		}
+		return msg, true, nil
+	}
+	for _, key := range []string{"rejected", "already_checked", "cooldown", "budget_exceeded", "already_pending"} {
+		if v, _ := m[key].(bool); v {
+			msg, _ := m["warning"].(string)
+			if strings.TrimSpace(msg) == "" {
+				msg = "⚠️ Проверка сейчас недоступна. Продолжай сцену без нового броска."
+			}
+			return msg, true, nil
+		}
+	}
+
+	abilityName := formatAbilityNameForPlayer(ability)
+	playerMsg := fmt.Sprintf(
+		"🎲 Нужна проверка %s (DC %d).\nПричина: %s.\nНа кону: %s.\n\nНапишите /roll d20, чтобы бросить кубик. Можно отправить результат числом (например: 17).",
+		abilityName, dc, reason, stakes,
+	)
+
+	// Чтобы не было дублирующего системного промпта из Telegram слоя — помечаем pending check как notified.
+	// (RequestAbilityCheckTool выставляет notified=false, потому что обычно подсказку отправляет Telegram бот.)
+	updated, getErr := uc.sessionRepo.GetByChatID(ctx, gs.ChatID)
+	if getErr == nil && updated != nil && updated.HasPendingAbilityCheck() {
+		updated.PendingAbilityCheckNotified = true
+		_ = uc.sessionRepo.Save(ctx, updated)
+	}
+
+	return playerMsg, true, nil
 }
 
 // createToolRegistry создает реестр инструментов и регистрирует все доступные tools
@@ -1308,11 +1446,6 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 	if uc.sessionRepo != nil {
 		registry.Register(dm_tools.NewGetCharacterStatsTool(uc.sessionRepo, gs.ChatID))
 		registry.Register(dm_tools.NewGetCharacterAbilitiesTool(uc.sessionRepo, gs.ChatID))
-		// Создаем адаптер для EventRepository
-		eventRepoAdapter := &eventRepoAdapterForDMTools{repo: uc.eventRepo}
-		registry.Register(dm_tools.NewRequestAbilityCheckTool(uc.sessionRepo, eventRepoAdapter, gs.ChatID))
-		registry.Register(dm_tools.NewRequestSavingThrowTool(uc.sessionRepo, gs.ChatID))
-		registry.Register(dm_tools.NewEvaluateCheckTool(uc.sessionRepo, gs.ChatID))
 		// Регистрируем инструмент для проверки требований к характеристикам
 		registry.Register(dm_tools.NewCheckStatRequirementsTool(uc.sessionRepo, gs.ChatID))
 	}

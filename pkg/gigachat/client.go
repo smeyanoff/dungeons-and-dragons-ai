@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -51,6 +52,8 @@ func (c *Client) GetToken(ctx context.Context) (string, error) {
 }
 
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
+	// Добавляем X-Client-ID для image-related запросов (генерация и скачивание изображений)
+	isImageRequest := strings.Contains(url, "/files/") || (strings.Contains(url, "/chat/completions") && len(body) > 0 && strings.Contains(string(body), "text2image"))
 	const maxRetries = 3
 	const initialBackoff = 2 * time.Second
 	const maxBackoff = 30 * time.Second
@@ -90,6 +93,11 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Content-Type", "application/json")
+
+		// Добавляем X-Client-ID для image-related запросов
+		if isImageRequest && c.cfg.ClientID != "" {
+			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
+		}
 
 		resp, err := c.client.Do(req)
 		if err != nil {

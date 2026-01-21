@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -64,6 +63,7 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 
 	url := fmt.Sprintf("%s/chat/completions", c.cfg.APIBaseURL)
 
+	// Используем doRequest для автоматического retry при 429 ошибках
 	resp, err := c.doRequest(ctx, http.MethodPost, url, body)
 	if err != nil {
 		return "", err
@@ -116,26 +116,9 @@ func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, erro
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
-		}
-
-		token, err := c.auth.getToken(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get token: %w", err)
-		}
-
-		req.Header.Set("Authorization", "Bearer "+token)
-		// Согласно документации GigaChat API, для скачивания изображений используется Accept: application/jpg
-		req.Header.Set("Accept", "application/jpg")
-
-		// Если есть ClientID в конфиге, добавляем заголовок X-Client-ID
-		if c.cfg.ClientID != "" {
-			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
-		}
-
-		resp, err := c.client.Do(req)
+		// Используем doRequest для автоматического retry при 429 ошибках
+		// doRequest сам добавит X-Client-ID для image-related запросов
+		resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			if attempt < maxRetries-1 {
 				continue // Retry при сетевых ошибках

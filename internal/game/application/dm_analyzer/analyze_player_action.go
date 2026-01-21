@@ -44,6 +44,7 @@ type AbilityCheckDetails struct {
 	Ability string `json:"ability"` // "strength", "dexterity", "intelligence", "wisdom", "charisma", "constitution"
 	DC      int    `json:"dc"`      // Difficulty Class (10-20)
 	Reason  string `json:"reason"`  // Причина проверки
+	Stakes  string `json:"stakes"`  // Что на кону при успехе/провале (кратко)
 }
 
 // PredefinedCheckDetails детали предопределенной проверки
@@ -162,7 +163,7 @@ func buildPlayerActionAnalysisPrompt(playerMessage, gameContext string, recentEv
 	parts = append(parts, "- Абстрактные понятия: 'проверить удачу', 'проверить реакцию', 'проверить решимость'")
 	parts = append(parts, "- Простые действия: взять предмет, открыть обычную дверь, пройти по дороге, подняться по лестнице")
 	parts = append(parts, "")
-	parts = append(parts, "✅ Нужна проверка навыка (request_ability_check) для:")
+	parts = append(parts, "✅ Нужна проверка навыка для:")
 	parts = append(parts, "- Открыть замок, взломать запертую дверь → 'dexterity' или 'strength' (DC 12-18)")
 	parts = append(parts, "- Заметить ловушку, скрытую дверь, секретный проход → 'intelligence' или 'wisdom' (DC 12-15)")
 	parts = append(parts, "- Убедить/обмануть/запугать NPC в ВАЖНОЙ ситуации → 'charisma' (DC 12-18)")
@@ -183,7 +184,8 @@ func buildPlayerActionAnalysisPrompt(playerMessage, gameContext string, recentEv
   "ability_check": {
     "ability": "wisdom",
     "dc": 12,
-    "reason": "Проверка восприятия для поиска скрытых вещей"
+    "reason": "Коротко: зачем нужна проверка (что делает игрок)",
+    "stakes": "Коротко: что произойдет при успехе/провале"
   },
   "needs_predefined_check": true/false,
   "predefined_check": {
@@ -202,7 +204,7 @@ func buildPlayerActionAnalysisPrompt(playerMessage, gameContext string, recentEv
 	parts = append(parts, "")
 	parts = append(parts, "⚠️ ВАЖНО:")
 	parts = append(parts, "- Если действие простое или описательное, установи 'simple_action': true")
-	parts = append(parts, "- Если нужна проверка навыка, установи 'needs_ability_check': true и заполни 'ability_check'")
+	parts = append(parts, "- Если нужна проверка навыка, установи 'needs_ability_check': true и заполни 'ability_check' (включая stakes)")
 	parts = append(parts, "- Если нужна предопределенная проверка, установи 'needs_predefined_check': true и заполни 'predefined_check'")
 	parts = append(parts, "- Если нужен случайный бросок, установи 'needs_random_roll': true и заполни 'random_roll'")
 
