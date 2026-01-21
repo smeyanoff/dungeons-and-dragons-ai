@@ -39,6 +39,24 @@ type LLMStats = persistence.LLMStats
 // LLMLogBranch агрегаты по "веткам" запросов (сессиям)
 type LLMLogBranch = persistence.LLMLogBranch
 
+// corsMiddleware добавляет CORS заголовки для всех запросов
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Разрешаем запросы из браузера
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		// Обрабатываем preflight запросы
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // NewServer создает новый сервер мониторинга
 func NewServer(addr string, logRepo LLMLogRepository) *Server {
 	s := &Server{
@@ -61,9 +79,10 @@ func NewServer(addr string, logRepo LLMLogRepository) *Server {
 	mux.HandleFunc("/api/stats", s.handleAPIStats)
 	mux.HandleFunc("/api/branches", s.handleAPIBranches)
 
+	// Оборачиваем в CORS middleware
 	s.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: corsMiddleware(mux),
 	}
 
 	return s
@@ -109,13 +128,16 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 </head>
 <body>
 	<div class="container">
-		<h1>🤖 LLM Monitoring Dashboard</h1>
 		<div class="nav">
 			<a href="/">Dashboard</a>
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
 			<a href="/branches">Branches</a>
 			<a href="/stats">Statistics</a>
+		</div>
+		<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+			<h1>🤖 LLM Monitoring Dashboard</h1>
+			<button onclick="loadStats()" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">🔄 Refresh</button>
 		</div>
 		<div class="stats" id="stats">
 			<div class="stat-card">
@@ -147,8 +169,18 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	<script>
 		function loadStats() {
 			const from = new Date(Date.now() - 7*24*60*60*1000).toISOString();
+			console.log('Loading stats from:', from);
+
+			// Показываем индикатор загрузки
+			const statElements = ['total-requests', 'total-errors', 'total-problems', 'avg-duration', 'total-tokens', 'total-tool-calls'];
+			statElements.forEach(id => {
+				document.getElementById(id).textContent = 'Loading...';
+				document.getElementById(id).style.color = '#666';
+			});
+
 			fetch('/api/stats?from=' + encodeURIComponent(from))
 				.then(r => {
+					console.log('API response status:', r.status);
 					if (!r.ok) {
 						throw new Error('HTTP error! status: ' + r.status);
 					}
@@ -156,25 +188,33 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 				})
 				.then(data => {
 					console.log('Stats loaded:', data);
-					document.getElementById('total-requests').textContent = data.total_requests || 0;
-					document.getElementById('total-errors').textContent = data.total_errors || 0;
-					document.getElementById('total-problems').textContent = data.total_problems || data.total_errors || 0;
-					document.getElementById('avg-duration').textContent = data.average_duration_ms || 0;
-					document.getElementById('total-tokens').textContent = data.total_tokens || 0;
-					document.getElementById('total-tool-calls').textContent = data.total_tool_calls || 0;
+
+					// Обновляем данные с правильными значениями
+					document.getElementById('total-requests').textContent = (data.total_requests || 0).toLocaleString();
+					document.getElementById('total-errors').textContent = (data.total_errors || 0).toLocaleString();
+					document.getElementById('total-problems').textContent = (data.total_problems || data.total_errors || 0).toLocaleString();
+					document.getElementById('avg-duration').textContent = data.average_duration_ms ? Math.round(data.average_duration_ms) + 'ms' : '0ms';
+					document.getElementById('total-tokens').textContent = (data.total_tokens || 0).toLocaleString();
+					document.getElementById('total-tool-calls').textContent = (data.total_tool_calls || 0).toLocaleString();
+
+					// Устанавливаем цвет в зависимости от наличия данных
+					statElements.forEach(id => {
+						const element = document.getElementById(id);
+						element.style.color = (parseInt(element.textContent.replace(/[^\d]/g, '')) > 0) ? '#007bff' : '#666';
+					});
 				})
 				.catch(err => {
 					console.error('Failed to load stats:', err);
-					document.getElementById('total-requests').textContent = 'Error';
-					document.getElementById('total-errors').textContent = 'Error';
-					document.getElementById('total-problems').textContent = 'Error';
-					document.getElementById('avg-duration').textContent = 'Error';
-					document.getElementById('total-tokens').textContent = 'Error';
-					document.getElementById('total-tool-calls').textContent = 'Error';
+					statElements.forEach(id => {
+						document.getElementById(id).textContent = 'Error loading data';
+						document.getElementById(id).style.color = '#dc3545';
+					});
 				});
 		}
+
 		// Загружаем статистику при загрузке страницы
 		loadStats();
+
 		// Обновляем каждые 30 секунд
 		setInterval(loadStats, 30000);
 	</script>

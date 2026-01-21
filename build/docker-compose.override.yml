@@ -1,0 +1,16 @@
+services:
+  bot:
+    environment:
+      - MONITORING_PORT=8082
+      - TELEGRAM_BOT_TOKEN=1234567890:AAFakeTokenForTestingPurposesOnly123
+      - POSTGRES_USER=dnd_user
+      - POSTGRES_PASSWORD=dnd_password
+      - POSTGRES_DB=dnd
+      - DATABASE_URL=postgres://dnd_user:dnd_password@postgres:5432/dnd?sslmode=disable
+      - GIGACHAT_CLIENT_ID=dummy
+      - GIGACHAT_CLIENT_SECRET=dummy
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6334
+      - LOG_LEVEL=info
+    ports:
+      - "8082:8082"

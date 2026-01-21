@@ -153,11 +153,12 @@ func main() {
 
 	// Инициализация GigaChat
 	gigachatCfg := gigachat.Config{
-		AuthBaseURL:  getEnv("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443"),
-		APIBaseURL:   getEnv("GIGACHAT_API_URL", "https://gigachat.devices.sberbank.ru/api/v1"),
-		ClientID:     gigachatClientID,
-		ClientSecret: gigachatClientSecret,
-		Scope:        getEnv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
+		AuthBaseURL:      getEnv("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443"),
+		APIBaseURL:       getEnv("GIGACHAT_API_URL", "https://gigachat.devices.sberbank.ru/api/v1"),
+		ClientID:         gigachatClientID,
+		ClientSecret:     gigachatClientSecret,
+		Scope:            getEnv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
+		ConcurrencyLimit: 2, // Уменьшаем concurrency для уменьшения rate limiting
 	}
 
 	// Валидация GigaChat credentials
@@ -406,32 +407,7 @@ func main() {
 		logger.Info("Default spells initialized successfully")
 	}
 
-	// Инициализация бота
-	logger.Info("Initializing Telegram bot")
-	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
-	if err != nil {
-		logger.Fatal("Failed to create bot",
-			logger.ErrorField(err),
-		)
-	}
-
-	// После создания бота, настраиваем TelegramNotificationService в use cases
-	// Используем API из bot для отправки уведомлений о достижениях
-	telegramNotificationService := achievementapp.NewTelegramNotificationServiceFromBot(bot)
-	addExperienceUC.SetNotificationService(telegramNotificationService)
-	handleCombatUC.SetNotificationService(telegramNotificationService)
-
-	// Настраиваем обновление рейтингов в use cases
-	// Создаем адаптеры для RatingUpdater из updateRatingUC
-	ratingUpdaterAdapterExp := &ratingUpdaterAdapter{uc: updateRatingUC}
-	ratingUpdaterAdapterCombat := &ratingUpdaterAdapterCombat{uc: updateRatingUC}
-	addExperienceUC.SetRatingUpdater(ratingUpdaterAdapterExp)
-	handleCombatUC.SetRatingUpdater(ratingUpdaterAdapterCombat)
-	logger.Info("Rating updater configured for use cases")
-
-	logger.Info("Telegram notification service configured for achievements")
-	logger.Info("Telegram bot initialized")
-
+	// Запуск HTTP серверов ДО создания бота для доступности monitoring
 	// Запуск HTTP сервера для health check
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		// Проверка подключения к БД
@@ -512,43 +488,80 @@ func main() {
 		}
 	}()
 
+	// Инициализация бота
+	logger.Info("Initializing Telegram bot")
+	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
+	if err != nil {
+		logger.Error("Failed to create bot - continuing without Telegram bot",
+			logger.ErrorField(err),
+		)
+		logger.Warn("Application will run in monitoring-only mode without Telegram bot functionality")
+	} else {
+		// После создания бота, настраиваем TelegramNotificationService в use cases
+		// Используем API из bot для отправки уведомлений о достижениях
+		telegramNotificationService := achievementapp.NewTelegramNotificationServiceFromBot(bot)
+		addExperienceUC.SetNotificationService(telegramNotificationService)
+		handleCombatUC.SetNotificationService(telegramNotificationService)
+
+		// Настраиваем обновление рейтингов в use cases
+		// Создаем адаптеры для RatingUpdater из updateRatingUC
+		ratingUpdaterAdapterExp := &ratingUpdaterAdapter{uc: updateRatingUC}
+		ratingUpdaterAdapterCombat := &ratingUpdaterAdapterCombat{uc: updateRatingUC}
+		addExperienceUC.SetRatingUpdater(ratingUpdaterAdapterExp)
+		handleCombatUC.SetRatingUpdater(ratingUpdaterAdapterCombat)
+		logger.Info("Rating updater configured for use cases")
+
+		logger.Info("Telegram notification service configured for achievements")
+		logger.Info("Telegram bot initialized")
+	}
+
 	// Graceful shutdown
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	logger.Info("Starting bot",
-		logger.String("version", version.Version),
-		logger.String("commit", version.Commit),
-		logger.String("buildTime", version.BuildTime),
-	)
+	// Запускаем бота только если он был успешно создан
+	if bot != nil {
+		logger.Info("Starting bot",
+			logger.String("version", version.Version),
+			logger.String("commit", version.Commit),
+			logger.String("buildTime", version.BuildTime),
+		)
 
-	// Запускаем бота в горутине
-	botErrChan := make(chan error, 1)
-	go func() {
-		if err := bot.Start(ctx); err != nil {
-			botErrChan <- err
-		}
-	}()
+		// Запускаем бота в горутине
+		botErrChan := make(chan error, 1)
+		go func() {
+			if err := bot.Start(ctx); err != nil {
+				botErrChan <- err
+			}
+		}()
 
-	// Ожидаем сигнала завершения или ошибки
-	select {
-	case <-ctx.Done():
-		logger.Info("Shutting down...")
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.Error("HTTP server shutdown error",
+		// Ожидаем сигнала завершения или ошибки бота
+		select {
+		case <-ctx.Done():
+			logger.Info("Shutting down...")
+		case err := <-botErrChan:
+			logger.Error("Bot error - continuing with monitoring only",
 				logger.ErrorField(err),
 			)
 		}
+	} else {
+		logger.Info("Running in monitoring-only mode - waiting for shutdown signal")
+		// Ожидаем сигнала завершения
+		<-ctx.Done()
+		logger.Info("Shutting down...")
+	}
 
-		logger.Info("Shutdown complete")
-	case err := <-botErrChan:
-		logger.Fatal("Bot error",
+	// Graceful shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		logger.Error("HTTP server shutdown error",
 			logger.ErrorField(err),
 		)
 	}
+
+	logger.Info("Shutdown complete")
 }
 
 // ratingAchievementRepoAdapter адаптирует persistence.AchievementRepository к rating.AchievementRepository

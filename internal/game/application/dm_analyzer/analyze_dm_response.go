@@ -407,7 +407,7 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 	prompt := buildAnalysisPrompt(dmResponse, attempt > 0)
 
 	// Увеличено до 30 секунд, так как без ограничения токенов ответ может быть длиннее
-	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
+	llmCtx, llmCancel := context.WithTimeout(ctx, 60*time.Second) // Увеличиваем таймаут для анализа
 	defer llmCancel()
 
 	// Убрано ограничение на токены для анализа ответа DM и генерации противников
@@ -421,6 +421,13 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 
 	// Логируем оригинальный ответ для анализа проблем
 	log.Printf("[DM Analyzer] Raw LLM response (length: %d, attempt: %d): %s", len(raw), attempt+1, raw[:min(200, len(raw))])
+
+	// Проверяем на truncated JSON и пытаемся восстановить
+	isTruncated := looksLikeTruncatedJSON(cleaned)
+	if isTruncated {
+		log.Printf("[DM Analyzer] Detected truncated JSON response (attempt: %d), attempting repair...", attempt+1)
+		cleaned = tryRepairTruncatedJSON(cleaned)
+	}
 
 	// Пытаемся восстановить JSON если он невалиден
 	if !json.Valid([]byte(cleaned)) {
@@ -1532,3 +1539,36 @@ func (uc *AnalyzeDMResponseUseCase) findLocationIDByName(ctx context.Context, lo
 
 	return 0
 }
+
+// looksLikeTruncatedJSON проверяет, выглядит ли JSON как обрезанный
+func looksLikeTruncatedJSON(jsonStr string) bool {
+	jsonStr = strings.TrimSpace(jsonStr)
+	if jsonStr == "" {
+		return false
+	}
+
+	openBraces := strings.Count(jsonStr, "{") - strings.Count(jsonStr, "}")
+	openBrackets := strings.Count(jsonStr, "[") - strings.Count(jsonStr, "]")
+
+	// Если есть незакрытые скобки, вероятно truncated
+	if openBraces > 0 || openBrackets > 0 {
+		return true
+	}
+
+	// Если заканчивается на незавершенную строку (нечетное количество кавычек)
+	quoteCount := strings.Count(jsonStr, `"`)
+	if quoteCount%2 != 0 {
+		return true
+	}
+
+	// Если заканчивается на запятую или двоеточие
+	if len(jsonStr) > 0 {
+		lastChar := jsonStr[len(jsonStr)-1]
+		if lastChar == ',' || lastChar == ':' {
+			return true
+		}
+	}
+
+	return false
+}
+

@@ -48,6 +48,14 @@
 - **Как проверить**:
   - `make test-telegram-real` (при наличии creds) + отсутствие repair/fallback в логах для InitCampaign.
 
+### P1 — DM Analyzer: truncated JSON ответы от LLM ✅ (исправлено)
+- **Симптом (prod‑логи)**: `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":{"name":"Сер�` - ответ обрывается.
+- **Решено**: Добавлено раннее обнаружение truncated JSON + автоматический repair перед основной валидацией. Увеличен таймаут DM analyzer с 30s до 60s.
+- **Action items**:
+  - Мониторить логи на отсутствие "Raw LLM response" с обрезанными ответами.
+- **Как проверить**:
+  - В логах DM analyzer отсутствие truncated ответов; успешный анализ действий игроков.
+
 ### P1 — LocationEvent создаётся, но не попадает в следующий DM prompt (integration gap)
 - **Симптом (`TESTING_REPORT.md`)**: событие есть в `world_events`, но его нет в следующем prompt; тест сейчас делает `t.Skip`.
 - **Action items**:
@@ -57,13 +65,15 @@
 - **Как проверить**:
   - `tests/integration/telegram_location_event_simulation_test.go` должен стать PASS без `Skip`.
 
-### P2 — изображения: 403 Permission denied при скачивании + таймауты генерации
+### P2 — изображения: 403 Permission denied при скачивании + таймауты генерации ✅ (исправлено)
 - **Симптом (prod‑логи + `TESTING_REPORT.md`)**:
   - `gigachat image download error status 403: {"message":"Permission denied"}`
   - `Failed to generate world map image ... context deadline exceeded` (до исправления)
 - **Решение**:
   - Добавлен консистентный X-Client-ID header при генерации и скачивании изображений (согласно GigaChat API docs).
   - Добавлена retry логика в `GenerateImage` через `doRequest` для обработки 429 ошибок.
+  - Уменьшен concurrency limit GigaChat с 5 до 2 для снижения rate limiting.
+  - Увеличен таймаут генерации изображений с 90s до 120s.
 - **Action items**:
   - Мониторить прод-логи на отсутствие 403 и таймаутов после применения фикса.
   - Добавить явный feature-flag "images off" при системных 403, если проблема сохранится.
@@ -71,10 +81,11 @@
 - **Как проверить**:
   - В прод‑логах нет повторяющихся 403/таймаутов; генерация карты не ломает `/newgame` UX.
 
-### P2 — GigaChat rate limiting (429) влияет на latency/UX
+### P2 — GigaChat rate limiting (429) влияет на latency/UX ✅ (улучшено)
 - **Симптом (prod‑логи)**: `Rate limited (429), retry attempt ...`.
+- **Решено**: Уменьшен concurrency limit с 5 до 2, добавлен jitter в backoff, улучшена retry логика с semaphore.
 - **Action items**:
-  - Ограничить конкурентность запросов к LLM, джиттер‑бекофф, очередь/дедупликация, отдельные таймауты для image.
+  - Мониторить метрики rate limiting; при необходимости добавить очередь/дедупликацию.
   - Метрики: RPS, 429 rate, p95 latency.
 - **Как проверить**:
   - Падение доли 429 и tail latency в логах/мониторинге.

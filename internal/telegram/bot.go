@@ -884,8 +884,8 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) err
 			}
 		}
 
-		imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		defer cancel()
+	imgCtx, cancel := context.WithTimeout(ctx, 120*time.Second) // Увеличиваем таймаут для изображений с учетом retry
+	defer cancel()
 		req := imageapp.GenerateImageRequest{
 			SystemPrompt:    "You are a fantasy cartographer. Create beautiful D&D-style maps with clear landmarks and readable layout. No text labels on the map itself.",
 			UserPrompt:      sb.String(),

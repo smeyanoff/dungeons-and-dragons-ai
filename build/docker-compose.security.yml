@@ -26,5 +26,17 @@ services:
       - ..:/app
     command: ["semgrep", "scan", "--config", "auto", "--json", "--output", "semgrep-report.json", "."]
 
+  # Snyk - сканирование зависимостей на уязвимости
+  snyk:
+    image: snyk/snyk:go
+    working_dir: /app
+    volumes:
+      - ..:/app
+    environment:
+      - SNYK_TOKEN=${SNYK_TOKEN:-}
+    command: ["snyk", "test", "--json", "--json-file-output", "snyk-report.json", "--severity-threshold", "medium"]
+    # Если токен не установлен, пропускаем сканирование
+    profiles: ["with-snyk-token"]
+
 volumes:
   trivy-cache:

@@ -32,7 +32,8 @@ help:
 	@echo "  gosec                Run gosec scanner in a container (writes gosec-report.json)"
 	@echo "  trivy                Run Trivy FS scan (writes trivy-report.json)"
 	@echo "  semgrep              Run Semgrep SAST scan (writes semgrep-report.json)"
-	@echo "  security-scan        Run gosec + Trivy + Semgrep security scans"
+	@echo "  snyk                 Run Snyk dependency scan (writes snyk-report.json)"
+	@echo "  security-scan        Run all security scans (gosec + Trivy + Semgrep + Snyk)"
 
 .PHONY: docker-up docker-down docker-ps docker-logs docker-down-v
 docker-up:
@@ -119,5 +120,9 @@ trivy:
 semgrep:
 	$(DOCKER_COMPOSE) -f $(COMPOSE_SEC) run --rm semgrep
 
+.PHONY: snyk
+snyk:
+	$(DOCKER_COMPOSE) -f $(COMPOSE_SEC) --profile with-snyk-token run --rm snyk
+
 .PHONY: security-scan
-security-scan: gosec trivy semgrep
+security-scan: gosec trivy semgrep snyk
