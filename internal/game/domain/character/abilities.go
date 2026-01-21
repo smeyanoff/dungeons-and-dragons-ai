@@ -4,9 +4,9 @@ package character
 type AbilityType string
 
 const (
-	AbilityTypeFeat   AbilityType = "feat"   // Перк
-	AbilityTypeSpell  AbilityType = "spell"  // Заклинание
-	AbilityTypeClass  AbilityType = "class"  // Классовая способность
+	AbilityTypeFeat  AbilityType = "feat"  // Перк
+	AbilityTypeSpell AbilityType = "spell" // Заклинание
+	AbilityTypeClass AbilityType = "class" // Классовая способность
 )
 
 // AbilityUseType представляет тип использования способности
@@ -19,19 +19,19 @@ const (
 
 // Ability представляет базовую способность персонажа
 type Ability struct {
-	ID          uint          `gorm:"primaryKey"`
-	CharacterID uint          `gorm:"index"`
+	ID          uint `gorm:"primaryKey"`
+	CharacterID uint `gorm:"index"`
 	Name        string
 	Description string
-	Type        AbilityType   `gorm:"type:varchar(32);not null"`
+	Type        AbilityType    `gorm:"type:varchar(32);not null"`
 	UseType     AbilityUseType `gorm:"type:varchar(32);not null"`
-	
+
 	// Для заклинаний
 	SpellLevel  int    // Уровень заклинания (1-9)
 	SpellSchool string // Школа магии (для заклинаний)
-	
+
 	// Ограничения использования
-	UsesPerDay   int // Использований в день (0 = без ограничений)
+	UsesPerDay    int // Использований в день (0 = без ограничений)
 	UsesRemaining int // Оставшихся использований сегодня
 }
 
@@ -50,15 +50,15 @@ func GetCharacterAbilities(class Class, level int) []Ability {
 		})
 		if level >= 2 {
 			abilities = append(abilities, Ability{
-				Name:        "Второе дыхание",
-				Description: "Восстанавливает 1d10+level HP один раз в день",
-				Type:        AbilityTypeClass,
-				UseType:     AbilityUseActive,
-				UsesPerDay:   1,
+				Name:          "Второе дыхание",
+				Description:   "Восстанавливает 1d10+level HP один раз в день",
+				Type:          AbilityTypeClass,
+				UseType:       AbilityUseActive,
+				UsesPerDay:    1,
 				UsesRemaining: 1,
 			})
 		}
-		
+
 	case ClassWizard:
 		abilities = append(abilities, Ability{
 			Name:        "Заклинание",
@@ -83,7 +83,7 @@ func GetCharacterAbilities(class Class, level int) []Ability {
 			SpellLevel:  1,
 			SpellSchool: "Абjурация",
 		})
-		
+
 	case ClassRogue:
 		abilities = append(abilities, Ability{
 			Name:        "Скрытность",
@@ -97,7 +97,7 @@ func GetCharacterAbilities(class Class, level int) []Ability {
 			Type:        AbilityTypeClass,
 			UseType:     AbilityUseActive,
 		})
-		
+
 	case ClassCleric:
 		abilities = append(abilities, Ability{
 			Name:        "Божественная магия",
@@ -113,7 +113,7 @@ func GetCharacterAbilities(class Class, level int) []Ability {
 			SpellLevel:  1,
 			SpellSchool: "Исцеление",
 		})
-		
+
 	case ClassRanger:
 		abilities = append(abilities, Ability{
 			Name:        "Следопыт",

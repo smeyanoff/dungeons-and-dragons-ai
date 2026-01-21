@@ -52,7 +52,7 @@ func (t *GetCharacterStatsTool) Execute(ctx context.Context, args map[string]int
 	logger.Info("GetCharacterStatsTool: executing",
 		logger.Int64("chat_id", t.chatID),
 	)
-	
+
 	gs, err := t.sessionRepo.GetByChatID(ctx, t.chatID)
 	if err != nil {
 		logger.Error("GetCharacterStatsTool: failed to get session",
@@ -61,14 +61,14 @@ func (t *GetCharacterStatsTool) Execute(ctx context.Context, args map[string]int
 		)
 		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
-	
+
 	if gs == nil {
 		logger.Warn("GetCharacterStatsTool: session not found",
 			logger.Int64("chat_id", t.chatID),
 		)
 		return nil, fmt.Errorf("session not found")
 	}
-	
+
 	player := gs.GetFirstPlayer()
 	if player == nil {
 		logger.Warn("GetCharacterStatsTool: player not found",
@@ -77,20 +77,20 @@ func (t *GetCharacterStatsTool) Execute(ctx context.Context, args map[string]int
 		)
 		return nil, fmt.Errorf("player not found")
 	}
-	
+
 	char := player.Character
 	expToNext := char.GetExperienceToNextLevel()
-	
+
 	result := map[string]interface{}{
-		"name":         char.Name,
-		"race":         string(char.Race),
-		"class":        string(char.Class),
-		"level":        char.Level,
-		"hp":           char.HP,
-		"max_hp":       char.MaxHP,
-		"experience":   char.Experience,
-		"exp_to_next":  expToNext,
-		"status":       string(char.Status),
+		"name":        char.Name,
+		"race":        string(char.Race),
+		"class":       string(char.Class),
+		"level":       char.Level,
+		"hp":          char.HP,
+		"max_hp":      char.MaxHP,
+		"experience":  char.Experience,
+		"exp_to_next": expToNext,
+		"status":      string(char.Status),
 		"stats": map[string]interface{}{
 			"strength":     char.Stats.Strength,
 			"dexterity":    char.Stats.Dexterity,
@@ -100,7 +100,7 @@ func (t *GetCharacterStatsTool) Execute(ctx context.Context, args map[string]int
 			"charisma":     char.Stats.Charisma,
 		},
 	}
-	
+
 	logger.Info("GetCharacterStatsTool: completed successfully",
 		logger.Int64("chat_id", t.chatID),
 		logger.String("character_name", char.Name),
@@ -274,34 +274,34 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 			// Проверяем события на наличие результатов evaluate_check
 			for i := len(recentEvents) - 1; i >= 0; i-- {
 				evt := recentEvents[i]
-				
+
 				// Ищем в содержимом события упоминания о проверке этой характеристики
 				// Проверяем, есть ли в событии результат evaluate_check для этой характеристики
 				content := strings.ToLower(evt.Content)
 				// Проверяем, является ли это сообщением от DM (не от игрока)
 				if evt.AuthorType == event.AuthorTypeDM {
 					// Ищем упоминания характеристики и результата проверки
-					hasAbility := strings.Contains(content, abilityStr) || 
-					              strings.Contains(content, strings.ToLower(abilityName)) ||
-					              (abilityStr == "wisdom" && (strings.Contains(content, "мудрост") || strings.Contains(content, "восприяти"))) ||
-					              (abilityStr == "intelligence" && (strings.Contains(content, "интеллект") || strings.Contains(content, "разобрать") || strings.Contains(content, "прочитать"))) ||
-					              (abilityStr == "dexterity" && strings.Contains(content, "ловкост")) ||
-					              (abilityStr == "strength" && strings.Contains(content, "сил")) ||
-					              (abilityStr == "constitution" && strings.Contains(content, "телосложени")) ||
-					              (abilityStr == "charisma" && strings.Contains(content, "харизм"))
-					
+					hasAbility := strings.Contains(content, abilityStr) ||
+						strings.Contains(content, strings.ToLower(abilityName)) ||
+						(abilityStr == "wisdom" && (strings.Contains(content, "мудрост") || strings.Contains(content, "восприяти"))) ||
+						(abilityStr == "intelligence" && (strings.Contains(content, "интеллект") || strings.Contains(content, "разобрать") || strings.Contains(content, "прочитать"))) ||
+						(abilityStr == "dexterity" && strings.Contains(content, "ловкост")) ||
+						(abilityStr == "strength" && strings.Contains(content, "сил")) ||
+						(abilityStr == "constitution" && strings.Contains(content, "телосложени")) ||
+						(abilityStr == "charisma" && strings.Contains(content, "харизм"))
+
 					// Проверяем, есть ли в событии результат проверки (успех или провал)
 					// Также проверяем контекстные слова, указывающие на выполненную проверку
-					hasResult := strings.Contains(content, "успех") || strings.Contains(content, "провал") || 
-					             strings.Contains(content, "success") || strings.Contains(content, "failure") ||
-					             strings.Contains(content, "✅") || strings.Contains(content, "❌") ||
-					             strings.Contains(content, "прошел проверку") || strings.Contains(content, "провалил проверку") ||
-					             strings.Contains(content, "разобрать") || strings.Contains(content, "прочитать") || 
-					             strings.Contains(content, "сосредоточиться") || strings.Contains(content, "изучить") ||
-					             strings.Contains(content, "записи") || strings.Contains(content, "дневник") ||
-					             strings.Contains(content, "свиток") || strings.Contains(content, "текст") ||
-					             strings.Contains(content, "бросок") && (strings.Contains(content, "d20") || strings.Contains(content, "кубик"))
-					
+					hasResult := strings.Contains(content, "успех") || strings.Contains(content, "провал") ||
+						strings.Contains(content, "success") || strings.Contains(content, "failure") ||
+						strings.Contains(content, "✅") || strings.Contains(content, "❌") ||
+						strings.Contains(content, "прошел проверку") || strings.Contains(content, "провалил проверку") ||
+						strings.Contains(content, "разобрать") || strings.Contains(content, "прочитать") ||
+						strings.Contains(content, "сосредоточиться") || strings.Contains(content, "изучить") ||
+						strings.Contains(content, "записи") || strings.Contains(content, "дневник") ||
+						strings.Contains(content, "свиток") || strings.Contains(content, "текст") ||
+						strings.Contains(content, "бросок") && (strings.Contains(content, "d20") || strings.Contains(content, "кубик"))
+
 					if hasAbility && hasResult {
 						// Найдена предыдущая проверка той же характеристики
 						result := map[string]interface{}{
@@ -322,13 +322,13 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 					// Базовый cooldown: если похожая проверка была очень недавно, не запрашиваем повтор
 					if hasAbility && time.Since(evt.CreatedAt) < 2*time.Minute {
 						return map[string]interface{}{
-							"ability":         abilityStr,
-							"ability_name":    abilityName,
-							"ability_value":   abilityValue,
-							"modifier":        modifier,
-							"character_name":  char.Name,
-							"cooldown":        true,
-							"warning":         "Эта проверка выполнялась совсем недавно. Опиши исход сцены или предложи другой подход, вместо повторной проверки.",
+							"ability":        abilityStr,
+							"ability_name":   abilityName,
+							"ability_value":  abilityValue,
+							"modifier":       modifier,
+							"character_name": char.Name,
+							"cooldown":       true,
+							"warning":        "Эта проверка выполнялась совсем недавно. Опиши исход сцены или предложи другой подход, вместо повторной проверки.",
 						}, nil
 					}
 				}
@@ -349,12 +349,12 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 
 	// Формируем результат
 	result := map[string]interface{}{
-		"check_id":        checkID,
-		"ability":         abilityStr,
-		"ability_name":    abilityName,
-		"ability_value":   abilityValue,
-		"modifier":        modifier,
-		"character_name":  char.Name,
+		"check_id":       checkID,
+		"ability":        abilityStr,
+		"ability_name":   abilityName,
+		"ability_value":  abilityValue,
+		"modifier":       modifier,
+		"character_name": char.Name,
 	}
 
 	// Если указана DC, вычисляем вероятность успеха
@@ -381,10 +381,10 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 		result["dc"] = dc
 		result["min_roll_to_succeed"] = minRollToSucceed
 		result["success_chance_percent"] = fmt.Sprintf("%.1f%%", successChance)
-		result["description"] = fmt.Sprintf("Для успешной проверки %s (DC %d) %s нужно бросить не менее %d на d20 (с учетом модификатора %+d). Вероятность успеха: %.1f%%", 
+		result["description"] = fmt.Sprintf("Для успешной проверки %s (DC %d) %s нужно бросить не менее %d на d20 (с учетом модификатора %+d). Вероятность успеха: %.1f%%",
 			abilityName, dc, char.Name, minRollToSucceed, modifier, successChance)
 	} else {
-		result["description"] = fmt.Sprintf("%s имеет %s %d (модификатор %+d)", 
+		result["description"] = fmt.Sprintf("%s имеет %s %d (модификатор %+d)",
 			char.Name, abilityName, abilityValue, modifier)
 	}
 
@@ -526,13 +526,13 @@ func (t *RequestSavingThrowTool) Execute(ctx context.Context, args map[string]in
 
 	// Формируем результат
 	result := map[string]interface{}{
-		"ability":             abilityStr,
-		"ability_name":        abilityName,
-		"ability_value":       abilityValue,
-		"modifier":            modifier,
+		"ability":               abilityStr,
+		"ability_name":          abilityName,
+		"ability_value":         abilityValue,
+		"modifier":              modifier,
 		"saving_throw_modifier": savingThrowModifier,
-		"proficiency_bonus":   proficiencyBonus,
-		"character_name":      char.Name,
+		"proficiency_bonus":     proficiencyBonus,
+		"character_name":        char.Name,
 	}
 
 	// Если указана DC, вычисляем вероятность успеха
@@ -559,10 +559,10 @@ func (t *RequestSavingThrowTool) Execute(ctx context.Context, args map[string]in
 		result["dc"] = dc
 		result["min_roll_to_succeed"] = minRollToSucceed
 		result["success_chance_percent"] = fmt.Sprintf("%.1f%%", successChance)
-		result["description"] = fmt.Sprintf("Для успешного спасброска %s (DC %d) %s нужно бросить не менее %d на d20 (с учетом модификатора %+d). Вероятность успеха: %.1f%%", 
+		result["description"] = fmt.Sprintf("Для успешного спасброска %s (DC %d) %s нужно бросить не менее %d на d20 (с учетом модификатора %+d). Вероятность успеха: %.1f%%",
 			abilityName, dc, char.Name, minRollToSucceed, savingThrowModifier, successChance)
 	} else {
-		result["description"] = fmt.Sprintf("%s имеет %s %d (модификатор спасброска %+d, включая бонус мастерства %+d)", 
+		result["description"] = fmt.Sprintf("%s имеет %s %d (модификатор спасброска %+d, включая бонус мастерства %+d)",
 			char.Name, abilityName, abilityValue, savingThrowModifier, proficiencyBonus)
 	}
 
@@ -701,14 +701,14 @@ func (t *EvaluateCheckTool) Execute(ctx context.Context, args map[string]interfa
 	criticalFailure := rollResult <= dc-10 // Недостижение DC на 10+ считается критическим провалом
 
 	result := map[string]interface{}{
-		"ability":       abilityStr,
-		"ability_name":  abilityName,
-		"dc":            dc,
-		"roll_result":   rollResult,
-		"success":       success,
+		"ability":          abilityStr,
+		"ability_name":     abilityName,
+		"dc":               dc,
+		"roll_result":      rollResult,
+		"success":          success,
 		"critical_success": criticalSuccess,
 		"critical_failure": criticalFailure,
-		"character_name": characterName,
+		"character_name":   characterName,
 	}
 
 	if success {
@@ -862,11 +862,11 @@ func (t *GetCharacterAbilitiesTool) Execute(ctx context.Context, args map[string
 	}
 
 	result := map[string]interface{}{
-		"character_name": char.Name,
+		"character_name":  char.Name,
 		"character_class": string(char.Class),
 		"character_level": char.Level,
-		"filter_type":    filterType,
-		"abilities":      filteredAbilities,
+		"filter_type":     filterType,
+		"abilities":       filteredAbilities,
 		"total_abilities": len(filteredAbilities),
 	}
 

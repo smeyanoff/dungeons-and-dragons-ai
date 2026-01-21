@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -10,8 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
+	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
@@ -50,34 +51,34 @@ const (
 )
 
 type Bot struct {
-	api                  *tgbotapi.BotAPI
-	initCampaignUC       *campaign.InitCampaignUseCase
-	handleActionUC       *player_action.HandleActionUseCase
-	createCharacterUC    *characterapp.CreateCharacterUseCase
-	getHistoryUC         *history.GetHistoryUseCase
-	getInventoryUC       *inventoryapp.GetInventoryUseCase
-	addItemUC            *inventoryapp.AddItemUseCase
-	handleCombatUC       *combatapp.HandleCombatUseCase
-	rollDiceUC           *dice.RollDiceUseCase
-	getQuestsUC          *questapp.GetQuestsUseCase
-	getDailyQuestsUC     *questapp.GetDailyQuestsUseCase
-	checkDailyProgressUC *questapp.CheckDailyQuestProgressUseCase
-	getMapUC             *mapapp.GetMapUseCase
-	moveToLocationUC     *mapapp.MoveToLocationUseCase
-	getAchievementsUC    *achievementapp.GetAchievementsUseCase
-	getSpellsUC          *spellapp.GetSpellsUseCase
-	useSpellUC           *spellapp.UseSpellUseCase
-	generateImageUC      *imageapp.ImageGenerationUseCase
-	getSubscriptionUC    *subscriptionapp.GetSubscriptionUseCase
-	checkLimitsUC        *subscriptionapp.CheckLimitsUseCase
-	getLeaderboardUC     *ratingapp.GetLeaderboardUseCase
-	updateRatingUC       *ratingapp.UpdateRatingUseCase
+	api                   *tgbotapi.BotAPI
+	initCampaignUC        *campaign.InitCampaignUseCase
+	handleActionUC        *player_action.HandleActionUseCase
+	createCharacterUC     *characterapp.CreateCharacterUseCase
+	getHistoryUC          *history.GetHistoryUseCase
+	getInventoryUC        *inventoryapp.GetInventoryUseCase
+	addItemUC             *inventoryapp.AddItemUseCase
+	handleCombatUC        *combatapp.HandleCombatUseCase
+	rollDiceUC            *dice.RollDiceUseCase
+	getQuestsUC           *questapp.GetQuestsUseCase
+	getDailyQuestsUC      *questapp.GetDailyQuestsUseCase
+	checkDailyProgressUC  *questapp.CheckDailyQuestProgressUseCase
+	getMapUC              *mapapp.GetMapUseCase
+	moveToLocationUC      *mapapp.MoveToLocationUseCase
+	getAchievementsUC     *achievementapp.GetAchievementsUseCase
+	getSpellsUC           *spellapp.GetSpellsUseCase
+	useSpellUC            *spellapp.UseSpellUseCase
+	generateImageUC       *imageapp.ImageGenerationUseCase
+	getSubscriptionUC     *subscriptionapp.GetSubscriptionUseCase
+	checkLimitsUC         *subscriptionapp.CheckLimitsUseCase
+	getLeaderboardUC      *ratingapp.GetLeaderboardUseCase
+	updateRatingUC        *ratingapp.UpdateRatingUseCase
 	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase
-	sessionRepo          session.Repository
-	combatRepo           CombatRepository
-	feedbackRepo         FeedbackRepository
-	eventRepo            EventRepository // Для сохранения результатов бросков в историю
-	indexDocUC           IndexDocumentUseCase // Для индексации результатов бросков в RAG
+	sessionRepo           session.Repository
+	combatRepo            CombatRepository
+	feedbackRepo          FeedbackRepository
+	eventRepo             EventRepository      // Для сохранения результатов бросков в историю
+	indexDocUC            IndexDocumentUseCase // Для индексации результатов бросков в RAG
 
 	// Для улучшенной обработки ошибок Telegram API
 	errorCount    int // Счетчик последовательных ошибок
@@ -87,7 +88,7 @@ type Bot struct {
 	circuitOpenMu sync.RWMutex
 
 	// Состояние диалога feedback (chatID -> состояние)
-	feedbackState map[int64]*FeedbackDialogState
+	feedbackState   map[int64]*FeedbackDialogState
 	feedbackStateMu sync.RWMutex
 }
 
@@ -191,7 +192,8 @@ func NewBot(
 // Нужен для интеграционных тестов (например, с httptest server) и не влияет на прод-инициализацию.
 //
 // apiEndpoint должен иметь формат как tgbotapi.APIEndpoint (с %s placeholders), например:
-//   http://127.0.0.1:12345/bot%s/%s
+//
+//	http://127.0.0.1:12345/bot%s/%s
 func NewBotWithAPIEndpoint(
 	token string,
 	apiEndpoint string,
@@ -291,35 +293,35 @@ func newBotWithAPI(
 	indexDocUC IndexDocumentUseCase,
 ) (*Bot, error) {
 	bot := &Bot{
-		api:                  api,
-		initCampaignUC:       initCampaignUC,
-		handleActionUC:       handleActionUC,
-		createCharacterUC:    createCharacterUC,
-		getHistoryUC:         getHistoryUC,
-		getInventoryUC:       getInventoryUC,
-		addItemUC:            addItemUC,
-		handleCombatUC:       handleCombatUC,
-		rollDiceUC:           rollDiceUC,
-		getQuestsUC:          getQuestsUC,
-		getDailyQuestsUC:     getDailyQuestsUC,
-		checkDailyProgressUC: checkDailyProgressUC,
-		getMapUC:             getMapUC,
-		moveToLocationUC:     moveToLocationUC,
-		getAchievementsUC:    getAchievementsUC,
-		getSpellsUC:          getSpellsUC,
-		useSpellUC:           useSpellUC,
-		generateImageUC:      generateImageUC,
-		getSubscriptionUC:    getSubscriptionUC,
-		checkLimitsUC:        checkLimitsUC,
-		getLeaderboardUC:     getLeaderboardUC,
-		updateRatingUC:       updateRatingUC,
+		api:                   api,
+		initCampaignUC:        initCampaignUC,
+		handleActionUC:        handleActionUC,
+		createCharacterUC:     createCharacterUC,
+		getHistoryUC:          getHistoryUC,
+		getInventoryUC:        getInventoryUC,
+		addItemUC:             addItemUC,
+		handleCombatUC:        handleCombatUC,
+		rollDiceUC:            rollDiceUC,
+		getQuestsUC:           getQuestsUC,
+		getDailyQuestsUC:      getDailyQuestsUC,
+		checkDailyProgressUC:  checkDailyProgressUC,
+		getMapUC:              getMapUC,
+		moveToLocationUC:      moveToLocationUC,
+		getAchievementsUC:     getAchievementsUC,
+		getSpellsUC:           getSpellsUC,
+		useSpellUC:            useSpellUC,
+		generateImageUC:       generateImageUC,
+		getSubscriptionUC:     getSubscriptionUC,
+		checkLimitsUC:         checkLimitsUC,
+		getLeaderboardUC:      getLeaderboardUC,
+		updateRatingUC:        updateRatingUC,
 		performAbilityCheckUC: performAbilityCheckUC,
-		sessionRepo:          sessionRepo,
-		combatRepo:           combatRepo,
-		feedbackRepo:         feedbackRepo,
-		eventRepo:            eventRepo,
-		indexDocUC:           indexDocUC,
-		feedbackState:        make(map[int64]*FeedbackDialogState),
+		sessionRepo:           sessionRepo,
+		combatRepo:            combatRepo,
+		feedbackRepo:          feedbackRepo,
+		eventRepo:             eventRepo,
+		indexDocUC:            indexDocUC,
+		feedbackState:         make(map[int64]*FeedbackDialogState),
 	}
 
 	// Настраиваем Bot Commands Menu для отображения команд в интерфейсе Telegram
@@ -389,15 +391,20 @@ func (b *Bot) GetAPI() *tgbotapi.BotAPI {
 }
 
 func (b *Bot) Start(ctx context.Context) error {
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-
-	updates := b.api.GetUpdatesChan(u)
-
 	logger.Info("Bot started",
 		logger.String("username", b.api.Self.UserName),
 		logger.Int64("bot_id", int64(b.api.Self.ID)),
 	)
+
+	updateConfig := tgbotapi.NewUpdate(0)
+	updateConfig.Timeout = 60
+
+	offset := 0
+	backoff := 1 * time.Second
+	const maxBackoff = 30 * time.Second
+	const logInterval = 30 * time.Second
+	lastPollLog := time.Time{}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	for {
 		select {
@@ -406,7 +413,30 @@ func (b *Bot) Start(ctx context.Context) error {
 				logger.ErrorField(ctx.Err()),
 			)
 			return ctx.Err()
-		case update := <-updates:
+		default:
+		}
+
+		updateConfig.Offset = offset
+		updates, err := b.api.GetUpdates(updateConfig)
+		if err != nil {
+			if shouldLogPollError(&lastPollLog, logInterval) {
+				logger.Warn("Telegram polling error",
+					logger.ErrorField(sanitizeTelegramError(err)),
+				)
+			}
+			sleepWithJitter(ctx, backoff, rng)
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			continue
+		}
+
+		backoff = 1 * time.Second
+		for _, update := range updates {
+			if update.UpdateID >= offset {
+				offset = update.UpdateID + 1
+			}
 			if err := b.handleUpdate(ctx, update); err != nil {
 				// Логируем только после нескольких неудачных попыток подряд
 				b.errorCountMu.Lock()
@@ -435,6 +465,30 @@ func (b *Bot) Start(ctx context.Context) error {
 				b.errorCountMu.Unlock()
 			}
 		}
+	}
+}
+
+func shouldLogPollError(lastLog *time.Time, interval time.Duration) bool {
+	if lastLog == nil {
+		return true
+	}
+	now := time.Now()
+	if lastLog.IsZero() || now.Sub(*lastLog) >= interval {
+		*lastLog = now
+		return true
+	}
+	return false
+}
+
+func sleepWithJitter(ctx context.Context, base time.Duration, rng *rand.Rand) {
+	if base <= 0 {
+		return
+	}
+	jitterFactor := 0.5 + rng.Float64()
+	sleep := time.Duration(float64(base) * jitterFactor)
+	select {
+	case <-ctx.Done():
+	case <-time.After(sleep):
 	}
 }
 
@@ -506,7 +560,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 
 		// Сохраняем feedback
 		err := b.saveFeedbackDirectly(ctx, chatID, int64(userID), update.Message.From, feedbackText, feedbackState.Type, feedbackState.Category)
-		
+
 		// Очищаем состояние диалога
 		b.feedbackStateMu.Lock()
 		delete(b.feedbackState, chatID)
@@ -519,7 +573,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 	b.feedbackStateMu.RLock()
 	feedbackState, inFeedbackDialog := b.feedbackState[chatID]
 	b.feedbackStateMu.RUnlock()
-	
+
 	if inFeedbackDialog && feedbackState != nil && feedbackState.Type != "" && feedbackState.Category != "" {
 		// Пользователь вводит текст для feedback
 		feedbackText := strings.TrimSpace(text)
@@ -534,7 +588,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 			userFrom = update.Message.From
 		}
 		err := b.saveFeedbackDirectly(ctx, chatID, int64(userID), userFrom, feedbackText, feedbackState.Type, feedbackState.Category)
-		
+
 		// Очищаем состояние диалога
 		b.feedbackStateMu.Lock()
 		delete(b.feedbackState, chatID)
@@ -1177,8 +1231,8 @@ func (b *Bot) handleMapMoveCallback(ctx context.Context, query *tgbotapi.Callbac
 	}
 
 	resp, err := b.moveToLocationUC.Execute(ctx, mapapp.MoveToLocationRequest{
-		ChatID:        chatID,
-		ToLocationID:  &toLocationID,
+		ChatID:       chatID,
+		ToLocationID: &toLocationID,
 	})
 	if err != nil {
 		edit := tgbotapi.NewEditMessageText(chatID, query.Message.MessageID, fmt.Sprintf("Не удалось переместиться: %v", err))
@@ -1606,7 +1660,7 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 	// Очищаем аргументы от лишних символов (обратные апострофы, кавычки и т.д.)
 	cleanedArgs := strings.TrimSpace(args)
 	cleanedArgs = strings.Trim(cleanedArgs, "`\"'")
-	
+
 	result, err := b.rollDiceUC.Execute(ctx, cleanedArgs)
 	if err != nil {
 		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при броске кубика: %v\n\nИспользуйте формат: /roll d20 или /roll 2d6+3", err))
@@ -1624,7 +1678,7 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 				Content:       result, // Сохраняем полный результат броска
 				CreatedAt:     time.Now(),
 			}
-			
+
 			// Сохраняем событие (не блокируем отправку сообщения при ошибке)
 			if err := b.eventRepo.Save(ctx, rollEvent); err != nil {
 				logger.Warn("Failed to save dice roll event",
@@ -1643,7 +1697,7 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 				if b.indexDocUC != nil {
 					ragCtx, ragCancel := context.WithTimeout(ctx, 10*time.Second)
 					defer ragCancel()
-					
+
 					doc := ragdomain.Document{
 						ID:        uuid.New().String(),
 						Source:    ragdomain.SourceEvent,
@@ -1651,7 +1705,7 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 						Text:      "Игрок бросил кубик: " + result,
 						Timestamp: time.Now(),
 					}
-					
+
 					// Индексируем с таймаутом (не блокируем отправку сообщения при ошибке)
 					if err := b.indexDocUC.Execute(ragCtx, doc); err != nil {
 						logger.Warn("Failed to index dice roll event in RAG (event saved in DB, but not indexed)",
@@ -1753,10 +1807,16 @@ func (b *Bot) buildMapNavigationKeyboard(gs *session.GameSession) *tgbotapi.Inli
 	if gs.CurrentLocationID != nil {
 		current = locationMap[*gs.CurrentLocationID]
 	}
-	if current == nil {
-		current = &gs.World.Locations[0]
+	if current == nil || len(current.Connections) == 0 {
+		// Если текущая локация не задана или без связей, ищем первую с доступными связями
+		for i := range gs.World.Locations {
+			if len(gs.World.Locations[i].Connections) > 0 {
+				current = &gs.World.Locations[i]
+				break
+			}
+		}
 	}
-	if len(current.Connections) == 0 {
+	if current == nil || len(current.Connections) == 0 {
 		return nil
 	}
 
@@ -2481,7 +2541,7 @@ func (b *Bot) handleFeedback(ctx context.Context, chatID int64, args string, tgU
 		b.feedbackStateMu.Lock()
 		delete(b.feedbackState, chatID)
 		b.feedbackStateMu.Unlock()
-		
+
 		return b.saveFeedbackDirectly(ctx, chatID, tgUserID, from, feedbackText, feedback.FeedbackTypeOther, feedback.FeedbackCategoryOther)
 	}
 
@@ -2506,7 +2566,7 @@ func (b *Bot) startFeedbackDialog(ctx context.Context, chatID int64, tgUserID in
 
 	// Показываем кнопки для выбора типа обратной связи
 	msg := tgbotapi.NewMessage(chatID, "📝 Выберите тип обратной связи:")
-	
+
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🐛 Баг", "feedback_type_bug"),
@@ -2535,14 +2595,14 @@ func (b *Bot) handleFeedbackTypeSelection(ctx context.Context, chatID int64, que
 		feedback.FeedbackTypeBug:        "Баг",
 		feedback.FeedbackTypeSuggestion: "Предложение",
 		feedback.FeedbackTypeQuestion:   "Вопрос",
-		feedback.FeedbackTypePraise:      "Похвала",
-		feedback.FeedbackTypeOther:       "Другое",
+		feedback.FeedbackTypePraise:     "Похвала",
+		feedback.FeedbackTypeOther:      "Другое",
 	}
 	typeName := typeNames[feedbackType]
 	if typeName == "" {
 		typeName = "Другое"
 	}
-	
+
 	callback := tgbotapi.NewCallback(query.ID, fmt.Sprintf("Выбран тип: %s", typeName))
 	if _, err := b.api.Request(callback); err != nil {
 		logger.Error("Failed to answer callback",
@@ -2597,10 +2657,10 @@ func (b *Bot) handleFeedbackCategorySelection(ctx context.Context, chatID int64,
 	// Отвечаем на callback
 	categoryNames := map[feedback.FeedbackCategory]string{
 		feedback.FeedbackCategoryCombat:    "Боевая система",
-		feedback.FeedbackCategoryDM:          "DM",
-		feedback.FeedbackCategoryInterface:  "Интерфейс",
-		feedback.FeedbackCategoryGameplay:   "Геймплей",
-		feedback.FeedbackCategoryOther:      "Другое",
+		feedback.FeedbackCategoryDM:        "DM",
+		feedback.FeedbackCategoryInterface: "Интерфейс",
+		feedback.FeedbackCategoryGameplay:  "Геймплей",
+		feedback.FeedbackCategoryOther:     "Другое",
 	}
 	categoryName := categoryNames[feedbackCategory]
 	if categoryName == "" {
@@ -2632,8 +2692,8 @@ func (b *Bot) handleFeedbackCategorySelection(ctx context.Context, chatID int64,
 		feedback.FeedbackTypeBug:        "Баг",
 		feedback.FeedbackTypeSuggestion: "Предложение",
 		feedback.FeedbackTypeQuestion:   "Вопрос",
-		feedback.FeedbackTypePraise:      "Похвала",
-		feedback.FeedbackTypeOther:       "Другое",
+		feedback.FeedbackTypePraise:     "Похвала",
+		feedback.FeedbackTypeOther:      "Другое",
 	}
 	typeName := typeNames[state.Type]
 	if typeName == "" {
@@ -2644,7 +2704,7 @@ func (b *Bot) handleFeedbackCategorySelection(ctx context.Context, chatID int64,
 	msg := tgbotapi.NewEditMessageText(
 		chatID,
 		query.Message.MessageID,
-		fmt.Sprintf("📝 Тип: %s\n📂 Категория: %s\n\n✍️ Теперь напишите ваш отзыв (просто отправьте текст сообщением):", 
+		fmt.Sprintf("📝 Тип: %s\n📂 Категория: %s\n\n✍️ Теперь напишите ваш отзыв (просто отправьте текст сообщением):",
 			typeName, categoryName),
 	)
 	msg.ReplyMarkup = nil // Убираем кнопки
@@ -2860,7 +2920,7 @@ func (b *Bot) sendMessageWithRetry(ctx context.Context, msg tgbotapi.MessageConf
 		// Не retry или исчерпаны попытки
 		if attempt >= maxRetries {
 			logger.Warn("Failed to send message after max retries",
-				logger.ErrorField(err),
+				logger.ErrorField(sanitizeTelegramError(err)),
 				logger.Int64("chat_id", msg.ChatID),
 				logger.Int("attempts", attempt+1),
 			)
@@ -2920,6 +2980,38 @@ func sanitizeUTF8(s string) string {
 	}
 
 	return result.String()
+}
+
+// sanitizeTelegramError редактирует потенциальные секреты (Telegram Bot Token) из ошибок,
+// чтобы они не попадали в логи.
+func sanitizeTelegramError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	redacted := redactTelegramBotToken(msg)
+	if redacted == msg {
+		return err
+	}
+	return fmt.Errorf("%s", redacted)
+}
+
+// redactTelegramBotToken заменяет `...api.telegram.org/bot<token>/...` на `...api.telegram.org/bot***/...`.
+func redactTelegramBotToken(s string) string {
+	const marker = "api.telegram.org/bot"
+	idx := strings.Index(s, marker)
+	if idx == -1 {
+		return s
+	}
+	start := idx + len(marker) // позиция сразу после "bot"
+	// токен заканчивается перед следующим "/"
+	end := strings.Index(s[start:], "/")
+	if end == -1 {
+		// на всякий случай: если "/" нет, редактируем до конца строки
+		return s[:start] + "***"
+	}
+	end = start + end
+	return s[:start] + "***" + s[end:]
 }
 
 // sendLongMessage разбивает длинные сообщения на части и отправляет их

@@ -6,43 +6,43 @@ import "time"
 type DailyQuestType string
 
 const (
-	DailyQuestTypeCompleteQuest    DailyQuestType = "complete_quest"    // Завершить квест
-	DailyQuestTypeWinCombat        DailyQuestType = "win_combat"        // Победить в бою
-	DailyQuestTypeExploreLocation  DailyQuestType = "explore_location"  // Исследовать локацию
+	DailyQuestTypeCompleteQuest   DailyQuestType = "complete_quest"   // Завершить квест
+	DailyQuestTypeWinCombat       DailyQuestType = "win_combat"       // Победить в бою
+	DailyQuestTypeExploreLocation DailyQuestType = "explore_location" // Исследовать локацию
 )
 
 // DailyQuest представляет ежедневное задание
 type DailyQuest struct {
-	ID          uint `gorm:"primaryKey"`
-	Type        DailyQuestType `gorm:"type:varchar(32);not null"`
-	Title       string
-	Description string
-	TargetValue int // Целевое значение (например, количество побед в бою)
+	ID               uint           `gorm:"primaryKey"`
+	Type             DailyQuestType `gorm:"type:varchar(32);not null"`
+	Title            string
+	Description      string
+	TargetValue      int // Целевое значение (например, количество побед в бою)
 	ExperienceReward int // Награда опытом
-	GoldReward  int // Награда золотом (внутриигровая валюта)
-	CreatedAt   time.Time
+	GoldReward       int // Награда золотом (внутриигровая валюта)
+	CreatedAt        time.Time
 }
 
 // DailyQuestProgress представляет прогресс игрока по ежедневному заданию
 type DailyQuestProgress struct {
-	ID            uint `gorm:"primaryKey"`
-	PlayerID      uint `gorm:"index"`
-	DailyQuestID  uint `gorm:"index"`
-	DailyQuest    DailyQuest `gorm:"foreignKey:DailyQuestID"` // Связанное задание
-	CurrentValue  int  // Текущее значение прогресса
-	TargetValue   int  // Целевое значение (копируется из DailyQuest для быстрого доступа)
-	Completed     bool `gorm:"default:false"`
-	CompletedAt   *time.Time
-	Date          time.Time `gorm:"index"` // Дата задания (для определения ежедневного сброса)
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID           uint       `gorm:"primaryKey"`
+	PlayerID     uint       `gorm:"index"`
+	DailyQuestID uint       `gorm:"index"`
+	DailyQuest   DailyQuest `gorm:"foreignKey:DailyQuestID"` // Связанное задание
+	CurrentValue int        // Текущее значение прогресса
+	TargetValue  int        // Целевое значение (копируется из DailyQuest для быстрого доступа)
+	Completed    bool       `gorm:"default:false"`
+	CompletedAt  *time.Time
+	Date         time.Time `gorm:"index"` // Дата задания (для определения ежедневного сброса)
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // DailyQuestStreak представляет стрик игрока (последовательные дни выполнения заданий)
 type DailyQuestStreak struct {
-	ID         uint `gorm:"primaryKey"`
-	PlayerID   uint `gorm:"uniqueIndex"`
-	StreakDays int  // Количество последовательных дней
+	ID         uint      `gorm:"primaryKey"`
+	PlayerID   uint      `gorm:"uniqueIndex"`
+	StreakDays int       // Количество последовательных дней
 	LastDate   time.Time // Дата последнего выполнения
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
@@ -51,13 +51,13 @@ type DailyQuestStreak struct {
 // NewDailyQuest создает новое ежедневное задание
 func NewDailyQuest(questType DailyQuestType, title, description string, targetValue, expReward, goldReward int) *DailyQuest {
 	return &DailyQuest{
-		Type:            questType,
-		Title:           title,
-		Description:     description,
-		TargetValue:     targetValue,
+		Type:             questType,
+		Title:            title,
+		Description:      description,
+		TargetValue:      targetValue,
 		ExperienceReward: expReward,
-		GoldReward:      goldReward,
-		CreatedAt:       time.Now(),
+		GoldReward:       goldReward,
+		CreatedAt:        time.Now(),
 	}
 }
 

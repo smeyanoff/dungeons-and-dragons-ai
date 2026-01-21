@@ -204,3 +204,4 @@ scan-dockerfile:
 	else \
 		echo "⚠️  Hadolint не установлен. Установите: brew install hadolint или используйте Docker: docker run --rm -i hadolint/hadolint < build/Dockerfile"; \
 	fi
+

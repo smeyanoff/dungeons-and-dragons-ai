@@ -4,10 +4,10 @@ import "testing"
 
 func TestAchievement_IsCompleted(t *testing.T) {
 	tests := []struct {
-		name          string
-		achievement   *Achievement
-		currentValue  int
-		expected      bool
+		name         string
+		achievement  *Achievement
+		currentValue int
+		expected     bool
 	}{
 		{
 			name: "value equals requirement",
@@ -63,10 +63,10 @@ func TestAchievement_IsCompleted(t *testing.T) {
 
 func TestAchievement_GetProgressPercentage(t *testing.T) {
 	tests := []struct {
-		name          string
-		achievement   *Achievement
-		currentValue  int
-		expected      int
+		name         string
+		achievement  *Achievement
+		currentValue int
+		expected     int
 	}{
 		{
 			name: "zero progress",

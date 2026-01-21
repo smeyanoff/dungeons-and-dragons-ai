@@ -23,11 +23,11 @@ func (r *SpellRepository) GetAll(ctx context.Context) ([]*spell.Spell, error) {
 	err := r.db.WithContext(ctx).
 		Order("level ASC, name ASC").
 		Find(&spells).Error
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return spells, nil
 }
 
@@ -37,14 +37,14 @@ func (r *SpellRepository) GetByID(ctx context.Context, id uint) (*spell.Spell, e
 	err := r.db.WithContext(ctx).
 		Where("id = ?", id).
 		First(&s).Error
-	
+
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &s, nil
 }
 
@@ -54,23 +54,23 @@ func (r *SpellRepository) GetByCode(ctx context.Context, code string) (*spell.Sp
 	err := r.db.WithContext(ctx).
 		Where("code = ?", code).
 		First(&s).Error
-	
+
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &s, nil
 }
 
 // GetByClass получает заклинания, доступные для класса
 func (r *SpellRepository) GetByClass(ctx context.Context, class character.Class) ([]*spell.Spell, error) {
 	var spells []*spell.Spell
-	
+
 	query := r.db.WithContext(ctx)
-	
+
 	switch class {
 	case character.ClassWizard:
 		query = query.Where("available_for_wizard = ?", true)
@@ -82,13 +82,13 @@ func (r *SpellRepository) GetByClass(ctx context.Context, class character.Class)
 		// Для немагических классов возвращаем пустой список
 		return []*spell.Spell{}, nil
 	}
-	
+
 	err := query.Order("level ASC, name ASC").Find(&spells).Error
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return spells, nil
 }
 
@@ -99,11 +99,11 @@ func (r *SpellRepository) GetByLevel(ctx context.Context, level int) ([]*spell.S
 		Where("level = ?", level).
 		Order("name ASC").
 		Find(&spells).Error
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return spells, nil
 }
 
@@ -120,17 +120,17 @@ func (r *SpellRepository) GetCharacterSpells(ctx context.Context, characterID ui
 		Preload("Spell").
 		Where("character_id = ?", characterID).
 		Find(&characterSpells).Error
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Сортируем заклинания по уровню и имени в памяти
 	// GORM Preload не поддерживает сортировку связанных таблиц напрямую
 	// Альтернативный подход: использовать два запроса или сортировать в памяти
 	// Для простоты сортируем в памяти после загрузки
 	sortCharacterSpells(characterSpells)
-	
+
 	return characterSpells, nil
 }
 
@@ -139,12 +139,12 @@ func sortCharacterSpells(spells []*spell.CharacterSpell) {
 	sort.Slice(spells, func(i, j int) bool {
 		spellI := spells[i]
 		spellJ := spells[j]
-		
+
 		// Сначала сортируем по уровню (по возрастанию)
 		if spellI.Spell.Level != spellJ.Spell.Level {
 			return spellI.Spell.Level < spellJ.Spell.Level
 		}
-		
+
 		// Если уровни одинаковые, сортируем по имени (по алфавиту)
 		return spellI.Spell.Name < spellJ.Spell.Name
 	})
@@ -157,14 +157,14 @@ func (r *SpellRepository) GetCharacterSpell(ctx context.Context, characterID uin
 		Preload("Spell").
 		Where("character_id = ? AND spell_id = ?", characterID, spellID).
 		First(&cs).Error
-	
+
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &cs, nil
 }
 
@@ -190,185 +190,185 @@ func (r *SpellRepository) InitDefaultSpells(ctx context.Context) error {
 		// Заклинания уже инициализированы
 		return nil
 	}
-	
+
 	defaultSpells := []*spell.Spell{
 		// Заговоры (0 уровень)
 		{
-			Code:              "fire_bolt",
-			Name:              "Огненный снаряд",
-			Description:       "Вы создаете огненный снаряд, который летит к цели и наносит урон 1d10 огнем.",
-			Level:             0,
-			School:            spell.SpellSchoolEvocation,
-			Type:              spell.SpellTypeCantrip,
-			CastingTime:       spell.CastingTimeAction,
-			Range:             spell.Range120Feet,
-			Duration:          spell.DurationInstantaneous,
-			Verbal:            true,
-			Somatic:           true,
-			Damage:            "1d10",
+			Code:               "fire_bolt",
+			Name:               "Огненный снаряд",
+			Description:        "Вы создаете огненный снаряд, который летит к цели и наносит урон 1d10 огнем.",
+			Level:              0,
+			School:             spell.SpellSchoolEvocation,
+			Type:               spell.SpellTypeCantrip,
+			CastingTime:        spell.CastingTimeAction,
+			Range:              spell.Range120Feet,
+			Duration:           spell.DurationInstantaneous,
+			Verbal:             true,
+			Somatic:            true,
+			Damage:             "1d10",
 			AvailableForWizard: true,
-			Icon:              "🔥",
+			Icon:               "🔥",
 		},
 		{
-			Code:              "light",
-			Name:              "Свет",
-			Description:       "Вы касаетесь одного объекта размером не больше 10 футов в любом измерении. До конца заклинания объект излучает яркий свет в радиусе 20 футов и тусклый свет в дополнительных 20 футах.",
-			Level:             0,
-			School:            spell.SpellSchoolEvocation,
-			Type:              spell.SpellTypeCantrip,
-			CastingTime:       spell.CastingTimeAction,
-			Range:             spell.RangeTouch,
-			Duration:          spell.DurationHours,
-			DurationValue:     1,
-			Verbal:            true,
-			Material:          true,
-			MaterialCost:      "Светлячок или кусок фосфоресцирующего мха",
+			Code:               "light",
+			Name:               "Свет",
+			Description:        "Вы касаетесь одного объекта размером не больше 10 футов в любом измерении. До конца заклинания объект излучает яркий свет в радиусе 20 футов и тусклый свет в дополнительных 20 футах.",
+			Level:              0,
+			School:             spell.SpellSchoolEvocation,
+			Type:               spell.SpellTypeCantrip,
+			CastingTime:        spell.CastingTimeAction,
+			Range:              spell.RangeTouch,
+			Duration:           spell.DurationHours,
+			DurationValue:      1,
+			Verbal:             true,
+			Material:           true,
+			MaterialCost:       "Светлячок или кусок фосфоресцирующего мха",
 			AvailableForCleric: true,
-			Icon:              "💡",
+			Icon:               "💡",
 		},
 		{
-			Code:              "guidance",
-			Name:              "Руководство",
-			Description:       "Вы касаетесь одного согласного существа. Один раз до окончания заклинания цель может бросить к4 и добавить результат к одной проверке характеристики на свой выбор.",
-			Level:             0,
-			School:            spell.SpellSchoolDivination,
-			Type:              spell.SpellTypeCantrip,
-			CastingTime:       spell.CastingTimeAction,
-			Range:             spell.RangeTouch,
-			Duration:          spell.DurationMinutes,
-			DurationValue:     1,
-			Verbal:            true,
-			Somatic:           true,
+			Code:               "guidance",
+			Name:               "Руководство",
+			Description:        "Вы касаетесь одного согласного существа. Один раз до окончания заклинания цель может бросить к4 и добавить результат к одной проверке характеристики на свой выбор.",
+			Level:              0,
+			School:             spell.SpellSchoolDivination,
+			Type:               spell.SpellTypeCantrip,
+			CastingTime:        spell.CastingTimeAction,
+			Range:              spell.RangeTouch,
+			Duration:           spell.DurationMinutes,
+			DurationValue:      1,
+			Verbal:             true,
+			Somatic:            true,
 			AvailableForCleric: true,
-			Icon:              "🌟",
+			Icon:               "🌟",
 		},
-		
+
 		// Заклинания 1 уровня
 		{
-			Code:              "magic_missile",
-			Name:              "Магическая стрела",
-			Description:       "Вы создаете три светящиеся стрелы магической силы. Каждая стрела попадает в существо по вашему выбору, видимое вами в пределах дистанции. Каждая стрела наносит 1d4+1 урона силовым полем.",
-			Level:             1,
-			School:            spell.SpellSchoolEvocation,
-			Type:              spell.SpellTypeLevel1,
-			CastingTime:       spell.CastingTimeAction,
-			Range:             spell.Range120Feet,
-			Duration:          spell.DurationInstantaneous,
-			Verbal:            true,
-			Somatic:           true,
-			Damage:            "1d4+1",
+			Code:               "magic_missile",
+			Name:               "Магическая стрела",
+			Description:        "Вы создаете три светящиеся стрелы магической силы. Каждая стрела попадает в существо по вашему выбору, видимое вами в пределах дистанции. Каждая стрела наносит 1d4+1 урона силовым полем.",
+			Level:              1,
+			School:             spell.SpellSchoolEvocation,
+			Type:               spell.SpellTypeLevel1,
+			CastingTime:        spell.CastingTimeAction,
+			Range:              spell.Range120Feet,
+			Duration:           spell.DurationInstantaneous,
+			Verbal:             true,
+			Somatic:            true,
+			Damage:             "1d4+1",
 			AvailableForWizard: true,
-			Icon:              "✨",
+			Icon:               "✨",
 		},
 		{
-			Code:              "cure_wounds",
-			Name:              "Лечение ран",
-			Description:       "Существо, которого вы касаетесь, восстанавливает количество хитов, равное 1d8 + ваш модификатор базовой характеристики.",
-			Level:             1,
-			School:            spell.SpellSchoolEvocation,
-			Type:              spell.SpellTypeLevel1,
-			CastingTime:       spell.CastingTimeAction,
-			Range:             spell.RangeTouch,
-			Duration:          spell.DurationInstantaneous,
-			Verbal:            true,
-			Somatic:           true,
-			Healing:           "1d8",
+			Code:               "cure_wounds",
+			Name:               "Лечение ран",
+			Description:        "Существо, которого вы касаетесь, восстанавливает количество хитов, равное 1d8 + ваш модификатор базовой характеристики.",
+			Level:              1,
+			School:             spell.SpellSchoolEvocation,
+			Type:               spell.SpellTypeLevel1,
+			CastingTime:        spell.CastingTimeAction,
+			Range:              spell.RangeTouch,
+			Duration:           spell.DurationInstantaneous,
+			Verbal:             true,
+			Somatic:            true,
+			Healing:            "1d8",
 			AvailableForCleric: true,
-			Icon:              "💚",
+			Icon:               "💚",
 		},
 		{
-			Code:              "healing_word",
-			Name:              "Лечащее слово",
-			Description:       "Существо по вашему выбору, видимое вами в пределах дистанции, восстанавливает количество хитов, равное 1d4 + ваш модификатор базовой характеристики.",
-			Level:             1,
-			School:            spell.SpellSchoolEvocation,
-			Type:              spell.SpellTypeLevel1,
-			CastingTime:       spell.CastingTimeBonus,
-			Range:             spell.Range60Feet,
-			Duration:          spell.DurationInstantaneous,
-			Verbal:            true,
-			Healing:           "1d4",
+			Code:               "healing_word",
+			Name:               "Лечащее слово",
+			Description:        "Существо по вашему выбору, видимое вами в пределах дистанции, восстанавливает количество хитов, равное 1d4 + ваш модификатор базовой характеристики.",
+			Level:              1,
+			School:             spell.SpellSchoolEvocation,
+			Type:               spell.SpellTypeLevel1,
+			CastingTime:        spell.CastingTimeBonus,
+			Range:              spell.Range60Feet,
+			Duration:           spell.DurationInstantaneous,
+			Verbal:             true,
+			Healing:            "1d4",
 			AvailableForCleric: true,
-			Icon:              "💚",
+			Icon:               "💚",
 		},
 		{
-			Code:              "shield",
-			Name:              "Щит",
-			Description:       "Пока заклинание активно, ваш класс брони увеличивается на +5, включая атаку, вызвавшую это заклинание. Вы также получаете иммунитет к магическим стрелам.",
-			Level:             1,
-			School:            spell.SpellSchoolAbjuration,
-			Type:              spell.SpellTypeLevel1,
-			CastingTime:       spell.CastingTimeReaction,
-			Range:             spell.RangeSelf,
-			Duration:          spell.DurationRounds,
-			DurationValue:     1,
-			Verbal:            true,
-			Somatic:           true,
-			Concentration:     false,
+			Code:               "shield",
+			Name:               "Щит",
+			Description:        "Пока заклинание активно, ваш класс брони увеличивается на +5, включая атаку, вызвавшую это заклинание. Вы также получаете иммунитет к магическим стрелам.",
+			Level:              1,
+			School:             spell.SpellSchoolAbjuration,
+			Type:               spell.SpellTypeLevel1,
+			CastingTime:        spell.CastingTimeReaction,
+			Range:              spell.RangeSelf,
+			Duration:           spell.DurationRounds,
+			DurationValue:      1,
+			Verbal:             true,
+			Somatic:            true,
+			Concentration:      false,
 			AvailableForWizard: true,
-			Icon:              "🛡️",
+			Icon:               "🛡️",
 		},
 		{
-			Code:              "hunters_mark",
-			Name:              "Метка охотника",
-			Description:       "Вы выбираете одно существо, видимое вами в пределах дистанции, и мистическим способом отмечаете его как своей добычей. Пока заклинание активно, вы наносите дополнительный 1d6 урона по цели.",
-			Level:             1,
-			School:            spell.SpellSchoolDivination,
-			Type:              spell.SpellTypeLevel1,
-			CastingTime:       spell.CastingTimeBonus,
-			Range:             spell.Range90Feet,
-			Duration:          spell.DurationConcentration,
-			DurationValue:     3600, // 1 час в секундах
-			Verbal:            true,
-			Concentration:     true,
+			Code:               "hunters_mark",
+			Name:               "Метка охотника",
+			Description:        "Вы выбираете одно существо, видимое вами в пределах дистанции, и мистическим способом отмечаете его как своей добычей. Пока заклинание активно, вы наносите дополнительный 1d6 урона по цели.",
+			Level:              1,
+			School:             spell.SpellSchoolDivination,
+			Type:               spell.SpellTypeLevel1,
+			CastingTime:        spell.CastingTimeBonus,
+			Range:              spell.Range90Feet,
+			Duration:           spell.DurationConcentration,
+			DurationValue:      3600, // 1 час в секундах
+			Verbal:             true,
+			Concentration:      true,
 			AvailableForRanger: true,
-			Icon:              "🎯",
+			Icon:               "🎯",
 		},
-		
+
 		// Заклинания 2 уровня
 		{
-			Code:              "fireball",
-			Name:              "Огненный шар",
-			Description:       "Яркая вспышка вылетает из вашей указывающей руки в точку по вашему выбору в пределах дистанции и затем взрывается с оглушительным грохотом. Каждое существо в сфере радиусом 20 футов должно совершить спасбросок Ловкости.",
-			Level:             2,
-			School:            spell.SpellSchoolEvocation,
-			Type:              spell.SpellTypeLevel2,
-			CastingTime:       spell.CastingTimeAction,
-			Range:             spell.Range120Feet,
-			Duration:          spell.DurationInstantaneous,
-			Verbal:            true,
-			Somatic:           true,
-			Material:          true,
-			MaterialCost:      "Небольшой шарик из гуано летучей мыши и серы",
-			Damage:            "8d6",
-			SaveType:          "DEX",
-			SaveDC:            8, // Будет рассчитываться от характеристики
+			Code:               "fireball",
+			Name:               "Огненный шар",
+			Description:        "Яркая вспышка вылетает из вашей указывающей руки в точку по вашему выбору в пределах дистанции и затем взрывается с оглушительным грохотом. Каждое существо в сфере радиусом 20 футов должно совершить спасбросок Ловкости.",
+			Level:              2,
+			School:             spell.SpellSchoolEvocation,
+			Type:               spell.SpellTypeLevel2,
+			CastingTime:        spell.CastingTimeAction,
+			Range:              spell.Range120Feet,
+			Duration:           spell.DurationInstantaneous,
+			Verbal:             true,
+			Somatic:            true,
+			Material:           true,
+			MaterialCost:       "Небольшой шарик из гуано летучей мыши и серы",
+			Damage:             "8d6",
+			SaveType:           "DEX",
+			SaveDC:             8, // Будет рассчитываться от характеристики
 			AvailableForWizard: true,
-			Icon:              "🔥",
+			Icon:               "🔥",
 		},
 		{
-			Code:              "lesser_restoration",
-			Name:              "Малое восстановление",
-			Description:       "Вы касаетесь существа и можете закончить либо одну болезнь, либо одно состояние (ослеплен, оглушен, парализован или отравлен) на выборе цели.",
-			Level:             2,
-			School:            spell.SpellSchoolAbjuration,
-			Type:              spell.SpellTypeLevel2,
-			CastingTime:       spell.CastingTimeAction,
-			Range:             spell.RangeTouch,
-			Duration:          spell.DurationInstantaneous,
-			Verbal:            true,
-			Somatic:           true,
+			Code:               "lesser_restoration",
+			Name:               "Малое восстановление",
+			Description:        "Вы касаетесь существа и можете закончить либо одну болезнь, либо одно состояние (ослеплен, оглушен, парализован или отравлен) на выборе цели.",
+			Level:              2,
+			School:             spell.SpellSchoolAbjuration,
+			Type:               spell.SpellTypeLevel2,
+			CastingTime:        spell.CastingTimeAction,
+			Range:              spell.RangeTouch,
+			Duration:           spell.DurationInstantaneous,
+			Verbal:             true,
+			Somatic:            true,
 			AvailableForCleric: true,
-			Icon:              "✨",
+			Icon:               "✨",
 		},
 	}
-	
+
 	// Сохраняем все заклинания
 	for _, s := range defaultSpells {
 		if err := r.Save(ctx, s); err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }

@@ -34,7 +34,7 @@ func newAuthClient(cfg Config) *authClient {
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
-	
+
 	// Если нужно пропустить проверку TLS (только для тестов)
 	// #nosec G402 - преднамеренно отключаем проверку TLS для работы с GigaChat API,
 	// который использует корневые сертификаты Сбербанка, устанавливаемые отдельно в образе
@@ -43,7 +43,7 @@ func newAuthClient(cfg Config) *authClient {
 			InsecureSkipVerify: true,
 		}
 	}
-	
+
 	return &authClient{
 		cfg: cfg,
 		client: &http.Client{
@@ -123,7 +123,7 @@ func (a *authClient) getToken(ctx context.Context) (string, error) {
 	// base64-закодированную строку формата "client_id:real_secret"
 	// Поэтому используем CLIENT_SECRET напрямую как ключ авторизации
 	authHeader := clientSecret
-	
+
 	// Логируем информацию для диагностики (без самих credentials)
 	log.Printf("GigaChat auth: ClientID length=%d, ClientSecret (auth key) length=%d",
 		len(clientID), len(authHeader))

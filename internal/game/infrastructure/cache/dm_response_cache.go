@@ -18,9 +18,9 @@ type DMResponseCache struct {
 }
 
 type cacheEntry struct {
-	response    string
-	cachedAt    time.Time
-	hitCount    int
+	response     string
+	cachedAt     time.Time
+	hitCount     int
 	lastAccessed time.Time
 }
 

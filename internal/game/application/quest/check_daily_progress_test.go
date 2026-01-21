@@ -196,10 +196,10 @@ func TestCheckDailyQuestProgressUseCase_Execute_Success(t *testing.T) {
 	uc := NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeUC)
 
 	req := CheckProgressRequest{
-		ChatID:     chatID,
-		TgUserID:   tgUserID,
-		QuestType:  quest.DailyQuestTypeCompleteQuest,
-		Increment:  1,
+		ChatID:    chatID,
+		TgUserID:  tgUserID,
+		QuestType: quest.DailyQuestTypeCompleteQuest,
+		Increment: 1,
 	}
 
 	err := uc.Execute(ctx, req)
@@ -323,10 +323,10 @@ func TestCheckDailyQuestProgressUseCase_Execute_CompletesQuest(t *testing.T) {
 	uc := NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeUC)
 
 	req := CheckProgressRequest{
-		ChatID:     chatID,
-		TgUserID:   tgUserID,
-		QuestType:  quest.DailyQuestTypeCompleteQuest,
-		Increment:  1,
+		ChatID:    chatID,
+		TgUserID:  tgUserID,
+		QuestType: quest.DailyQuestTypeCompleteQuest,
+		Increment: 1,
 	}
 
 	err := uc.Execute(ctx, req)
@@ -438,10 +438,10 @@ func TestCheckDailyQuestProgressUseCase_Execute_AlreadyCompleted(t *testing.T) {
 	uc := NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeUC)
 
 	req := CheckProgressRequest{
-		ChatID:     chatID,
-		TgUserID:   tgUserID,
-		QuestType:  quest.DailyQuestTypeCompleteQuest,
-		Increment:  1,
+		ChatID:    chatID,
+		TgUserID:  tgUserID,
+		QuestType: quest.DailyQuestTypeCompleteQuest,
+		Increment: 1,
 	}
 
 	err := uc.Execute(ctx, req)
@@ -495,10 +495,10 @@ func TestCheckDailyQuestProgressUseCase_Execute_NoSession(t *testing.T) {
 	uc := NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeUC)
 
 	req := CheckProgressRequest{
-		ChatID:     chatID,
-		TgUserID:   tgUserID,
-		QuestType:  quest.DailyQuestTypeCompleteQuest,
-		Increment:  1,
+		ChatID:    chatID,
+		TgUserID:  tgUserID,
+		QuestType: quest.DailyQuestTypeCompleteQuest,
+		Increment: 1,
 	}
 
 	err := uc.Execute(ctx, req)
@@ -558,10 +558,10 @@ func TestCheckDailyQuestProgressUseCase_Execute_NoPlayer(t *testing.T) {
 	uc := NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeUC)
 
 	req := CheckProgressRequest{
-		ChatID:     chatID,
-		TgUserID:   tgUserID,
-		QuestType:  quest.DailyQuestTypeCompleteQuest,
-		Increment:  1,
+		ChatID:    chatID,
+		TgUserID:  tgUserID,
+		QuestType: quest.DailyQuestTypeCompleteQuest,
+		Increment: 1,
 	}
 
 	err := uc.Execute(ctx, req)
@@ -633,10 +633,10 @@ func TestCheckDailyQuestProgressUseCase_Execute_QuestNotFound(t *testing.T) {
 	uc := NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeUC)
 
 	req := CheckProgressRequest{
-		ChatID:     chatID,
-		TgUserID:   tgUserID,
-		QuestType:  quest.DailyQuestTypeCompleteQuest,
-		Increment:  1,
+		ChatID:    chatID,
+		TgUserID:  tgUserID,
+		QuestType: quest.DailyQuestTypeCompleteQuest,
+		Increment: 1,
 	}
 
 	err := uc.Execute(ctx, req)
@@ -723,10 +723,10 @@ func TestCheckDailyQuestProgressUseCase_Execute_RepositoryError(t *testing.T) {
 	uc := NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeUC)
 
 	req := CheckProgressRequest{
-		ChatID:     chatID,
-		TgUserID:   tgUserID,
-		QuestType:  quest.DailyQuestTypeCompleteQuest,
-		Increment:  1,
+		ChatID:    chatID,
+		TgUserID:  tgUserID,
+		QuestType: quest.DailyQuestTypeCompleteQuest,
+		Increment: 1,
 	}
 
 	err := uc.Execute(ctx, req)

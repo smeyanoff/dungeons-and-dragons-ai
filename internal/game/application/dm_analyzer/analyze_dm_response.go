@@ -4,16 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	jsonrepair "dungeons-and-dragons-ai/internal/game/application/jsonrepair"
 	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
+	"dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
+
+	"github.com/google/uuid"
 )
 
 // DMResponseAnalysis содержит структурированный анализ ответа DM
@@ -34,19 +41,22 @@ type DMResponseAnalysis struct {
 
 	// Предметы
 	ItemsReceived []Item `json:"items_received,omitempty"` // Предметы, полученные игроком
-	
+
 	// Локации и NPC
 	LocationVisited *Location `json:"location_visited,omitempty"` // Локация, которую игрок впервые посетил
-	NPCMet         *NPC     `json:"npc_met,omitempty"`           // NPC, с которым игрок впервые встретился
-	
+	NPCMet          *NPC      `json:"npc_met,omitempty"`          // NPC, с которым игрок впервые встретился
+
 	// Автоматически сгенерированные изображения
 	GeneratedImages []GeneratedImage `json:"generated_images,omitempty"` // Пути к автоматически сгенерированным изображениям
 }
 
+var invalidAnalyzerJSONCount uint64
+var emptyAnalyzerJSONCount uint64
+
 // GeneratedImage представляет автоматически сгенерированное изображение
 type GeneratedImage struct {
-	Type     string `json:"type"`     // Тип: "item", "location", "npc"
-	ImagePath string `json:"image_path"` // Путь к изображению
+	Type       string `json:"type"`        // Тип: "item", "location", "npc"
+	ImagePath  string `json:"image_path"`  // Путь к изображению
 	EntityName string `json:"entity_name"` // Название сущности (предмет, локация, NPC)
 }
 
@@ -69,16 +79,16 @@ type Item struct {
 
 // Location представляет локацию, которую игрок посетил
 type Location struct {
-	Name        string `json:"name"`        // Название локации
-	Description string `json:"description"` // Описание локации
-	IsFirstVisit bool  `json:"is_first_visit"` // Первое ли это посещение
+	Name         string `json:"name"`           // Название локации
+	Description  string `json:"description"`    // Описание локации
+	IsFirstVisit bool   `json:"is_first_visit"` // Первое ли это посещение
 }
 
 // NPC представляет NPC, с которым игрок встретился
 type NPC struct {
-	Name        string `json:"name"`        // Имя NPC
-	Description string `json:"description"` // Описание NPC
-	IsFirstMeeting bool `json:"is_first_meeting"` // Первая ли это встреча
+	Name           string `json:"name"`             // Имя NPC
+	Description    string `json:"description"`      // Описание NPC
+	IsFirstMeeting bool   `json:"is_first_meeting"` // Первая ли это встреча
 }
 
 // CombatRepository интерфейс для работы с боями
@@ -101,24 +111,26 @@ type InventoryRepository interface {
 }
 
 type AnalyzeDMResponseUseCase struct {
-	llm                domain.LLM
-	combatRepo         CombatRepository
-	questRepo          QuestRepository
-	inventoryRepo      InventoryRepository
-	sessionID          uint
-	chatID             int64  // ChatID для отправки уведомлений
-	worldID            uint
-	characterID        uint   // ID персонажа игрока
-	playerID           uint   // ID игрока (для проверки достижений)
-	combatStartMessage string // Сообщение о порядке ходов при начале боя
-	checkAchievementsUC AchievementChecker // Опциональная зависимость для проверки достижений
-	notificationService NotificationService // Опциональная зависимость для отправки уведомлений
-	imageGenerationService ImageGenerationService // Опциональная зависимость для автоматической генерации изображений
-	userID int64 // ID пользователя для генерации изображений (Telegram User ID)
-	checkDailyProgressUC DailyQuestProgressChecker // Опциональная зависимость для отслеживания ежедневных заданий
-	tgUserID int64 // Telegram User ID для отслеживания ежедневных заданий
-	generateLocationEventUC LocationEventGenerator // Опциональная зависимость для генерации событий локаций
-	sessionRepo            SessionRepository       // Репозиторий сессий для поиска локаций
+	llm                     domain.LLM
+	combatRepo              CombatRepository
+	questRepo               QuestRepository
+	inventoryRepo           InventoryRepository
+	sessionID               uint
+	chatID                  int64 // ChatID для отправки уведомлений
+	worldID                 uint
+	characterID             uint                      // ID персонажа игрока
+	playerID                uint                      // ID игрока (для проверки достижений)
+	combatStartMessage      string                    // Сообщение о порядке ходов при начале боя
+	checkAchievementsUC     AchievementChecker        // Опциональная зависимость для проверки достижений
+	notificationService     NotificationService       // Опциональная зависимость для отправки уведомлений
+	imageGenerationService  ImageGenerationService    // Опциональная зависимость для автоматической генерации изображений
+	userID                  int64                     // ID пользователя для генерации изображений (Telegram User ID)
+	checkDailyProgressUC    DailyQuestProgressChecker // Опциональная зависимость для отслеживания ежедневных заданий
+	tgUserID                int64                     // Telegram User ID для отслеживания ежедневных заданий
+	generateLocationEventUC LocationEventGenerator    // Опциональная зависимость для генерации событий локаций
+	sessionRepo             SessionRepository         // Репозиторий сессий для поиска локаций
+	eventRepo               StoryEventRepository      // Репозиторий для записи событий истории
+	indexDocUC              RAGIndexer                // Индексатор RAG для событий
 }
 
 // SessionRepository интерфейс для доступа к сессии (для поиска локаций)
@@ -151,7 +163,7 @@ type AchievementChecker interface {
 
 // CheckAchievementsRequest запрос на проверку достижений
 type CheckAchievementsRequest struct {
-	PlayerID      uint
+	PlayerID       uint
 	RequirementKey string
 	CurrentValue   int
 }
@@ -194,13 +206,13 @@ type ImageGenerationService interface {
 
 // GenerateImageRequest запрос на генерацию изображения
 type GenerateImageRequest struct {
-	SystemPrompt   string
-	UserPrompt     string
-	Type           string // "location", "npc", "item", "character", "custom"
-	EntityID       uint
+	SystemPrompt    string
+	UserPrompt      string
+	Type            string // "location", "npc", "item", "character", "custom"
+	EntityID        uint
 	ForceRegenerate bool
-	UserID         int64
-	SkipLimitCheck bool
+	UserID          int64
+	SkipLimitCheck  bool
 }
 
 // GenerateImageResponse ответ на запрос генерации изображения
@@ -260,6 +272,16 @@ type LocationEventGenerator interface {
 	Execute(ctx context.Context, req locationeventapp.GenerateLocationEventRequest) (*locationeventapp.GenerateLocationEventResponse, error)
 }
 
+// StoryEventRepository интерфейс для записи истории игры
+type StoryEventRepository interface {
+	Save(ctx context.Context, e *event.StoryEvent) error
+}
+
+// RAGIndexer интерфейс для индексации событий в RAG
+type RAGIndexer interface {
+	Execute(ctx context.Context, doc ragdomain.Document) error
+}
+
 // SetLocationEventGenerator устанавливает генератор событий локаций
 func (uc *AnalyzeDMResponseUseCase) SetLocationEventGenerator(generator LocationEventGenerator) {
 	uc.generateLocationEventUC = generator
@@ -268,6 +290,16 @@ func (uc *AnalyzeDMResponseUseCase) SetLocationEventGenerator(generator Location
 // SetSessionRepository устанавливает репозиторий сессий для поиска локаций
 func (uc *AnalyzeDMResponseUseCase) SetSessionRepository(sessionRepo SessionRepository) {
 	uc.sessionRepo = sessionRepo
+}
+
+// SetStoryEventRepository устанавливает репозиторий событий для записи истории
+func (uc *AnalyzeDMResponseUseCase) SetStoryEventRepository(eventRepo StoryEventRepository) {
+	uc.eventRepo = eventRepo
+}
+
+// SetRAGIndexer устанавливает индексатор RAG для событий
+func (uc *AnalyzeDMResponseUseCase) SetRAGIndexer(indexer RAGIndexer) {
+	uc.indexDocUC = indexer
 }
 
 // Execute анализирует ответ DM и выполняет необходимые действия
@@ -342,6 +374,7 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 			cleaned = aggressiveJSONClean(cleaned)
 
 			if !json.Valid([]byte(cleaned)) {
+				recordAnalyzerJSONFailure("invalid_json")
 				// Логируем проблемный ответ для анализа
 				log.Printf("[DM Analyzer] Failed to parse JSON after all repair attempts (attempt: %d)", attempt+1)
 				log.Printf("[DM Analyzer] Cleaned JSON (length: %d): %s", len(cleaned), cleaned)
@@ -360,15 +393,16 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 		}
 	}
 
-	var analysis DMResponseAnalysis
-	if err := json.Unmarshal([]byte(cleaned), &analysis); err != nil {
+	analysis, err := decodeStrictAnalysis(cleaned)
+	if err != nil {
+		recordAnalyzerJSONFailure("invalid_schema")
 		// Логируем ошибку парсинга для анализа
-		log.Printf("[DM Analyzer] Failed to unmarshal JSON: %v (attempt: %d)", err, attempt+1)
+		log.Printf("[DM Analyzer] Failed to unmarshal JSON strictly: %v (attempt: %d)", err, attempt+1)
 		log.Printf("[DM Analyzer] Cleaned JSON that failed to parse: %s", cleaned)
 
 		// Если это не последняя попытка, повторяем запрос
 		if attempt < maxRetries {
-			log.Printf("[DM Analyzer] Retrying LLM request due to unmarshal error (attempt %d/%d)", attempt+2, maxRetries+1)
+			log.Printf("[DM Analyzer] Retrying LLM request due to strict unmarshal error (attempt %d/%d)", attempt+2, maxRetries+1)
 			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
 		}
 
@@ -377,7 +411,11 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 		return &DMResponseAnalysis{}, nil
 	}
 
-	return &analysis, nil
+	if isEmptyAnalysis(analysis) {
+		recordAnalyzerJSONFailure("empty_json")
+	}
+
+	return analysis, nil
 }
 
 // min возвращает минимальное из двух чисел
@@ -393,6 +431,10 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 	ctx context.Context,
 	analysis *DMResponseAnalysis,
 ) error {
+	if isEmptyAnalysis(analysis) {
+		log.Printf("[DM Analyzer] Empty analysis, skipping state changes")
+		return nil
+	}
 	// Обрабатываем боевую ситуацию
 	// ВАЖНО: Проверяем, нет ли уже активного боя перед обработкой врагов
 	// Это предотвращает повторную генерацию врагов при каждом анализе ответа DM
@@ -429,7 +471,7 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 		if err := uc.handleItemsReceived(ctx, analysis.ItemsReceived); err != nil {
 			return fmt.Errorf("failed to add items to inventory: %w", err)
 		}
-		
+
 		// Автоматически генерируем изображения для полученных предметов
 		if uc.imageGenerationService != nil && uc.userID > 0 {
 			generatedImages := uc.generateImagesForItems(ctx, analysis.ItemsReceived)
@@ -456,11 +498,14 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 					log.Printf("[DM Analyzer] Failed to generate location event: %v", err)
 				} else if eventResp != nil && eventResp.Description != "" {
 					log.Printf("[DM Analyzer] Location event generated: %s", eventResp.Description)
-					// Событие сохранено в БД, будет включено в контекст для DM при следующем действии
+					// Событие сохранено в БД, дополнительно фиксируем в истории + RAG
+					if err := uc.recordLocationEvent(ctx, eventResp); err != nil {
+						log.Printf("[DM Analyzer] Failed to record location event in history/RAG: %v", err)
+					}
 				}
 			}
 		}
-		
+
 		// Автоматически генерируем изображение для локации
 		if uc.imageGenerationService != nil && uc.userID > 0 {
 			generatedImage := uc.generateImageForLocation(ctx, *analysis.LocationVisited)
@@ -468,7 +513,7 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 				analysis.GeneratedImages = append(analysis.GeneratedImages, *generatedImage)
 			}
 		}
-		
+
 		// Отслеживаем прогресс ежедневных заданий при исследовании локации
 		if uc.checkDailyProgressUC != nil && uc.tgUserID > 0 {
 			dailyReq := DailyQuestProgressRequest{
@@ -506,23 +551,23 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 	if uc.imageGenerationService == nil || uc.userID == 0 {
 		return nil
 	}
-	
+
 	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
 	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	
+
 	var generatedImages []GeneratedImage
-	
+
 	for _, item := range items {
 		// Формируем промпт для генерации изображения предмета
 		systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные изображения предметов и артефактов в стиле классического фэнтези-арта."
-		
+
 		userPrompt := item.Name
 		if item.Description != "" {
 			// Используем описание предмета для более детального изображения
 			userPrompt = fmt.Sprintf("%s, %s", item.Name, item.Description)
 		}
-		
+
 		// Генерируем изображение (синхронно, но с таймаутом)
 		req := GenerateImageRequest{
 			SystemPrompt:    systemPrompt,
@@ -533,7 +578,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 			UserID:          uc.userID,
 			SkipLimitCheck:  false, // Проверяем лимиты
 		}
-		
+
 		resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
 		if err != nil {
 			// Логируем ошибку, но не прерываем выполнение
@@ -541,9 +586,9 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 			// Продолжаем генерацию для остальных предметов
 			continue
 		}
-		
+
 		log.Printf("Auto-generated image for item: %s (path: %s)", item.Name, resp.ImagePath)
-		
+
 		// Добавляем путь к изображению в список
 		generatedImages = append(generatedImages, GeneratedImage{
 			Type:       "item",
@@ -551,7 +596,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 			EntityName: item.Name,
 		})
 	}
-	
+
 	return generatedImages
 }
 
@@ -563,19 +608,19 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 	if uc.imageGenerationService == nil || uc.userID == 0 {
 		return nil
 	}
-	
+
 	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
 	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	
+
 	// Формируем промпт для генерации изображения локации
 	systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные, атмосферные изображения локаций и окружающей среды в стиле классического фэнтези-арта."
-	
+
 	userPrompt := location.Name
 	if location.Description != "" {
 		userPrompt = fmt.Sprintf("%s, %s", location.Name, location.Description)
 	}
-	
+
 	// Генерируем изображение
 	req := GenerateImageRequest{
 		SystemPrompt:    systemPrompt,
@@ -586,16 +631,16 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 		UserID:          uc.userID,
 		SkipLimitCheck:  false, // Проверяем лимиты
 	}
-	
+
 	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
 	if err != nil {
 		// Логируем ошибку, но не прерываем выполнение
 		log.Printf("Failed to auto-generate image for location '%s': %v", location.Name, err)
 		return nil
 	}
-	
+
 	log.Printf("Auto-generated image for location: %s (path: %s)", location.Name, resp.ImagePath)
-	
+
 	return &GeneratedImage{
 		Type:       "location",
 		ImagePath:  resp.ImagePath,
@@ -611,19 +656,19 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 	if uc.imageGenerationService == nil || uc.userID == 0 {
 		return nil
 	}
-	
+
 	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
 	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	
+
 	// Формируем промпт для генерации изображения NPC
 	systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные изображения персонажей и NPC в стиле классического фэнтези-арта."
-	
+
 	userPrompt := npc.Name
 	if npc.Description != "" {
 		userPrompt = fmt.Sprintf("%s, %s", npc.Name, npc.Description)
 	}
-	
+
 	// Генерируем изображение
 	req := GenerateImageRequest{
 		SystemPrompt:    systemPrompt,
@@ -634,16 +679,16 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 		UserID:          uc.userID,
 		SkipLimitCheck:  false, // Проверяем лимиты
 	}
-	
+
 	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
 	if err != nil {
 		// Логируем ошибку, но не прерываем выполнение
 		log.Printf("Failed to auto-generate image for NPC '%s': %v", npc.Name, err)
 		return nil
 	}
-	
+
 	log.Printf("Auto-generated image for NPC: %s (path: %s)", npc.Name, resp.ImagePath)
-	
+
 	return &GeneratedImage{
 		Type:       "npc",
 		ImagePath:  resp.ImagePath,
@@ -750,16 +795,16 @@ func (uc *AnalyzeDMResponseUseCase) handleCombatStart(
 			RequirementKey: "combat_participated",
 			CurrentValue:   1, // Увеличиваем на 1 участие
 		}
-		
+
 		unlocked, err := uc.checkAchievementsUC.Execute(ctx, achievementReq)
 		if err != nil {
 			log.Printf("[DM Analyzer] Failed to check achievements after combat start: %v", err)
 		} else if len(unlocked) > 0 {
 			// Логируем и отправляем уведомления о разблокированных достижениях
 			for _, achievement := range unlocked {
-				log.Printf("[DM Analyzer] Achievement unlocked after combat start: %s (%s)", 
+				log.Printf("[DM Analyzer] Achievement unlocked after combat start: %s (%s)",
 					achievement.Achievement.Code, achievement.Achievement.Title)
-				
+
 				// Отправляем уведомление пользователю, если есть notification service
 				if uc.notificationService != nil {
 					if err := uc.notificationService.SendAchievementNotification(ctx, uc.chatID, achievement.Message); err != nil {
@@ -830,16 +875,16 @@ func (uc *AnalyzeDMResponseUseCase) handleQuestStatus(
 			RequirementKey: "quests_completed",
 			CurrentValue:   1, // Увеличиваем на 1 завершенный квест
 		}
-		
+
 		unlocked, err := uc.checkAchievementsUC.Execute(ctx, achievementReq)
 		if err != nil {
 			log.Printf("[DM Analyzer] Failed to check achievements after quest completion: %v", err)
 		} else if len(unlocked) > 0 {
 			// Логируем и отправляем уведомления о разблокированных достижениях
 			for _, achievement := range unlocked {
-				log.Printf("[DM Analyzer] Achievement unlocked after quest completion: %s (%s)", 
+				log.Printf("[DM Analyzer] Achievement unlocked after quest completion: %s (%s)",
 					achievement.Achievement.Code, achievement.Achievement.Title)
-				
+
 				// Отправляем уведомление пользователю, если есть notification service
 				if uc.notificationService != nil {
 					if err := uc.notificationService.SendAchievementNotification(ctx, uc.chatID, achievement.Message); err != nil {
@@ -1028,6 +1073,50 @@ func cleanJSONResponse(raw string) string {
 	return jsonrepair.Clean(raw)
 }
 
+func decodeStrictAnalysis(input string) (*DMResponseAnalysis, error) {
+	dec := json.NewDecoder(strings.NewReader(input))
+	dec.DisallowUnknownFields()
+
+	var analysis DMResponseAnalysis
+	if err := dec.Decode(&analysis); err != nil {
+		return nil, err
+	}
+
+	// Проверяем, что после JSON нет лишних токенов
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("extra data after JSON")
+	}
+
+	return &analysis, nil
+}
+
+func isEmptyAnalysis(analysis *DMResponseAnalysis) bool {
+	if analysis == nil {
+		return true
+	}
+
+	return !analysis.CombatDetected &&
+		len(analysis.Enemies) == 0 &&
+		!analysis.QuestCompleted &&
+		!analysis.QuestFailed &&
+		analysis.QuestTitle == "" &&
+		analysis.ExperienceGained == 0 &&
+		analysis.ExperienceReason == "" &&
+		len(analysis.ItemsReceived) == 0 &&
+		analysis.LocationVisited == nil &&
+		analysis.NPCMet == nil &&
+		len(analysis.GeneratedImages) == 0
+}
+
+func recordAnalyzerJSONFailure(reason string) {
+	count := atomic.AddUint64(&invalidAnalyzerJSONCount, 1)
+	log.Printf("[DM Analyzer] analyzer_json_%s count=%d", reason, count)
+	if reason == "empty_json" {
+		emptyCount := atomic.AddUint64(&emptyAnalyzerJSONCount, 1)
+		log.Printf("[DM Analyzer] analyzer_empty_json_rate count=%d", emptyCount)
+	}
+}
+
 // aggressiveJSONClean применяет более агрессивную очистку JSON
 func aggressiveJSONClean(jsonStr string) string {
 	jsonStr = strings.TrimSpace(jsonStr)
@@ -1189,6 +1278,125 @@ scanLoop:
 	}
 
 	return result
+}
+
+func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
+	ctx context.Context,
+	resp *locationeventapp.GenerateLocationEventResponse,
+) error {
+	if resp == nil || resp.Event == nil {
+		return nil
+	}
+	if uc.eventRepo == nil && uc.indexDocUC == nil {
+		return nil
+	}
+
+	content := buildLocationEventStory(resp.Event, resp.Description)
+
+	if uc.eventRepo != nil {
+		eventItem := &event.StoryEvent{
+			GameSessionID: uc.sessionID,
+			AuthorType:    event.AuthorTypeDM,
+			Content:       content,
+			CreatedAt:     time.Now(),
+		}
+		if err := uc.eventRepo.Save(ctx, eventItem); err != nil {
+			return fmt.Errorf("failed to save location story event: %w", err)
+		}
+	}
+
+	if uc.indexDocUC != nil {
+		doc := ragdomain.Document{
+			ID:        uuid.New().String(),
+			Source:    ragdomain.SourceEvent,
+			SessionID: uc.sessionID,
+			Text:      content,
+			Timestamp: time.Now(),
+		}
+		if err := uc.indexDocumentWithRetry(ctx, doc, 3); err != nil {
+			return fmt.Errorf("failed to index location event in RAG: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func buildLocationEventStory(ev *world.WorldEvent, fallbackDescription string) string {
+	if ev == nil {
+		return fallbackDescription
+	}
+
+	var meta world.LocationEventMetadata
+	if len(ev.Metadata) > 0 {
+		_ = json.Unmarshal(ev.Metadata, &meta)
+	}
+
+	description := ev.Description
+	if description == "" {
+		description = fallbackDescription
+	}
+
+	var parts []string
+	parts = append(parts, fmt.Sprintf("Событие локации: %s", ev.Name))
+	if description != "" {
+		parts = append(parts, description)
+	}
+	if meta.Hook != "" && meta.Hook != description {
+		parts = append(parts, fmt.Sprintf("Крючок: %s", meta.Hook))
+	}
+	if len(meta.Options) > 0 {
+		parts = append(parts, fmt.Sprintf("Варианты: %s", strings.Join(meta.Options, ", ")))
+	}
+	if len(meta.SuggestedChecks) > 0 {
+		parts = append(parts, fmt.Sprintf("Проверки: %s", strings.Join(meta.SuggestedChecks, ", ")))
+	}
+	if meta.Stakes != "" {
+		parts = append(parts, fmt.Sprintf("Ставки: %s", meta.Stakes))
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// indexDocumentWithRetry индексирует документ в RAG с повторными попытками
+func (uc *AnalyzeDMResponseUseCase) indexDocumentWithRetry(
+	ctx context.Context,
+	doc ragdomain.Document,
+	maxRetries int,
+) error {
+	const initialBackoff = 100 * time.Millisecond
+	const maxBackoff = 2 * time.Second
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			const maxSafeShift = 30
+			shift := attempt - 1
+			if shift < 0 {
+				shift = 0
+			} else if shift > maxSafeShift {
+				shift = maxSafeShift
+			}
+			// #nosec G115 - shift ограничен безопасным диапазоном
+			backoff := initialBackoff * time.Duration(1<<uint(shift))
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		if err := uc.indexDocUC.Execute(ctx, doc); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+
+	return lastErr
 }
 
 // findLocationIDByName ищет локацию по имени в мире и возвращает её ID

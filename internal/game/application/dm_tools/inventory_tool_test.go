@@ -278,7 +278,7 @@ func TestAddItemTool_Execute(t *testing.T) {
 		{
 			name:        "error when name is missing",
 			characterID: 1,
-			args: map[string]interface{}{},
+			args:        map[string]interface{}{},
 			setupMock: func(repo *mockInventoryRepo) {
 				repo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					return inventory.NewInventory(characterID), nil
@@ -303,7 +303,7 @@ func TestAddItemTool_Execute(t *testing.T) {
 			name:        "error when inventory is full",
 			characterID: 1,
 			args: map[string]interface{}{
-				"name": "Тяжелый предмет",
+				"name":   "Тяжелый предмет",
 				"weight": 50.0,
 			},
 			setupMock: func(repo *mockInventoryRepo) {
@@ -482,7 +482,7 @@ func TestRemoveItemTool_Execute(t *testing.T) {
 		{
 			name:        "error when name is missing",
 			characterID: 1,
-			args: map[string]interface{}{},
+			args:        map[string]interface{}{},
 			setupMock: func(repo *mockInventoryRepo) {
 				repo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					return inventory.NewInventory(characterID), nil

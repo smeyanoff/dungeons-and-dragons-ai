@@ -14,8 +14,8 @@ type AddExperienceUseCase struct {
 	playerRepo          PlayerRepository
 	sessionRepo         session.Repository
 	checkAchievementsUC *achievementapp.CheckAchievementsUseCase // Опциональная зависимость для проверки достижений
-	notificationService achievementapp.NotificationService        // Опциональная зависимость для отправки уведомлений
-	updateRatingUC      RatingUpdater                             // Опциональная зависимость для обновления рейтингов
+	notificationService achievementapp.NotificationService       // Опциональная зависимость для отправки уведомлений
+	updateRatingUC      RatingUpdater                            // Опциональная зависимость для обновления рейтингов
 }
 
 // RatingUpdater интерфейс для обновления рейтингов
@@ -100,7 +100,7 @@ func (uc *AddExperienceUseCase) Execute(
 	if uc.checkAchievementsUC != nil && leveledUp {
 		// Проверяем достижения по уровню персонажа
 		achievementReq := achievementapp.CheckAchievementsRequest{
-			PlayerID:      p.ID,
+			PlayerID:       p.ID,
 			RequirementKey: "character_level",
 			CurrentValue:   p.Character.Level,
 		}
@@ -122,7 +122,7 @@ func (uc *AddExperienceUseCase) Execute(
 					logger.String("achievement_title", achievement.Achievement.Title),
 					logger.Int("new_level", p.Character.Level),
 				)
-				
+
 				// Отправляем уведомление пользователю, если есть notification service
 				if uc.notificationService != nil {
 					if err := uc.notificationService.SendAchievementNotification(ctx, req.ChatID, achievement.Message); err != nil {

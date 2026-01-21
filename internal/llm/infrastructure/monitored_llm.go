@@ -3,7 +3,9 @@ package infrastructure
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"time"
+	"unicode/utf8"
 
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/domain/llm_log"
@@ -38,9 +40,14 @@ func (m *MonitoredLLM) Generate(ctx context.Context, prompt string) (string, err
 	chatID, _ := ctx.Value("chat_id").(int64)
 	tgUserID, _ := ctx.Value("tg_user_id").(int64)
 	sessionID, _ := ctx.Value("session_id").(uint)
+	var sessionIDPtr *uint
+	if sessionID != 0 {
+		sessionIDPtr = &sessionID
+	}
+	ctxWithUsage, usage := domain.WithUsage(ctx)
 
 	// Вызываем оригинальный LLM
-	response, err := m.llm.Generate(ctx, prompt)
+	response, err := m.llm.Generate(ctxWithUsage, prompt)
 
 	duration := time.Since(startTime)
 
@@ -48,13 +55,14 @@ func (m *MonitoredLLM) Generate(ctx context.Context, prompt string) (string, err
 	logEntry := &llm_log.LLMLog{
 		ChatID:     chatID,
 		TgUserID:   tgUserID,
-		SessionID:  &sessionID,
+		SessionID:  sessionIDPtr,
 		Model:      "GigaChat", // Можно извлечь из конфига или контекста
 		Prompt:     prompt,
 		Response:   response,
 		DurationMs: duration.Milliseconds(),
 		HasTools:   false,
 	}
+	applyTokensUsage(usage, prompt, response, logEntry)
 
 	if err != nil {
 		errStr := err.Error()
@@ -85,9 +93,14 @@ func (m *MonitoredLLM) GenerateWithMaxTokens(ctx context.Context, prompt string,
 	chatID, _ := ctx.Value("chat_id").(int64)
 	tgUserID, _ := ctx.Value("tg_user_id").(int64)
 	sessionID, _ := ctx.Value("session_id").(uint)
+	var sessionIDPtr *uint
+	if sessionID != 0 {
+		sessionIDPtr = &sessionID
+	}
+	ctxWithUsage, usage := domain.WithUsage(ctx)
 
 	// Вызываем оригинальный LLM
-	response, err := m.llm.GenerateWithMaxTokens(ctx, prompt, maxTokens)
+	response, err := m.llm.GenerateWithMaxTokens(ctxWithUsage, prompt, maxTokens)
 
 	duration := time.Since(startTime)
 
@@ -95,7 +108,7 @@ func (m *MonitoredLLM) GenerateWithMaxTokens(ctx context.Context, prompt string,
 	logEntry := &llm_log.LLMLog{
 		ChatID:     chatID,
 		TgUserID:   tgUserID,
-		SessionID:  &sessionID,
+		SessionID:  sessionIDPtr,
 		Model:      "GigaChat",
 		Prompt:     prompt,
 		MaxTokens:  &maxTokens,
@@ -103,6 +116,7 @@ func (m *MonitoredLLM) GenerateWithMaxTokens(ctx context.Context, prompt string,
 		DurationMs: duration.Milliseconds(),
 		HasTools:   false,
 	}
+	applyTokensUsage(usage, prompt, response, logEntry)
 
 	if err != nil {
 		errStr := err.Error()
@@ -133,9 +147,14 @@ func (m *MonitoredLLM) GenerateWithTools(ctx context.Context, prompt string, too
 	chatID, _ := ctx.Value("chat_id").(int64)
 	tgUserID, _ := ctx.Value("tg_user_id").(int64)
 	sessionID, _ := ctx.Value("session_id").(uint)
+	var sessionIDPtr *uint
+	if sessionID != 0 {
+		sessionIDPtr = &sessionID
+	}
+	ctxWithUsage, usage := domain.WithUsage(ctx)
 
 	// Вызываем оригинальный LLM
-	response, err := m.llm.GenerateWithTools(ctx, prompt, tools)
+	response, err := m.llm.GenerateWithTools(ctxWithUsage, prompt, tools)
 
 	duration := time.Since(startTime)
 
@@ -143,9 +162,12 @@ func (m *MonitoredLLM) GenerateWithTools(ctx context.Context, prompt string, too
 	var toolsCallsJSON *string
 	var responseContent string
 	var hasTools bool
+	var toolsCallsCount *int
 	if response != nil {
 		responseContent = response.Content
-		if len(response.ToolCalls) > 0 {
+		count := len(response.ToolCalls)
+		toolsCallsCount = &count
+		if count > 0 {
 			hasTools = true
 			toolsJSON, marshalErr := json.Marshal(response.ToolCalls)
 			if marshalErr == nil {
@@ -157,16 +179,18 @@ func (m *MonitoredLLM) GenerateWithTools(ctx context.Context, prompt string, too
 
 	// Логируем запрос/ответ
 	logEntry := &llm_log.LLMLog{
-		ChatID:     chatID,
-		TgUserID:   tgUserID,
-		SessionID:  &sessionID,
-		Model:      "GigaChat",
-		Prompt:     prompt,
-		Response:   responseContent,
-		DurationMs: duration.Milliseconds(),
-		HasTools:   hasTools,
-		ToolsCalls: toolsCallsJSON,
+		ChatID:          chatID,
+		TgUserID:        tgUserID,
+		SessionID:       sessionIDPtr,
+		Model:           "GigaChat",
+		Prompt:          prompt,
+		Response:        responseContent,
+		DurationMs:      duration.Milliseconds(),
+		HasTools:        hasTools,
+		ToolsCalls:      toolsCallsJSON,
+		ToolsCallsCount: toolsCallsCount,
 	}
+	applyTokensUsage(usage, prompt, responseContent, logEntry)
 
 	if err != nil {
 		errStr := err.Error()
@@ -185,4 +209,29 @@ func (m *MonitoredLLM) GenerateWithTools(ctx context.Context, prompt string, too
 	}()
 
 	return response, err
+}
+
+func applyTokensUsage(usage *domain.Usage, prompt, response string, logEntry *llm_log.LLMLog) {
+	tokensUsed := 0
+	if usage != nil {
+		tokensUsed = usage.TotalTokens
+		if tokensUsed == 0 {
+			tokensUsed = usage.PromptTokens + usage.CompletionTokens
+		}
+	}
+	if tokensUsed == 0 {
+		tokensUsed = estimateTokens(prompt, response)
+	}
+	if tokensUsed > 0 {
+		logEntry.TokensUsed = &tokensUsed
+	}
+}
+
+func estimateTokens(prompt, response string) int {
+	textLen := utf8.RuneCountInString(prompt) + utf8.RuneCountInString(response)
+	if textLen == 0 {
+		return 0
+	}
+	const charsPerToken = 4
+	return int(math.Ceil(float64(textLen) / float64(charsPerToken)))
 }

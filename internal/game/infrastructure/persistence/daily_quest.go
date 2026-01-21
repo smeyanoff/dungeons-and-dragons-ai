@@ -20,25 +20,25 @@ func NewDailyQuestRepository(db *gorm.DB) *DailyQuestRepository {
 // GetTodayQuests возвращает ежедневные задания на сегодня
 func (r *DailyQuestRepository) GetTodayQuests(ctx context.Context) ([]*quest.DailyQuest, error) {
 	var dailyQuests []*quest.DailyQuest
-	
+
 	// Получаем задания, созданные сегодня
 	now := time.Now()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	endOfDay := startOfDay.Add(24 * time.Hour)
-	
+
 	err := r.db.WithContext(ctx).
 		Where("created_at >= ? AND created_at < ?", startOfDay, endOfDay).
 		Find(&dailyQuests).Error
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Если заданий нет, создаем новые на сегодня
 	if len(dailyQuests) == 0 {
 		dailyQuests = r.createTodayQuests(ctx)
 	}
-	
+
 	return dailyQuests, nil
 }
 
@@ -49,7 +49,7 @@ func (r *DailyQuestRepository) createTodayQuests(ctx context.Context) []*quest.D
 			quest.DailyQuestTypeCompleteQuest,
 			"Завершить квест",
 			"Завершите любой активный квест",
-			1, // Целевое значение: 1 квест
+			1,  // Целевое значение: 1 квест
 			50, // Награда опытом
 			10, // Награда золотом
 		),
@@ -57,7 +57,7 @@ func (r *DailyQuestRepository) createTodayQuests(ctx context.Context) []*quest.D
 			quest.DailyQuestTypeWinCombat,
 			"Победить в бою",
 			"Одолейте врагов в бою",
-			1, // Целевое значение: 1 победа
+			1,  // Целевое значение: 1 победа
 			75, // Награда опытом
 			15, // Награда золотом
 		),
@@ -65,12 +65,12 @@ func (r *DailyQuestRepository) createTodayQuests(ctx context.Context) []*quest.D
 			quest.DailyQuestTypeExploreLocation,
 			"Исследовать локацию",
 			"Посетите новую локацию в мире",
-			1, // Целевое значение: 1 локация
+			1,  // Целевое значение: 1 локация
 			25, // Награда опытом
 			5,  // Награда золотом
 		),
 	}
-	
+
 	// Сохраняем задания
 	for _, q := range quests {
 		if err := r.db.WithContext(ctx).Create(q).Error; err != nil {
@@ -78,26 +78,26 @@ func (r *DailyQuestRepository) createTodayQuests(ctx context.Context) []*quest.D
 			continue
 		}
 	}
-	
+
 	return quests
 }
 
 // GetPlayerProgress возвращает прогресс игрока по ежедневным заданиям на сегодня
 func (r *DailyQuestRepository) GetPlayerProgress(ctx context.Context, playerID uint, date time.Time) ([]*quest.DailyQuestProgress, error) {
 	var progress []*quest.DailyQuestProgress
-	
+
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	endOfDay := startOfDay.Add(24 * time.Hour)
-	
+
 	err := r.db.WithContext(ctx).
 		Preload("DailyQuest").
 		Where("player_id = ? AND date >= ? AND date < ?", playerID, startOfDay, endOfDay).
 		Find(&progress).Error
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return progress, nil
 }
 
@@ -116,21 +116,21 @@ func (r *DailyQuestRepository) GetOrCreateProgress(
 	date time.Time,
 ) (*quest.DailyQuestProgress, error) {
 	startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	
+
 	var progress quest.DailyQuestProgress
 	err := r.db.WithContext(ctx).
 		Preload("DailyQuest").
 		Where("player_id = ? AND daily_quest_id = ? AND date >= ? AND date < ?",
 			playerID, dailyQuestID, startOfDay, startOfDay.Add(24*time.Hour)).
 		First(&progress).Error
-	
+
 	if err == gorm.ErrRecordNotFound {
 		// Создаем новый прогресс
 		var dailyQuest quest.DailyQuest
 		if err := r.db.WithContext(ctx).First(&dailyQuest, dailyQuestID).Error; err != nil {
 			return nil, err
 		}
-		
+
 		progress = quest.DailyQuestProgress{
 			PlayerID:     playerID,
 			DailyQuestID: dailyQuestID,
@@ -138,21 +138,21 @@ func (r *DailyQuestRepository) GetOrCreateProgress(
 			TargetValue:  dailyQuest.TargetValue,
 			Completed:    false,
 			Date:         startOfDay,
-			CreatedAt:     time.Now(),
-			UpdatedAt:     time.Now(),
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
 		}
-		
+
 		if err := r.db.WithContext(ctx).Create(&progress).Error; err != nil {
 			return nil, err
 		}
-		
+
 		return &progress, nil
 	}
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &progress, nil
 }
 
@@ -162,11 +162,11 @@ func (r *DailyQuestRepository) GetStreak(ctx context.Context, playerID uint) (*q
 	err := r.db.WithContext(ctx).
 		Where("player_id = ?", playerID).
 		First(&streak).Error
-	
+
 	if err == gorm.ErrRecordNotFound {
 		// Создаем новый стрик
 		streak = quest.DailyQuestStreak{
-			PlayerID:  playerID,
+			PlayerID:   playerID,
 			StreakDays: 0,
 			LastDate:   time.Time{},
 			CreatedAt:  time.Now(),
@@ -177,11 +177,11 @@ func (r *DailyQuestRepository) GetStreak(ctx context.Context, playerID uint) (*q
 		}
 		return &streak, nil
 	}
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &streak, nil
 }
 

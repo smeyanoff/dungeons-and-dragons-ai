@@ -8,8 +8,8 @@ import (
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
-	"dungeons-and-dragons-ai/internal/game/domain/session"
 	questdomain "dungeons-and-dragons-ai/internal/game/domain/quest"
+	"dungeons-and-dragons-ai/internal/game/domain/session"
 	worlddomain "dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/telegram"
 
@@ -171,4 +171,3 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 		t.Fatalf("Бот не отредактировал сообщение результатом ability check (editMessageText с '🎲 Проверка')")
 	}
 }
-

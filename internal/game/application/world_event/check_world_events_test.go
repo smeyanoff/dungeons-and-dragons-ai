@@ -60,7 +60,7 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "no scheduled events",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
@@ -78,23 +78,23 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "activate event with matching conditions",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
 			setupMocks: func(repo *mockWorldEventRepository, w *world.World) {
 				scheduledTime := time.Now().Add(-1 * time.Hour) // Прошло час назад
 				dayOfWeek := w.GetDayOfWeek()
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Morning Festival",
-							Description:      "A festival in the morning",
+							ID:                1,
+							WorldID:           worldID,
+							Type:              world.WorldEventTypeFestival,
+							Status:            world.WorldEventStatusScheduled,
+							Name:              "Morning Festival",
+							Description:       "A festival in the morning",
 							RequiredDayOfWeek: &dayOfWeek,
 							RequiredTimeOfDay: "morning",
 							RequiredWeather:   "clear",
@@ -121,22 +121,22 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "do not activate event with non-matching day of week",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
 			setupMocks: func(repo *mockWorldEventRepository, w *world.World) {
 				scheduledTime := time.Now().Add(-1 * time.Hour)
 				wrongDay := (w.GetDayOfWeek() + 1) % 7
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Wrong Day Festival",
+							ID:                1,
+							WorldID:           worldID,
+							Type:              world.WorldEventTypeFestival,
+							Status:            world.WorldEventStatusScheduled,
+							Name:              "Wrong Day Festival",
 							RequiredDayOfWeek: &wrongDay,
 							RequiredTimeOfDay: "morning",
 							ScheduledFor:      &scheduledTime,
@@ -153,22 +153,22 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "do not activate event with non-matching time of day",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
 			setupMocks: func(repo *mockWorldEventRepository, w *world.World) {
 				scheduledTime := time.Now().Add(-1 * time.Hour)
 				dayOfWeek := w.GetDayOfWeek()
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Evening Festival",
+							ID:                1,
+							WorldID:           worldID,
+							Type:              world.WorldEventTypeFestival,
+							Status:            world.WorldEventStatusScheduled,
+							Name:              "Evening Festival",
 							RequiredDayOfWeek: &dayOfWeek,
 							RequiredTimeOfDay: "evening", // Не совпадает с "morning"
 							ScheduledFor:      &scheduledTime,
@@ -185,22 +185,22 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "do not activate event with non-matching weather",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
 			setupMocks: func(repo *mockWorldEventRepository, w *world.World) {
 				scheduledTime := time.Now().Add(-1 * time.Hour)
 				dayOfWeek := w.GetDayOfWeek()
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Rainy Festival",
+							ID:                1,
+							WorldID:           worldID,
+							Type:              world.WorldEventTypeFestival,
+							Status:            world.WorldEventStatusScheduled,
+							Name:              "Rainy Festival",
 							RequiredDayOfWeek: &dayOfWeek,
 							RequiredTimeOfDay: "morning",
 							RequiredWeather:   "rainy", // Не совпадает с "clear"
@@ -218,7 +218,7 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "do not activate event with non-matching location",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: uintPtr(2),
 			},
 			world: &testWorld,
@@ -226,19 +226,19 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 				scheduledTime := time.Now().Add(-1 * time.Hour)
 				dayOfWeek := w.GetDayOfWeek()
 				requiredLocID := uint(1)
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Location-Specific Festival",
-							RequiredDayOfWeek: &dayOfWeek,
-							RequiredTimeOfDay: "morning",
+							ID:                 1,
+							WorldID:            worldID,
+							Type:               world.WorldEventTypeFestival,
+							Status:             world.WorldEventStatusScheduled,
+							Name:               "Location-Specific Festival",
+							RequiredDayOfWeek:  &dayOfWeek,
+							RequiredTimeOfDay:  "morning",
 							RequiredLocationID: &requiredLocID, // Требует локацию 1, игрок в локации 2
-							ScheduledFor:      &scheduledTime,
+							ScheduledFor:       &scheduledTime,
 						},
 					}, nil
 				}
@@ -252,7 +252,7 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "activate event with matching location",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: uintPtr(1),
 			},
 			world: &testWorld,
@@ -260,19 +260,19 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 				scheduledTime := time.Now().Add(-1 * time.Hour)
 				dayOfWeek := w.GetDayOfWeek()
 				requiredLocID := uint(1)
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Location-Specific Festival",
-							RequiredDayOfWeek: &dayOfWeek,
-							RequiredTimeOfDay: "morning",
+							ID:                 1,
+							WorldID:            worldID,
+							Type:               world.WorldEventTypeFestival,
+							Status:             world.WorldEventStatusScheduled,
+							Name:               "Location-Specific Festival",
+							RequiredDayOfWeek:  &dayOfWeek,
+							RequiredTimeOfDay:  "morning",
 							RequiredLocationID: &requiredLocID,
-							ScheduledFor:      &scheduledTime,
+							ScheduledFor:       &scheduledTime,
 						},
 					}, nil
 				}
@@ -289,22 +289,22 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "do not activate already active event",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
 			setupMocks: func(repo *mockWorldEventRepository, w *world.World) {
 				scheduledTime := time.Now().Add(-1 * time.Hour)
 				dayOfWeek := w.GetDayOfWeek()
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusActive, // Уже активно
-							Name:             "Active Festival",
+							ID:                1,
+							WorldID:           worldID,
+							Type:              world.WorldEventTypeFestival,
+							Status:            world.WorldEventStatusActive, // Уже активно
+							Name:              "Active Festival",
 							RequiredDayOfWeek: &dayOfWeek,
 							RequiredTimeOfDay: "morning",
 							ScheduledFor:      &scheduledTime,
@@ -321,22 +321,22 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "do not activate event scheduled for future",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
 			setupMocks: func(repo *mockWorldEventRepository, w *world.World) {
 				futureTime := time.Now().Add(1 * time.Hour) // В будущем
 				dayOfWeek := w.GetDayOfWeek()
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Future Festival",
+							ID:                1,
+							WorldID:           worldID,
+							Type:              world.WorldEventTypeFestival,
+							Status:            world.WorldEventStatusScheduled,
+							Name:              "Future Festival",
 							RequiredDayOfWeek: &dayOfWeek,
 							RequiredTimeOfDay: "morning",
 							ScheduledFor:      &futureTime,
@@ -353,7 +353,7 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "return existing active events",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
@@ -383,7 +383,7 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "error getting scheduled events",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
@@ -397,7 +397,7 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "error getting active events",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
@@ -414,32 +414,32 @@ func TestCheckWorldEventsUseCase_Execute(t *testing.T) {
 		{
 			name: "continue on save error",
 			req: CheckWorldEventsRequest{
-				WorldID:          1,
+				WorldID:           1,
 				CurrentLocationID: nil,
 			},
 			world: &testWorld,
 			setupMocks: func(repo *mockWorldEventRepository, w *world.World) {
 				scheduledTime := time.Now().Add(-1 * time.Hour)
 				dayOfWeek := w.GetDayOfWeek()
-				
+
 				repo.getScheduledByWorldIDFunc = func(ctx context.Context, worldID uint) ([]world.WorldEvent, error) {
 					return []world.WorldEvent{
 						{
-							ID:               1,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Event 1",
+							ID:                1,
+							WorldID:           worldID,
+							Type:              world.WorldEventTypeFestival,
+							Status:            world.WorldEventStatusScheduled,
+							Name:              "Event 1",
 							RequiredDayOfWeek: &dayOfWeek,
 							RequiredTimeOfDay: "morning",
 							ScheduledFor:      &scheduledTime,
 						},
 						{
-							ID:               2,
-							WorldID:          worldID,
-							Type:             world.WorldEventTypeFestival,
-							Status:           world.WorldEventStatusScheduled,
-							Name:             "Event 2",
+							ID:                2,
+							WorldID:           worldID,
+							Type:              world.WorldEventTypeFestival,
+							Status:            world.WorldEventStatusScheduled,
+							Name:              "Event 2",
 							RequiredDayOfWeek: &dayOfWeek,
 							RequiredTimeOfDay: "morning",
 							ScheduledFor:      &scheduledTime,

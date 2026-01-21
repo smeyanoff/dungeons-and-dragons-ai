@@ -29,14 +29,14 @@ const (
 // Feedback представляет фидбек от пользователя
 type Feedback struct {
 	gorm.Model
-	ChatID  int64 `gorm:"index"`
-	UserID  int64 `gorm:"index"`
+	ChatID  int64  `gorm:"index"`
+	UserID  int64  `gorm:"index"`
 	Message string `gorm:"type:text;not null"`
-	
+
 	// Тип и категория обратной связи
 	Type     FeedbackType     `gorm:"type:varchar(32)"`
 	Category FeedbackCategory `gorm:"type:varchar(32)"`
-	
+
 	// Метаданные
 	UserFirstName string
 	UserLastName  string

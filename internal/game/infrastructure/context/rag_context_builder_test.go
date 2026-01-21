@@ -671,14 +671,14 @@ func TestRAGContextBuilder_BuildContext_PlayerCount(t *testing.T) {
 			getActiveBySessionIDFunc: func(ctx context.Context, sessionID uint) (*combat.Combat, error) {
 				// Создаем бой с одним игроком и одним врагом
 				char := &character.Character{
-					ID:    1,
-					Name:  "Solo Hero",
-					HP:    20,
-					MaxHP: 20,
+					ID:     1,
+					Name:   "Solo Hero",
+					HP:     20,
+					MaxHP:  20,
 					Status: character.StatusAlive,
 				}
 				return &combat.Combat{
-					State: combat.CombatStateActive,
+					State:       combat.CombatStateActive,
 					CurrentTurn: 0,
 					Participants: []combat.CombatParticipant{
 						{
@@ -688,12 +688,12 @@ func TestRAGContextBuilder_BuildContext_PlayerCount(t *testing.T) {
 							Initiative:  15,
 						},
 						{
-							IsPlayer:      false,
-							MonsterName:   "Goblin",
-							MonsterHP:     10,
-							MonsterMaxHP:  10,
-							MonsterAC:     12,
-							Initiative:    10,
+							IsPlayer:     false,
+							MonsterName:  "Goblin",
+							MonsterHP:    10,
+							MonsterMaxHP: 10,
+							MonsterAC:    12,
+							Initiative:   10,
 						},
 					},
 				}, nil
@@ -783,12 +783,12 @@ func TestRAGContextBuilder_BuildContext_PlayerCount(t *testing.T) {
 			Players: []player.Player{
 				{
 					Character: character.Character{
-						ID:    1,
-						Name:  "Combat Hero",
-						Race:  character.RaceHuman,
-						Class: character.ClassFighter,
-						HP:    20,
-						MaxHP: 20,
+						ID:     1,
+						Name:   "Combat Hero",
+						Race:   character.RaceHuman,
+						Class:  character.ClassFighter,
+						HP:     20,
+						MaxHP:  20,
 						Status: character.StatusAlive,
 					},
 				},
@@ -798,14 +798,14 @@ func TestRAGContextBuilder_BuildContext_PlayerCount(t *testing.T) {
 		mockCombatRepo := &mockCombatRepository{
 			getActiveBySessionIDFunc: func(ctx context.Context, sessionID uint) (*combat.Combat, error) {
 				char := &character.Character{
-					ID:    1,
-					Name:  "Combat Hero",
-					HP:    20,
-					MaxHP: 20,
+					ID:     1,
+					Name:   "Combat Hero",
+					HP:     20,
+					MaxHP:  20,
 					Status: character.StatusAlive,
 				}
 				return &combat.Combat{
-					State: combat.CombatStateActive,
+					State:       combat.CombatStateActive,
 					CurrentTurn: 0,
 					Participants: []combat.CombatParticipant{
 						{
@@ -815,20 +815,20 @@ func TestRAGContextBuilder_BuildContext_PlayerCount(t *testing.T) {
 							Initiative:  15,
 						},
 						{
-							IsPlayer:      false,
-							MonsterName:   "Goblin 1",
-							MonsterHP:     10,
-							MonsterMaxHP:  10,
-							MonsterAC:     12,
-							Initiative:    12,
+							IsPlayer:     false,
+							MonsterName:  "Goblin 1",
+							MonsterHP:    10,
+							MonsterMaxHP: 10,
+							MonsterAC:    12,
+							Initiative:   12,
 						},
 						{
-							IsPlayer:      false,
-							MonsterName:   "Goblin 2",
-							MonsterHP:     8,
-							MonsterMaxHP:  8,
-							MonsterAC:     12,
-							Initiative:    10,
+							IsPlayer:     false,
+							MonsterName:  "Goblin 2",
+							MonsterHP:    8,
+							MonsterMaxHP: 8,
+							MonsterAC:    12,
+							Initiative:   10,
 						},
 					},
 				}, nil

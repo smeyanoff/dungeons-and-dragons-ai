@@ -78,33 +78,33 @@ func TestInMemoryRateLimiter_CheckLimit(t *testing.T) {
 
 func TestInMemoryRateLimiter_GetRemainingQuota(t *testing.T) {
 	tests := []struct {
-		name         string
-		limit        int
-		recordGen    int
+		name          string
+		limit         int
+		recordGen     int
 		expectedQuota int
 	}{
 		{
-			name:         "no records full quota",
-			limit:        5,
-			recordGen:    0,
+			name:          "no records full quota",
+			limit:         5,
+			recordGen:     0,
 			expectedQuota: 5,
 		},
 		{
-			name:         "some records partial quota",
-			limit:        5,
-			recordGen:    2,
+			name:          "some records partial quota",
+			limit:         5,
+			recordGen:     2,
 			expectedQuota: 3,
 		},
 		{
-			name:         "at limit zero quota",
-			limit:        5,
-			recordGen:    5,
+			name:          "at limit zero quota",
+			limit:         5,
+			recordGen:     5,
 			expectedQuota: 0,
 		},
 		{
-			name:         "over limit zero quota",
-			limit:        5,
-			recordGen:    10,
+			name:          "over limit zero quota",
+			limit:         5,
+			recordGen:     10,
 			expectedQuota: 0,
 		},
 	}

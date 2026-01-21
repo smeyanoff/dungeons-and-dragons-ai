@@ -85,7 +85,7 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 			prefix = "📍▶️"
 		}
 		parts = append(parts, fmt.Sprintf("%s %s", prefix, loc.Name))
-		
+
 		if loc.Description != "" {
 			// Ограничиваем длину описания для компактности
 			desc := loc.Description
@@ -109,7 +109,7 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 				// Формируем направление
 				directionSymbol := uc.getDirectionSymbol(conn.Direction)
 				connectionInfo := fmt.Sprintf("%s %s", directionSymbol, toLocationName)
-				
+
 				if conn.Description != "" {
 					desc := conn.Description
 					if len(desc) > 50 {
@@ -117,7 +117,7 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 					}
 					connectionInfo += fmt.Sprintf(" (%s)", desc)
 				}
-				
+
 				connectionLines = append(connectionLines, "   └─ "+connectionInfo)
 			}
 			parts = append(parts, strings.Join(connectionLines, "\n"))
@@ -188,7 +188,7 @@ func (uc *GetMapUseCase) translateTimeOfDay(timeOfDay string) string {
 		"night":     "Ночь",
 		"midnight":  "Полночь",
 	}
-	
+
 	if translated, exists := translations[strings.ToLower(timeOfDay)]; exists {
 		return translated
 	}
@@ -198,14 +198,14 @@ func (uc *GetMapUseCase) translateTimeOfDay(timeOfDay string) string {
 // translateWeather переводит погоду на русский
 func (uc *GetMapUseCase) translateWeather(weather string) string {
 	translations := map[string]string{
-		"clear":   "Ясно",
-		"cloudy":  "Облачно",
-		"rainy":   "Дождь",
-		"stormy":  "Гроза",
-		"foggy":   "Туман",
-		"snowy":   "Снег",
+		"clear":  "Ясно",
+		"cloudy": "Облачно",
+		"rainy":  "Дождь",
+		"stormy": "Гроза",
+		"foggy":  "Туман",
+		"snowy":  "Снег",
 	}
-	
+
 	if translated, exists := translations[strings.ToLower(weather)]; exists {
 		return translated
 	}

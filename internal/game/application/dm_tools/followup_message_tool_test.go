@@ -45,7 +45,7 @@ func TestSendFollowupMessageTool_Parameters(t *testing.T) {
 func TestSendFollowupMessageTool_Execute(t *testing.T) {
 	tests := []struct {
 		name          string
-		sessionID    uint
+		sessionID     uint
 		chatID        int64
 		args          map[string]interface{}
 		setupMock     func(*mockFollowupEventRepository)
@@ -53,14 +53,14 @@ func TestSendFollowupMessageTool_Execute(t *testing.T) {
 		validate      func(*testing.T, interface{})
 	}{
 		{
-			name:       "successful followup message creation",
-			sessionID:  123,
-			chatID:     456,
+			name:      "successful followup message creation",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "item_description",
 				"context":      "Золотой меч найден в сундуке",
 			},
-			setupMock: func(repo *mockFollowupEventRepository) {},
+			setupMock:     func(repo *mockFollowupEventRepository) {},
 			expectedError: false,
 			validate: func(t *testing.T, result interface{}) {
 				resultMap, ok := result.(map[string]interface{})
@@ -86,9 +86,9 @@ func TestSendFollowupMessageTool_Execute(t *testing.T) {
 			},
 		},
 		{
-			name:       "saves followup event to repository",
-			sessionID:  123,
-			chatID:     456,
+			name:      "saves followup event to repository",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "combat_turn",
 				"context":      "Враг Гоблин атакует",
@@ -114,14 +114,14 @@ func TestSendFollowupMessageTool_Execute(t *testing.T) {
 			expectedError: false,
 		},
 		{
-			name:       "different message types",
-			sessionID:  123,
-			chatID:     456,
+			name:      "different message types",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "spell_effect",
 				"context":      "Заклинание Огненный шар применено",
 			},
-			setupMock: func(repo *mockFollowupEventRepository) {},
+			setupMock:     func(repo *mockFollowupEventRepository) {},
 			expectedError: false,
 			validate: func(t *testing.T, result interface{}) {
 				resultMap, ok := result.(map[string]interface{})
@@ -135,51 +135,51 @@ func TestSendFollowupMessageTool_Execute(t *testing.T) {
 			},
 		},
 		{
-			name:       "missing message_type",
-			sessionID:  123,
-			chatID:     456,
+			name:      "missing message_type",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"context": "Some context",
 			},
-			setupMock: func(repo *mockFollowupEventRepository) {},
+			setupMock:     func(repo *mockFollowupEventRepository) {},
 			expectedError: true,
 		},
 		{
-			name:       "missing context",
-			sessionID:  123,
-			chatID:     456,
+			name:      "missing context",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "item_description",
 			},
-			setupMock: func(repo *mockFollowupEventRepository) {},
+			setupMock:     func(repo *mockFollowupEventRepository) {},
 			expectedError: true,
 		},
 		{
-			name:       "empty message_type",
-			sessionID:  123,
-			chatID:     456,
+			name:      "empty message_type",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "",
 				"context":      "Some context",
 			},
-			setupMock: func(repo *mockFollowupEventRepository) {},
+			setupMock:     func(repo *mockFollowupEventRepository) {},
 			expectedError: true,
 		},
 		{
-			name:       "empty context",
-			sessionID:  123,
-			chatID:     456,
+			name:      "empty context",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "item_description",
 				"context":      "",
 			},
-			setupMock: func(repo *mockFollowupEventRepository) {},
+			setupMock:     func(repo *mockFollowupEventRepository) {},
 			expectedError: true,
 		},
 		{
-			name:       "repository save error",
-			sessionID:  123,
-			chatID:     456,
+			name:      "repository save error",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "item_description",
 				"context":      "Some context",
@@ -192,14 +192,14 @@ func TestSendFollowupMessageTool_Execute(t *testing.T) {
 			expectedError: true, // Ошибка сохранения должна прерывать выполнение
 		},
 		{
-			name:       "location_detail message type",
-			sessionID:  123,
-			chatID:     456,
+			name:      "location_detail message type",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "location_detail",
 				"context":      "Детальное описание таверны",
 			},
-			setupMock: func(repo *mockFollowupEventRepository) {},
+			setupMock:     func(repo *mockFollowupEventRepository) {},
 			expectedError: false,
 			validate: func(t *testing.T, result interface{}) {
 				resultMap, ok := result.(map[string]interface{})
@@ -213,14 +213,14 @@ func TestSendFollowupMessageTool_Execute(t *testing.T) {
 			},
 		},
 		{
-			name:       "npc_dialogue message type",
-			sessionID:  123,
-			chatID:     456,
+			name:      "npc_dialogue message type",
+			sessionID: 123,
+			chatID:    456,
 			args: map[string]interface{}{
 				"message_type": "npc_dialogue",
 				"context":      "Диалог с торговцем",
 			},
-			setupMock: func(repo *mockFollowupEventRepository) {},
+			setupMock:     func(repo *mockFollowupEventRepository) {},
 			expectedError: false,
 			validate: func(t *testing.T, result interface{}) {
 				resultMap, ok := result.(map[string]interface{})

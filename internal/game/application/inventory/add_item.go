@@ -34,7 +34,7 @@ func NewAddItemUseCase(
 
 // AddItemRequest запрос на добавление предмета
 type AddItemRequest struct {
-	ChatID  int64
+	ChatID   int64
 	TgUserID int64
 	ItemName string
 	Quantity int
@@ -101,7 +101,7 @@ func (uc *AddItemUseCase) Execute(ctx context.Context, req AddItemRequest) (stri
 	// Добавляем предмет
 	if err := inv.AddItem(itemName, description, weight, quantity, itemType); err != nil {
 		if err.Error() == "инвентарь переполнен" {
-			return fmt.Sprintf("❌ Инвентарь переполнен! Невозможно добавить %s (x%d).\n\n💼 Текущий вес: %.2f кг / %.0f кг", 
+			return fmt.Sprintf("❌ Инвентарь переполнен! Невозможно добавить %s (x%d).\n\n💼 Текущий вес: %.2f кг / %.0f кг",
 				itemName, quantity, inv.GetTotalWeight(), inventory.MaxWeight), nil
 		}
 		return "", fmt.Errorf("failed to add item: %w", err)
@@ -136,7 +136,7 @@ func (uc *AddItemUseCase) Execute(ctx context.Context, req AddItemRequest) (stri
 // detectItemType пытается определить тип предмета по названию
 func detectItemType(itemName string) inventory.ItemType {
 	name := " " + itemName + " "
-	
+
 	// Оружие
 	weaponKeywords := []string{" меч ", " кинжал ", " лук ", " стрела ", " арбалет ", " булава ", " топор ", " копье ", " оружие "}
 	for _, keyword := range weaponKeywords {
@@ -144,7 +144,7 @@ func detectItemType(itemName string) inventory.ItemType {
 			return inventory.ItemTypeWeapon
 		}
 	}
-	
+
 	// Броня
 	armorKeywords := []string{" доспех ", " броня ", " щит ", " шлем ", " латы ", " кольчуга ", " кожа "}
 	for _, keyword := range armorKeywords {
@@ -152,7 +152,7 @@ func detectItemType(itemName string) inventory.ItemType {
 			return inventory.ItemTypeArmor
 		}
 	}
-	
+
 	// Зелье
 	potionKeywords := []string{" зелье ", " эликсир ", " отвар ", " напиток ", " флакон "}
 	for _, keyword := range potionKeywords {
@@ -160,7 +160,7 @@ func detectItemType(itemName string) inventory.ItemType {
 			return inventory.ItemTypePotion
 		}
 	}
-	
+
 	// Инструмент
 	toolKeywords := []string{" ключ ", " инструмент ", " веревка ", " факел ", " кирка ", " лопата "}
 	for _, keyword := range toolKeywords {
@@ -168,7 +168,7 @@ func detectItemType(itemName string) inventory.ItemType {
 			return inventory.ItemTypeTool
 		}
 	}
-	
+
 	// Расходник
 	consumableKeywords := []string{" еда ", " хлеб ", " яблоко ", " мясо ", " рыба ", " вода "}
 	for _, keyword := range consumableKeywords {
@@ -176,7 +176,7 @@ func detectItemType(itemName string) inventory.ItemType {
 			return inventory.ItemTypeConsumable
 		}
 	}
-	
+
 	// По умолчанию - разное
 	return inventory.ItemTypeMisc
 }

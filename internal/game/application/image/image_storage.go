@@ -40,7 +40,7 @@ func NewLocalImageStorage(basePath string) (ImageStorage, error) {
 // Save сохраняет изображение локально
 func (s *LocalImageStorage) Save(ctx context.Context, imageData []byte, filename string) (string, error) {
 	filePath := filepath.Join(s.basePath, filename)
-	
+
 	// Используем 0600 вместо 0644 для более строгих прав доступа (только владелец)
 	if err := os.WriteFile(filePath, imageData, 0600); err != nil {
 		return "", fmt.Errorf("failed to save image: %w", err)
@@ -52,7 +52,7 @@ func (s *LocalImageStorage) Save(ctx context.Context, imageData []byte, filename
 // Get получает путь к изображению
 func (s *LocalImageStorage) Get(ctx context.Context, filename string) (string, error) {
 	filePath := filepath.Join(s.basePath, filename)
-	
+
 	if !s.Exists(ctx, filename) {
 		return "", fmt.Errorf("image not found: %s", filename)
 	}
@@ -70,7 +70,7 @@ func (s *LocalImageStorage) Exists(ctx context.Context, filename string) bool {
 // Delete удаляет изображение
 func (s *LocalImageStorage) Delete(ctx context.Context, filename string) error {
 	filePath := filepath.Join(s.basePath, filename)
-	
+
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete image: %w", err)
 	}

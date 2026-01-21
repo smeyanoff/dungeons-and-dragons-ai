@@ -35,8 +35,8 @@ type GameSession struct {
 	MapImagePath string `gorm:"type:text"`
 
 	// Pending ability check (ожидаемая проверка характеристики)
-	PendingAbilityCheckID          string    `gorm:"type:varchar(64);index"`
-	PendingAbilityCheckAbility     string    `gorm:"type:varchar(32)"`
+	PendingAbilityCheckID          string `gorm:"type:varchar(64);index"`
+	PendingAbilityCheckAbility     string `gorm:"type:varchar(32)"`
 	PendingAbilityCheckDC          int
 	PendingAbilityCheckRequestedAt *time.Time
 	PendingAbilityCheckNotified    bool

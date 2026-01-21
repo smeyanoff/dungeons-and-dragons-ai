@@ -31,8 +31,8 @@ type LocationEventRepository interface {
 
 // GenerateLocationEventRequest запрос на генерацию события для локации
 type GenerateLocationEventRequest struct {
-	WorldID     uint
-	LocationID  uint
+	WorldID      uint
+	LocationID   uint
 	LocationName string
 	IsFirstVisit bool
 }
@@ -41,16 +41,16 @@ type GenerateLocationEventRequest struct {
 type LocationEventType string
 
 const (
-	EventTypeNPC      LocationEventType = "npc"      // Встреча с NPC
-	EventTypeItem     LocationEventType = "item"     // Находка предмета
-	EventTypeTrap     LocationEventType = "trap"     // Ловушка
-	EventTypePuzzle   LocationEventType = "puzzle"   // Загадка
+	EventTypeNPC       LocationEventType = "npc"       // Встреча с NPC
+	EventTypeItem      LocationEventType = "item"      // Находка предмета
+	EventTypeTrap      LocationEventType = "trap"      // Ловушка
+	EventTypePuzzle    LocationEventType = "puzzle"    // Загадка
 	EventTypeEncounter LocationEventType = "encounter" // Случайная встреча/бой
 )
 
 // GenerateLocationEventResponse ответ с сгенерированным событием
 type GenerateLocationEventResponse struct {
-	Event *world.WorldEvent
+	Event       *world.WorldEvent
 	Description string
 }
 
@@ -168,16 +168,16 @@ func (g *LocationEventGenerator) createLocationEvent(
 	}
 
 	event := &world.WorldEvent{
-		WorldID:          req.WorldID,
-		Type:             worldEventType,
-		Status:           world.WorldEventStatusActive,
-		Name:             name,
-		Description:      description,
-		Metadata:         buildLocationEventMetadata(description, options, checks, stakes),
+		WorldID:            req.WorldID,
+		Type:               worldEventType,
+		Status:             world.WorldEventStatusActive,
+		Name:               name,
+		Description:        description,
+		Metadata:           buildLocationEventMetadata(description, options, checks, stakes),
 		RequiredLocationID: &locationID,
-		ActivatedAt:      &now,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ActivatedAt:        &now,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 
 	return event, description

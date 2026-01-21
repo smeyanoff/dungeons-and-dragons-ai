@@ -257,14 +257,14 @@ func (t *CheckStatRequirementsTool) Execute(ctx context.Context, args map[string
 	}
 
 	return map[string]interface{}{
-		"has_requirement":   hasRequirement,
-		"stat_name":         statName,
-		"stat_value":        statValue,
-		"min_required":      minRequired,
-		"difference":        diff,
-		"action_type":       actionType,
+		"has_requirement":    hasRequirement,
+		"stat_name":          statName,
+		"stat_value":         statValue,
+		"min_required":       minRequired,
+		"difference":         diff,
+		"action_type":        actionType,
 		"action_description": actionDesc,
-		"message":           message,
-		"suggestion":        suggestion,
+		"message":            message,
+		"suggestion":         suggestion,
 	}, nil
 }

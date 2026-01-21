@@ -73,11 +73,11 @@ func TestMoveToLocationUseCase_Execute(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		repo        *mockSessionRepoMove
-		req         MoveToLocationRequest
-		wantErr     bool
-		wantLocID   *uint
+		name         string
+		repo         *mockSessionRepoMove
+		req          MoveToLocationRequest
+		wantErr      bool
+		wantLocID    *uint
 		wantContains []string
 	}{
 		{
@@ -93,9 +93,9 @@ func TestMoveToLocationUseCase_Execute(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "inactive session",
-			repo: &mockSessionRepoMove{session: &session.GameSession{ChatID: 123, State: session.StateDone}},
-			req:  MoveToLocationRequest{ChatID: 123, Direction: "north"},
+			name:    "inactive session",
+			repo:    &mockSessionRepoMove{session: &session.GameSession{ChatID: 123, State: session.StateDone}},
+			req:     MoveToLocationRequest{ChatID: 123, Direction: "north"},
 			wantErr: true,
 		},
 		{
@@ -109,49 +109,49 @@ func TestMoveToLocationUseCase_Execute(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "neither ToLocationID nor Direction provided",
-			repo: &mockSessionRepoMove{session: cloneSession(activeSession)},
-			req:  MoveToLocationRequest{ChatID: 123},
+			name:    "neither ToLocationID nor Direction provided",
+			repo:    &mockSessionRepoMove{session: cloneSession(activeSession)},
+			req:     MoveToLocationRequest{ChatID: 123},
 			wantErr: true,
 		},
 		{
-			name: "move by direction (normalized short form)",
-			repo: &mockSessionRepoMove{session: cloneSession(activeSession)},
-			req:  MoveToLocationRequest{ChatID: 123, Direction: "N"},
-			wantErr: false,
-			wantLocID: uintPtr(2),
+			name:         "move by direction (normalized short form)",
+			repo:         &mockSessionRepoMove{session: cloneSession(activeSession)},
+			req:          MoveToLocationRequest{ChatID: 123, Direction: "N"},
+			wantErr:      false,
+			wantLocID:    uintPtr(2),
 			wantContains: []string{"🧭", "Town", "Forest", "Forest desc"},
 		},
 		{
-			name: "move by ToLocationID",
-			repo: &mockSessionRepoMove{session: cloneSession(activeSession)},
-			req:  MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(2)},
-			wantErr: false,
-			wantLocID: uintPtr(2),
+			name:         "move by ToLocationID",
+			repo:         &mockSessionRepoMove{session: cloneSession(activeSession)},
+			req:          MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(2)},
+			wantErr:      false,
+			wantLocID:    uintPtr(2),
 			wantContains: []string{"🧭", "Town", "Forest"},
 		},
 		{
-			name: "direction not found -> error",
-			repo: &mockSessionRepoMove{session: cloneSession(activeSession)},
-			req:  MoveToLocationRequest{ChatID: 123, Direction: "west"},
+			name:    "direction not found -> error",
+			repo:    &mockSessionRepoMove{session: cloneSession(activeSession)},
+			req:     MoveToLocationRequest{ChatID: 123, Direction: "west"},
 			wantErr: true,
 		},
 		{
-			name: "target exists but not reachable -> error",
-			repo: &mockSessionRepoMove{session: cloneSession(activeSession)},
-			req:  MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(3)}, // Lake exists but no edge from Town
+			name:    "target exists but not reachable -> error",
+			repo:    &mockSessionRepoMove{session: cloneSession(activeSession)},
+			req:     MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(3)}, // Lake exists but no edge from Town
 			wantErr: true,
 		},
 		{
-			name: "target not found in world -> error",
-			repo: &mockSessionRepoMove{session: cloneSession(activeSession)},
-			req:  MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(999)},
+			name:    "target not found in world -> error",
+			repo:    &mockSessionRepoMove{session: cloneSession(activeSession)},
+			req:     MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(999)},
 			wantErr: true,
 		},
 		{
-			name: "save error is returned on final save",
-			repo: &mockSessionRepoMove{session: cloneSession(activeSession), saveErr: errors.New("write failed")},
-			req:  MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(2)},
+			name:    "save error is returned on final save",
+			repo:    &mockSessionRepoMove{session: cloneSession(activeSession), saveErr: errors.New("write failed")},
+			req:     MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(2)},
 			wantErr: true,
 		},
 		{
@@ -161,13 +161,13 @@ func TestMoveToLocationUseCase_Execute(t *testing.T) {
 				s.CurrentLocationID = nil
 				return s
 			}()},
-			req:  MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(2)},
-			wantErr: false,
+			req:       MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(2)},
+			wantErr:   false,
 			wantLocID: uintPtr(2),
 		},
 	}
 
-	uc := NewMoveToLocationUseCase(nil)
+	uc := NewMoveToLocationUseCase(nil, nil, nil, nil)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			uc.sessionRepo = tt.repo
@@ -215,4 +215,3 @@ func cloneSession(s *session.GameSession) *session.GameSession {
 	}
 	return &cp
 }
-

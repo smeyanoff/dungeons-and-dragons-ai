@@ -49,17 +49,17 @@ func TestRollDiceTool_Parameters(t *testing.T) {
 func TestRollDiceTool_Execute(t *testing.T) {
 	tests := []struct {
 		name          string
-		sessionID    uint
+		sessionID     uint
 		args          map[string]interface{}
 		setupMock     func(*mockDiceEventRepository)
 		expectedError bool
 		validate      func(*testing.T, interface{})
 	}{
 		{
-			name:       "successful dice roll with d20",
-			sessionID:  123,
-			args:       map[string]interface{}{"dice_expression": "d20"},
-			setupMock:  func(repo *mockDiceEventRepository) {},
+			name:          "successful dice roll with d20",
+			sessionID:     123,
+			args:          map[string]interface{}{"dice_expression": "d20"},
+			setupMock:     func(repo *mockDiceEventRepository) {},
 			expectedError: false,
 			validate: func(t *testing.T, result interface{}) {
 				resultMap, ok := result.(map[string]interface{})
@@ -81,10 +81,10 @@ func TestRollDiceTool_Execute(t *testing.T) {
 			},
 		},
 		{
-			name:       "successful dice roll with default d20 (no expression)",
-			sessionID:  123,
-			args:       map[string]interface{}{},
-			setupMock:  func(repo *mockDiceEventRepository) {},
+			name:          "successful dice roll with default d20 (no expression)",
+			sessionID:     123,
+			args:          map[string]interface{}{},
+			setupMock:     func(repo *mockDiceEventRepository) {},
 			expectedError: false,
 			validate: func(t *testing.T, result interface{}) {
 				resultMap, ok := result.(map[string]interface{})
@@ -98,10 +98,10 @@ func TestRollDiceTool_Execute(t *testing.T) {
 			},
 		},
 		{
-			name:       "successful dice roll with 2d6+3",
-			sessionID:  123,
-			args:       map[string]interface{}{"dice_expression": "2d6+3"},
-			setupMock:  func(repo *mockDiceEventRepository) {},
+			name:          "successful dice roll with 2d6+3",
+			sessionID:     123,
+			args:          map[string]interface{}{"dice_expression": "2d6+3"},
+			setupMock:     func(repo *mockDiceEventRepository) {},
 			expectedError: false,
 			validate: func(t *testing.T, result interface{}) {
 				resultMap, ok := result.(map[string]interface{})
@@ -115,9 +115,9 @@ func TestRollDiceTool_Execute(t *testing.T) {
 			},
 		},
 		{
-			name:       "saves event to repository",
-			sessionID:  123,
-			args:       map[string]interface{}{"dice_expression": "d20"},
+			name:      "saves event to repository",
+			sessionID: 123,
+			args:      map[string]interface{}{"dice_expression": "d20"},
 			setupMock: func(repo *mockDiceEventRepository) {
 				repo.saveFunc = func(ctx context.Context, e *event.StoryEvent) error {
 					if e.GameSessionID != 123 {
@@ -135,9 +135,9 @@ func TestRollDiceTool_Execute(t *testing.T) {
 			expectedError: false,
 		},
 		{
-			name:       "handles repository save error gracefully",
-			sessionID:  123,
-			args:       map[string]interface{}{"dice_expression": "d20"},
+			name:      "handles repository save error gracefully",
+			sessionID: 123,
+			args:      map[string]interface{}{"dice_expression": "d20"},
 			setupMock: func(repo *mockDiceEventRepository) {
 				repo.saveFunc = func(ctx context.Context, e *event.StoryEvent) error {
 					return errors.New("database error")
@@ -146,17 +146,17 @@ func TestRollDiceTool_Execute(t *testing.T) {
 			expectedError: false, // Ошибка сохранения не должна прерывать выполнение
 		},
 		{
-			name:       "invalid dice expression",
-			sessionID:  123,
-			args:       map[string]interface{}{"dice_expression": "invalid"},
-			setupMock:  func(repo *mockDiceEventRepository) {},
+			name:          "invalid dice expression",
+			sessionID:     123,
+			args:          map[string]interface{}{"dice_expression": "invalid"},
+			setupMock:     func(repo *mockDiceEventRepository) {},
 			expectedError: true,
 		},
 		{
-			name:       "works without event repository",
-			sessionID:  123,
-			args:       map[string]interface{}{"dice_expression": "d20"},
-			setupMock:  nil, // nil repository
+			name:          "works without event repository",
+			sessionID:     123,
+			args:          map[string]interface{}{"dice_expression": "d20"},
+			setupMock:     nil, // nil repository
 			expectedError: false,
 			validate: func(t *testing.T, result interface{}) {
 				resultMap, ok := result.(map[string]interface{})

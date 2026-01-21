@@ -34,9 +34,9 @@ func (m *mockGetDailyQuestsSessionRepo) Delete(ctx context.Context, chatID int64
 
 // Mock Daily Quest Repository
 type mockGetDailyQuestsDailyQuestRepo struct {
-	getTodayQuestsFunc   func(ctx context.Context) ([]*quest.DailyQuest, error)
+	getTodayQuestsFunc    func(ctx context.Context) ([]*quest.DailyQuest, error)
 	getPlayerProgressFunc func(ctx context.Context, playerID uint, date time.Time) ([]*quest.DailyQuestProgress, error)
-	getStreakFunc        func(ctx context.Context, playerID uint) (*quest.DailyQuestStreak, error)
+	getStreakFunc         func(ctx context.Context, playerID uint) (*quest.DailyQuestStreak, error)
 }
 
 func (m *mockGetDailyQuestsDailyQuestRepo) GetTodayQuests(ctx context.Context) ([]*quest.DailyQuest, error) {

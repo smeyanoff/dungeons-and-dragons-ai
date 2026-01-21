@@ -13,9 +13,9 @@ import (
 
 // GenerateImageRequest представляет запрос на генерацию изображения
 type GenerateImageRequest struct {
-	Model      string    `json:"model"`                // Имя модели
-	Messages   []Message `json:"messages"`             // Массив сообщений с промптом для генерации
-	FunctionCall string  `json:"function_call"`        // "auto" для активации text2image функции
+	Model        string    `json:"model"`         // Имя модели
+	Messages     []Message `json:"messages"`      // Массив сообщений с промптом для генерации
+	FunctionCall string    `json:"function_call"` // "auto" для активации text2image функции
 }
 
 // GenerateImageResponse представляет ответ на запрос генерации изображения
@@ -52,8 +52,8 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 	}
 
 	reqBody := GenerateImageRequest{
-		Model:       model,
-		Messages:    messages,
+		Model:        model,
+		Messages:     messages,
 		FunctionCall: "auto", // Активируем text2image функцию
 	}
 

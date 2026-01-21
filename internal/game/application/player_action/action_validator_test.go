@@ -40,12 +40,12 @@ func TestActionValidator_Validate_DeadCharacter(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusDead,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  10,
+			Strength:     10,
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -84,12 +84,12 @@ func TestActionValidator_Validate_ItemUsage_HasItem(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  10,
+			Strength:     10,
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -124,12 +124,12 @@ func TestActionValidator_Validate_ItemUsage_NoItem(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  10,
+			Strength:     10,
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -166,12 +166,12 @@ func TestActionValidator_Validate_ItemUsage_EmptyInventory(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  10,
+			Strength:     10,
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -208,12 +208,12 @@ func TestActionValidator_Validate_StrengthRequirement_Insufficient(t *testing.T)
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   8, // Меньше 10
-			Dexterity:  10,
+			Strength:     8, // Меньше 10
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -249,12 +249,12 @@ func TestActionValidator_Validate_StrengthRequirement_Sufficient(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   15, // Больше 10
-			Dexterity:  10,
+			Strength:     15, // Больше 10
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -290,12 +290,12 @@ func TestActionValidator_Validate_DexterityRequirement_Insufficient(t *testing.T
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  8, // Меньше 10
+			Strength:     10,
+			Dexterity:    8, // Меньше 10
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -331,12 +331,12 @@ func TestActionValidator_Validate_DexterityRequirement_Sufficient(t *testing.T) 
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  15, // Больше 10
+			Strength:     10,
+			Dexterity:    15, // Больше 10
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -372,12 +372,12 @@ func TestActionValidator_Validate_InventoryRepoError(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  10,
+			Strength:     10,
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -414,12 +414,12 @@ func TestActionValidator_Validate_NoInventoryRepo(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  10,
+			Strength:     10,
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -455,12 +455,12 @@ func TestActionValidator_Validate_ItemExtraction(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  10,
+			Strength:     10,
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 
@@ -510,12 +510,12 @@ func TestActionValidator_Validate_NormalMessageHandling(t *testing.T) {
 		Name:   "Test",
 		Status: character.StatusAlive,
 		Stats: character.Stats{
-			Strength:   10,
-			Dexterity:  10,
+			Strength:     10,
+			Dexterity:    10,
 			Constitution: 10,
 			Intelligence: 10,
-			Wisdom:     10,
-			Charisma:   10,
+			Wisdom:       10,
+			Charisma:     10,
 		},
 	}
 

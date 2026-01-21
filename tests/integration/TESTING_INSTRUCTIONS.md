@@ -39,9 +39,14 @@
 
 3. **Запустите тесты игрового процесса:**
    
-   **На хосте (требует GIGACHAT_SKIP_TLS_VERIFY=true):**
+   **Стабильный Telegram e2e без реального LLM (рекомендуется для CI/быстрых прогонов):**
    ```bash
-   make test-integration-gameplay
+   make test-telegram-stub
+   ```
+
+   **На хосте с реальным LLM (требует GIGACHAT_SKIP_TLS_VERIFY=true):**
+   ```bash
+   make test-telegram-real
    ```
    
    **Внутри контейнера (где сертификаты уже настроены):**
@@ -49,6 +54,17 @@
    # Тесты будут использовать сертификаты из контейнера
    docker exec -it dnd-bot-prod sh -c "cd /root && go test -v -timeout 60m ./tests/integration/... -run 'TestTelegramGameplay'"
    ```
+
+## Rate limit для реального LLM (важно)
+
+Интеграционные тесты автоматически ограничивают частоту обращений к LLM, чтобы не DDOSить модель.
+
+- По умолчанию: **2500ms** между LLM запросами
+- Настройка:
+
+```bash
+LLM_TEST_MIN_DELAY_MS=4000 make test-telegram-real
+```
 
 ## Что тестируется
 
@@ -85,9 +101,8 @@
 
 ## Время выполнения
 
-- Полный набор тестов может занять **30-60 минут** из-за реальных запросов к LLM
-- Каждый тест делает реальные запросы к GigaChat API
-- Тесты проверяют не только функциональность, но и качество ответов LLM
+- `make test-telegram-stub`: обычно **быстро** (без LLM).
+- `make test-telegram-real`: может занять **30-60 минут** из-за реальных запросов к LLM.
 
 ## Troubleshooting
 

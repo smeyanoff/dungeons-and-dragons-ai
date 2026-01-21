@@ -30,8 +30,9 @@ type LLMLog struct {
 	Error      *string `gorm:"type:text" json:"error,omitempty"` // Ошибка (если была)
 
 	// Дополнительная информация
-	HasTools   bool    `json:"has_tools"`                              // Использовались ли инструменты
-	ToolsCalls *string `gorm:"type:text" json:"tools_calls,omitempty"` // Вызовы инструментов (JSON)
+	HasTools        bool    `json:"has_tools"`                              // Использовались ли инструменты
+	ToolsCalls      *string `gorm:"type:text" json:"tools_calls,omitempty"` // Вызовы инструментов (JSON)
+	ToolsCallsCount *int    `json:"tools_calls_count,omitempty"`            // Количество вызовов инструментов
 }
 
 // TableName указывает имя таблицы в БД

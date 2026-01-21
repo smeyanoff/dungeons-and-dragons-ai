@@ -11,10 +11,10 @@ import (
 )
 
 type CompleteDailyQuestUseCase struct {
-	sessionRepo      session.Repository
-	dailyQuestRepo   DailyQuestRepository
-	playerRepo       PlayerRepository
-	addExperienceUC  *characterapp.AddExperienceUseCase
+	sessionRepo     session.Repository
+	dailyQuestRepo  DailyQuestRepository
+	playerRepo      PlayerRepository
+	addExperienceUC *characterapp.AddExperienceUseCase
 }
 
 func NewCompleteDailyQuestUseCase(
@@ -158,7 +158,7 @@ func (uc *CompleteDailyQuestUseCase) updateStreak(ctx context.Context, playerID 
 	if allCompleted {
 		lastDate := streak.LastDate
 		startOfDay := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-		
+
 		// Проверяем, был ли стрик вчера (последовательный день)
 		if lastDate.IsZero() {
 			// Первый день стрика
@@ -167,7 +167,7 @@ func (uc *CompleteDailyQuestUseCase) updateStreak(ctx context.Context, playerID 
 		} else {
 			lastStartOfDay := time.Date(lastDate.Year(), lastDate.Month(), lastDate.Day(), 0, 0, 0, 0, lastDate.Location())
 			daysDiff := int(startOfDay.Sub(lastStartOfDay).Hours() / 24)
-			
+
 			if daysDiff == 1 {
 				// Последовательный день
 				streak.StreakDays++

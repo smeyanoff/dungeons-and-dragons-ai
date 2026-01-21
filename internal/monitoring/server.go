@@ -29,6 +29,7 @@ type LLMLogRepository interface {
 	GetByDateRange(ctx context.Context, from, to time.Time, limit int) ([]*llm_log.LLMLog, error)
 	GetWithErrors(ctx context.Context, limit int) ([]*llm_log.LLMLog, error)
 	GetStats(ctx context.Context, from, to time.Time) (*LLMStats, error)
+	GetByFilters(ctx context.Context, filters persistence.LLMLogFilters, limit int) ([]*llm_log.LLMLog, error)
 }
 
 // LLMStats статистика использования LLM (использует тип из persistence)
@@ -39,26 +40,26 @@ func NewServer(addr string, logRepo LLMLogRepository) *Server {
 	s := &Server{
 		logRepo: logRepo,
 	}
-	
+
 	mux := http.NewServeMux()
-	
+
 	// Статические страницы
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/log/", s.handleLogDetail)
 	mux.HandleFunc("/errors", s.handleErrors)
 	mux.HandleFunc("/stats", s.handleStats)
-	
+
 	// API endpoints
 	mux.HandleFunc("/api/logs", s.handleAPILogs)
 	mux.HandleFunc("/api/log/", s.handleAPILogDetail)
 	mux.HandleFunc("/api/stats", s.handleAPIStats)
-	
+
 	s.httpServer = &http.Server{
 		Addr:    addr,
 		Handler: mux,
 	}
-	
+
 	return s
 }
 
@@ -81,7 +82,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	
+
 	tmpl := `<!DOCTYPE html>
 <html>
 <head>
@@ -119,12 +120,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 				<div class="stat-label">Total Errors</div>
 			</div>
 			<div class="stat-card">
+				<div class="stat-value" id="total-problems">-</div>
+				<div class="stat-label">Total Problems</div>
+			</div>
+			<div class="stat-card">
 				<div class="stat-value" id="avg-duration">-</div>
 				<div class="stat-label">Avg Duration (ms)</div>
 			</div>
 			<div class="stat-card">
 				<div class="stat-value" id="total-tokens">-</div>
 				<div class="stat-label">Total Tokens</div>
+			</div>
+			<div class="stat-card">
+				<div class="stat-value" id="total-tool-calls">-</div>
+				<div class="stat-label">Tool Calls</div>
 			</div>
 		</div>
 	</div>
@@ -142,15 +151,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 					console.log('Stats loaded:', data);
 					document.getElementById('total-requests').textContent = data.total_requests || 0;
 					document.getElementById('total-errors').textContent = data.total_errors || 0;
+					document.getElementById('total-problems').textContent = data.total_problems || data.total_errors || 0;
 					document.getElementById('avg-duration').textContent = data.average_duration_ms || 0;
 					document.getElementById('total-tokens').textContent = data.total_tokens || 0;
+					document.getElementById('total-tool-calls').textContent = data.total_tool_calls || 0;
 				})
 				.catch(err => {
 					console.error('Failed to load stats:', err);
 					document.getElementById('total-requests').textContent = 'Error';
 					document.getElementById('total-errors').textContent = 'Error';
+					document.getElementById('total-problems').textContent = 'Error';
 					document.getElementById('avg-duration').textContent = 'Error';
 					document.getElementById('total-tokens').textContent = 'Error';
+					document.getElementById('total-tool-calls').textContent = 'Error';
 				});
 		}
 		// Загружаем статистику при загрузке страницы
@@ -160,7 +173,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	</script>
 </body>
 </html>`
-	
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, tmpl)
@@ -169,7 +182,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // handleLogs обрабатывает страницу со списком логов
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	limitStr := r.URL.Query().Get("limit")
 	limit := 100
 	if limitStr != "" {
@@ -177,57 +190,82 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 			limit = l
 		}
 	}
-	
+
 	chatIDStr := r.URL.Query().Get("chat_id")
+	tgUserIDStr := r.URL.Query().Get("tg_user_id")
+	sessionIDStr := r.URL.Query().Get("session_id")
 	var logs []*llm_log.LLMLog
 	var err error
-	
+	filters := persistence.LLMLogFilters{}
+	hasFilters := false
 	if chatIDStr != "" {
-		chatID, parseErr := strconv.ParseInt(chatIDStr, 10, 64)
-		if parseErr == nil {
-			logs, err = s.logRepo.GetByChatID(ctx, chatID, limit)
+		if chatID, parseErr := strconv.ParseInt(chatIDStr, 10, 64); parseErr == nil {
+			filters.ChatID = &chatID
+			hasFilters = true
 		}
+	}
+	if tgUserIDStr != "" {
+		if tgUserID, parseErr := strconv.ParseInt(tgUserIDStr, 10, 64); parseErr == nil {
+			filters.TgUserID = &tgUserID
+			hasFilters = true
+		}
+	}
+	if sessionIDStr != "" {
+		if sessionID, parseErr := strconv.ParseUint(sessionIDStr, 10, 32); parseErr == nil {
+			sessionIDUint := uint(sessionID)
+			filters.SessionID = &sessionIDUint
+			hasFilters = true
+		}
+	}
+
+	if hasFilters {
+		logs, err = s.logRepo.GetByFilters(ctx, filters, limit)
 	} else {
 		logs, err = s.logRepo.GetRecent(ctx, limit)
 	}
-	
+
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get logs: %v", err), http.StatusInternalServerError)
 		return
 	}
-	
-	renderLogsPage(w, logs, chatIDStr)
+
+	renderLogsPage(w, logs, logsPageFilters{
+		ChatID:    chatIDStr,
+		TgUserID:  tgUserIDStr,
+		SessionID: sessionIDStr,
+		Limit:     limit,
+	})
 }
 
 // handleLogDetail обрабатывает страницу деталей лога
 func (s *Server) handleLogDetail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	idStr := r.URL.Path[len("/log/"):]
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
 		http.Error(w, "Invalid log ID", http.StatusBadRequest)
 		return
 	}
-	
+
 	logEntry, err := s.logRepo.GetByID(ctx, uint(id))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get log: %v", err), http.StatusInternalServerError)
 		return
 	}
-	
+
 	if logEntry == nil {
 		http.NotFound(w, r)
 		return
 	}
-	
+
 	renderLogDetailPage(w, logEntry)
 }
 
 // handleErrors обрабатывает страницу с ошибками
 func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
 	if limitStr != "" {
@@ -235,26 +273,26 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 			limit = l
 		}
 	}
-	
+
 	logs, err := s.logRepo.GetWithErrors(ctx, limit)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get error logs: %v", err), http.StatusInternalServerError)
 		return
 	}
-	
-	renderLogsPage(w, logs, "")
+
+	renderLogsPage(w, logs, logsPageFilters{Limit: limit})
 }
 
 // handleStats обрабатывает страницу статистики
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
-	
+
 	from := time.Now().Add(-7 * 24 * time.Hour)
 	to := time.Now()
-	
+
 	if fromStr != "" {
 		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
 			from = t
@@ -275,7 +313,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			)
 		}
 	}
-	
+
 	stats, err := s.logRepo.GetStats(ctx, from, to)
 	if err != nil {
 		logger.Error("Failed to get stats in handleStats",
@@ -284,14 +322,14 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to get stats: %v", err), http.StatusInternalServerError)
 		return
 	}
-	
+
 	renderStatsPage(w, stats, from, to)
 }
 
 // handleAPILogs обрабатывает API запрос для получения логов
 func (s *Server) handleAPILogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	limitStr := r.URL.Query().Get("limit")
 	limit := 100
 	if limitStr != "" {
@@ -299,63 +337,82 @@ func (s *Server) handleAPILogs(w http.ResponseWriter, r *http.Request) {
 			limit = l
 		}
 	}
-	
+
 	chatIDStr := r.URL.Query().Get("chat_id")
+	tgUserIDStr := r.URL.Query().Get("tg_user_id")
+	sessionIDStr := r.URL.Query().Get("session_id")
 	var logs []*llm_log.LLMLog
 	var err error
-	
+	filters := persistence.LLMLogFilters{}
+	hasFilters := false
 	if chatIDStr != "" {
-		chatID, parseErr := strconv.ParseInt(chatIDStr, 10, 64)
-		if parseErr == nil {
-			logs, err = s.logRepo.GetByChatID(ctx, chatID, limit)
+		if chatID, parseErr := strconv.ParseInt(chatIDStr, 10, 64); parseErr == nil {
+			filters.ChatID = &chatID
+			hasFilters = true
 		}
+	}
+	if tgUserIDStr != "" {
+		if tgUserID, parseErr := strconv.ParseInt(tgUserIDStr, 10, 64); parseErr == nil {
+			filters.TgUserID = &tgUserID
+			hasFilters = true
+		}
+	}
+	if sessionIDStr != "" {
+		if sessionID, parseErr := strconv.ParseUint(sessionIDStr, 10, 32); parseErr == nil {
+			sessionIDUint := uint(sessionID)
+			filters.SessionID = &sessionIDUint
+			hasFilters = true
+		}
+	}
+	if hasFilters {
+		logs, err = s.logRepo.GetByFilters(ctx, filters, limit)
 	} else {
 		logs, err = s.logRepo.GetRecent(ctx, limit)
 	}
-	
+
 	if err != nil {
 		respondJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get logs: %v", err))
 		return
 	}
-	
+
 	respondJSON(w, http.StatusOK, logs)
 }
 
 // handleAPILogDetail обрабатывает API запрос для получения деталей лога
 func (s *Server) handleAPILogDetail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	idStr := r.URL.Path[len("/api/log/"):]
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
 		respondJSONError(w, http.StatusBadRequest, "Invalid log ID")
 		return
 	}
-	
+
 	logEntry, err := s.logRepo.GetByID(ctx, uint(id))
 	if err != nil {
 		respondJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get log: %v", err))
 		return
 	}
-	
+
 	if logEntry == nil {
 		respondJSONError(w, http.StatusNotFound, "Log not found")
 		return
 	}
-	
+
 	respondJSON(w, http.StatusOK, logEntry)
 }
 
 // handleAPIStats обрабатывает API запрос для получения статистики
 func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	
+
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
-	
+
 	from := time.Now().Add(-7 * 24 * time.Hour)
 	to := time.Now()
-	
+
 	if fromStr != "" {
 		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
 			from = t
@@ -376,7 +433,7 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 			)
 		}
 	}
-	
+
 	stats, err := s.logRepo.GetStats(ctx, from, to)
 	if err != nil {
 		logger.Error("Failed to get stats",
@@ -385,7 +442,7 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 		respondJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get stats: %v", err))
 		return
 	}
-	
+
 	if stats == nil {
 		// Возвращаем пустую статистику если данных нет
 		stats = &LLMStats{
@@ -393,9 +450,11 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 			TotalErrors:       0,
 			AverageDurationMs: 0,
 			TotalTokens:       0,
+			TotalToolCalls:    0,
+			TotalProblems:     0,
 		}
 	}
-	
+
 	respondJSON(w, http.StatusOK, stats)
 }
 
@@ -411,7 +470,14 @@ func respondJSONError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]string{"error": message})
 }
 
-func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filterChatID string) {
+type logsPageFilters struct {
+	ChatID    string
+	TgUserID  string
+	SessionID string
+	Limit     int
+}
+
+func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filters logsPageFilters) {
 	tmpl := template.Must(template.New("logs").Funcs(template.FuncMap{
 		"truncate": func(s string, maxLen int) string {
 			if len(s) <= maxLen {
@@ -529,6 +595,13 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filterChatID 
 			<a href="/errors">Errors</a>
 			<a href="/stats">Statistics</a>
 		</div>
+		<form method="get" action="/logs" style="margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+			<input type="text" name="chat_id" placeholder="Chat ID" value="{{.Filters.ChatID}}">
+			<input type="text" name="tg_user_id" placeholder="TG User ID" value="{{.Filters.TgUserID}}">
+			<input type="text" name="session_id" placeholder="Session ID" value="{{.Filters.SessionID}}">
+			<input type="number" name="limit" placeholder="Limit" min="1" max="1000" value="{{.Filters.Limit}}">
+			<button type="submit" style="padding: 8px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Filter</button>
+		</form>
 		<table>
 			<thead>
 				<tr>
@@ -536,10 +609,13 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filterChatID 
 					<th style="width: 150px;">Time</th>
 					<th style="width: 120px;">Chat ID</th>
 					<th style="width: 120px;">User ID</th>
+					<th style="width: 120px;">Session ID</th>
+					<th style="width: 120px;">Branch</th>
 					<th style="width: 100px;">Model</th>
 					<th style="width: 500px;">Prompt</th>
 					<th style="width: 500px;">Response</th>
 					<th style="width: 100px;">Duration (ms)</th>
+					<th style="width: 80px;">Tokens</th>
 					<th style="width: 80px;">Status</th>
 					<th style="width: 80px;">Tools</th>
 				</tr>
@@ -551,6 +627,14 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filterChatID 
 					<td class="time">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
 					<td>{{.ChatID}}</td>
 					<td>{{.TgUserID}}</td>
+					<td>{{if .SessionID}}{{.SessionID}}{{else}}-{{end}}</td>
+					<td>
+						{{if .SessionID}}
+						<a href="/logs?chat_id={{.ChatID}}&session_id={{.SessionID}}">Branch</a>
+						{{else}}
+						<a href="/logs?chat_id={{.ChatID}}">Chat</a>
+						{{end}}
+					</td>
 					<td>{{.Model}}</td>
 					<td class="prompt" id="prompt-{{.ID}}" onclick="toggleExpand('prompt-{{.ID}}', 'prompt-modal-{{.ID}}')">
 						{{truncate .Prompt 500}}
@@ -579,6 +663,7 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filterChatID 
 						</div>
 					</td>
 					<td>{{.DurationMs}}</td>
+					<td>{{if .TokensUsed}}{{.TokensUsed}}{{else}}-{{end}}</td>
 					<td>
 						{{if .Error}}
 						<span class="badge badge-error">Error</span>
@@ -587,7 +672,9 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filterChatID 
 						{{end}}
 					</td>
 					<td>
-						{{if .HasTools}}
+						{{if .ToolsCallsCount}}
+						<span class="badge badge-tools">{{.ToolsCallsCount}}</span>
+						{{else if .HasTools}}
 						<span class="badge badge-tools">Yes</span>
 						{{else}}
 						-
@@ -622,11 +709,12 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filterChatID 
 </body>
 </html>
 	`))
-	
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	tmpl.Execute(w, map[string]interface{}{
-		"Logs": logs,
+		"Logs":    logs,
+		"Filters": filters,
 	})
 }
 
@@ -686,6 +774,16 @@ func renderLogDetailPage(w http.ResponseWriter, logEntry *llm_log.LLMLog) {
 			<div class="meta-field">
 				<div class="meta-label">Session ID</div>
 				<div class="meta-value">{{if .SessionID}}{{.SessionID}}{{else}}-{{end}}</div>
+			</div>
+			<div class="meta-field">
+				<div class="meta-label">Request Branch</div>
+				<div class="meta-value">
+					{{if .SessionID}}
+					<a href="/logs?chat_id={{.ChatID}}&session_id={{.SessionID}}">View branch</a>
+					{{else}}
+					<a href="/logs?chat_id={{.ChatID}}">View chat logs</a>
+					{{end}}
+				</div>
 			</div>
 			<div class="meta-field">
 				<div class="meta-label">Model</div>
@@ -753,7 +851,7 @@ func renderLogDetailPage(w http.ResponseWriter, logEntry *llm_log.LLMLog) {
 </body>
 </html>
 	`))
-	
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	tmpl.Execute(w, logEntry)
@@ -767,9 +865,11 @@ func renderStatsPage(w http.ResponseWriter, stats *LLMStats, from, to time.Time)
 			TotalErrors:       0,
 			AverageDurationMs: 0,
 			TotalTokens:       0,
+			TotalToolCalls:    0,
+			TotalProblems:     0,
 		}
 	}
-	
+
 	tmpl := template.Must(template.New("stats").Parse(`
 <!DOCTYPE html>
 <html>
@@ -812,6 +912,10 @@ func renderStatsPage(w http.ResponseWriter, stats *LLMStats, from, to time.Time)
 				<div class="stat-label">Total Errors</div>
 			</div>
 			<div class="stat-card">
+				<div class="stat-value">{{.Stats.TotalProblems}}</div>
+				<div class="stat-label">Total Problems</div>
+			</div>
+			<div class="stat-card">
 				<div class="stat-value">{{.Stats.AverageDurationMs}}</div>
 				<div class="stat-label">Avg Duration (ms)</div>
 			</div>
@@ -819,12 +923,16 @@ func renderStatsPage(w http.ResponseWriter, stats *LLMStats, from, to time.Time)
 				<div class="stat-value">{{.Stats.TotalTokens}}</div>
 				<div class="stat-label">Total Tokens</div>
 			</div>
+			<div class="stat-card">
+				<div class="stat-value">{{.Stats.TotalToolCalls}}</div>
+				<div class="stat-label">Tool Calls</div>
+			</div>
 		</div>
 	</div>
 </body>
 </html>
 	`))
-	
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	tmpl.Execute(w, map[string]interface{}{

@@ -49,7 +49,7 @@ func (t *CheckCombatStatusTool) Execute(ctx context.Context, args map[string]int
 	logger.Info("CheckCombatStatusTool: executing",
 		logger.Uint("session_id", t.sessionID),
 	)
-	
+
 	activeCombat, err := t.combatRepo.GetActiveBySessionID(ctx, t.sessionID)
 	if err != nil {
 		logger.Error("CheckCombatStatusTool: failed to get combat",
@@ -58,7 +58,7 @@ func (t *CheckCombatStatusTool) Execute(ctx context.Context, args map[string]int
 		)
 		return nil, fmt.Errorf("failed to check combat: %w", err)
 	}
-	
+
 	if activeCombat == nil {
 		logger.Info("CheckCombatStatusTool: no active combat",
 			logger.Uint("session_id", t.sessionID),
@@ -67,7 +67,7 @@ func (t *CheckCombatStatusTool) Execute(ctx context.Context, args map[string]int
 			"active": false,
 		}, nil
 	}
-	
+
 	// Собираем информацию об участниках
 	participants := make([]map[string]interface{}, 0, len(activeCombat.Participants))
 	playerCount := 0
@@ -76,7 +76,7 @@ func (t *CheckCombatStatusTool) Execute(ctx context.Context, args map[string]int
 		participant := map[string]interface{}{
 			"is_player": p.IsPlayer,
 		}
-		
+
 		if p.IsPlayer {
 			playerCount++
 			if p.CharacterID != nil {
@@ -90,18 +90,18 @@ func (t *CheckCombatStatusTool) Execute(ctx context.Context, args map[string]int
 			participant["ac"] = p.MonsterAC
 			participant["attack_bonus"] = p.MonsterAttackBonus
 		}
-		
+
 		participants = append(participants, participant)
 	}
-	
+
 	result := map[string]interface{}{
-		"active":        true,
-		"state":         string(activeCombat.State),
-		"current_turn":  activeCombat.CurrentTurn,
-		"participants":  participants,
-		"turn_count":    len(participants),
+		"active":       true,
+		"state":        string(activeCombat.State),
+		"current_turn": activeCombat.CurrentTurn,
+		"participants": participants,
+		"turn_count":   len(participants),
 	}
-	
+
 	logger.Info("CheckCombatStatusTool: completed successfully",
 		logger.Uint("session_id", t.sessionID),
 		logger.String("combat_state", string(activeCombat.State)),
@@ -110,7 +110,7 @@ func (t *CheckCombatStatusTool) Execute(ctx context.Context, args map[string]int
 		logger.Int("players", playerCount),
 		logger.Int("enemies", enemyCount),
 	)
-	
+
 	return result, nil
 }
 
@@ -218,7 +218,7 @@ func (t *PerformCombatAttackTool) Execute(ctx context.Context, args map[string]i
 			)
 		}
 		return map[string]interface{}{
-			"message": "🎉 Все враги побеждены! Бой окончен.",
+			"message":         "🎉 Все враги побеждены! Бой окончен.",
 			"combat_finished": true,
 		}, nil
 	}
@@ -269,7 +269,7 @@ func (t *PerformCombatAttackTool) Execute(ctx context.Context, args map[string]i
 			)
 		}
 		attackResult["combat_finished"] = true
-		
+
 		// Проверяем, кто победил
 		alivePlayers := 0
 		for _, p := range activeCombat.Participants {
@@ -277,7 +277,7 @@ func (t *PerformCombatAttackTool) Execute(ctx context.Context, args map[string]i
 				alivePlayers++
 			}
 		}
-		
+
 		if alivePlayers > 0 {
 			attackResult["victory"] = true
 			attackResult["message"] = "🎉 Победа! Все враги повержены!"
@@ -315,11 +315,11 @@ func getDamageByClass(class string) string {
 
 // ApplyDamageTool позволяет DM нанести урон игроку или монстру во время боя
 type ApplyDamageTool struct {
-	combatRepo   CombatRepository
-	sessionRepo  GameSessionRepository
-	playerRepo   PlayerRepository
-	sessionID    uint
-	chatID       int64
+	combatRepo  CombatRepository
+	sessionRepo GameSessionRepository
+	playerRepo  PlayerRepository
+	sessionID   uint
+	chatID      int64
 }
 
 // PlayerRepository интерфейс для работы с игроками
@@ -590,7 +590,7 @@ func (t *ApplyDamageTool) Execute(ctx context.Context, args map[string]interface
 			)
 		}
 		combatFinished = true
-		
+
 		// Проверяем, кто победил
 		alivePlayers := 0
 		for _, p := range activeCombat.Participants {
@@ -603,13 +603,13 @@ func (t *ApplyDamageTool) Execute(ctx context.Context, args map[string]interface
 
 	// Формируем результат
 	result := map[string]interface{}{
-		"target_name":   targetDisplayName,
-		"damage":        damage,
-		"old_hp":        oldHP,
-		"new_hp":        newHP,
-		"max_hp":        targetParticipant.GetMaxHP(),
-		"is_dead":       !targetParticipant.IsAlive(),
-		"message":       fmt.Sprintf("💥 %s получил(а) %d урона. HP: %d/%d", targetDisplayName, damage, newHP, targetParticipant.GetMaxHP()),
+		"target_name": targetDisplayName,
+		"damage":      damage,
+		"old_hp":      oldHP,
+		"new_hp":      newHP,
+		"max_hp":      targetParticipant.GetMaxHP(),
+		"is_dead":     !targetParticipant.IsAlive(),
+		"message":     fmt.Sprintf("💥 %s получил(а) %d урона. HP: %d/%d", targetDisplayName, damage, newHP, targetParticipant.GetMaxHP()),
 	}
 
 	if combatFinished {
@@ -887,11 +887,11 @@ func (t *GetBattlefieldStatusTool) formatDetailed(combat *combat.Combat) string 
 
 // PerformEnemyAttackTool позволяет DM выполнить атаку противника во время боя
 type PerformEnemyAttackTool struct {
-	combatRepo   CombatRepository
-	sessionRepo  GameSessionRepository
-	playerRepo   PlayerRepository
-	sessionID    uint
-	chatID       int64
+	combatRepo  CombatRepository
+	sessionRepo GameSessionRepository
+	playerRepo  PlayerRepository
+	sessionID   uint
+	chatID      int64
 }
 
 // NewPerformEnemyAttackTool создает новый инструмент для выполнения атаки противника
@@ -1268,7 +1268,7 @@ func (t *GetCombatParticipantStatsTool) Execute(ctx context.Context, args map[st
 		for i := range activeCombat.Participants {
 			p := &activeCombat.Participants[i]
 			name := p.GetName()
-			
+
 			// Проверяем по имени, ID или порядковому номеру
 			if name == participantID ||
 				participantID == "player" && p.IsPlayer ||
@@ -1314,16 +1314,16 @@ func (t *GetCombatParticipantStatsTool) Execute(ctx context.Context, args map[st
 	}
 
 	result := map[string]interface{}{
-		"participant_id":    participantIndex + 1,
-		"name":              name,
-		"is_player":         isPlayer,
-		"is_alive":          participant.IsAlive(),
-		"hp":                hp,
-		"max_hp":            maxHP,
-		"ac":                ac,
-		"attack_bonus":      attackBonus,
-		"initiative":        initiative,
-		"is_current_turn":   participantIndex == activeCombat.CurrentTurn,
+		"participant_id":  participantIndex + 1,
+		"name":            name,
+		"is_player":       isPlayer,
+		"is_alive":        participant.IsAlive(),
+		"hp":              hp,
+		"max_hp":          maxHP,
+		"ac":              ac,
+		"attack_bonus":    attackBonus,
+		"initiative":      initiative,
+		"is_current_turn": participantIndex == activeCombat.CurrentTurn,
 	}
 
 	logger.Info("GetCombatParticipantStatsTool: completed successfully",
@@ -1521,16 +1521,16 @@ func (t *CompareAttackVsDefenseTool) Execute(ctx context.Context, args map[strin
 	}
 
 	result := map[string]interface{}{
-		"attacker_name":      attackerName,
-		"attacker_ac":        attacker.GetAC(),
+		"attacker_name":         attackerName,
+		"attacker_ac":           attacker.GetAC(),
 		"attacker_attack_bonus": attackerAttackBonus,
-		"target_name":        targetName,
-		"target_ac":          targetAC,
-		"target_hp":          target.GetHP(),
-		"target_max_hp":      target.GetMaxHP(),
-		"min_roll_to_hit":    minRollToHit,
-		"hit_chance_percent": fmt.Sprintf("%.1f%%", hitChance),
-		"comparison":         fmt.Sprintf("Для попадания %s по %s нужно бросить не менее %d на d20 (с учетом бонуса атаки %+d против AC %d)", attackerName, targetName, minRollToHit, attackerAttackBonus, targetAC),
+		"target_name":           targetName,
+		"target_ac":             targetAC,
+		"target_hp":             target.GetHP(),
+		"target_max_hp":         target.GetMaxHP(),
+		"min_roll_to_hit":       minRollToHit,
+		"hit_chance_percent":    fmt.Sprintf("%.1f%%", hitChance),
+		"comparison":            fmt.Sprintf("Для попадания %s по %s нужно бросить не менее %d на d20 (с учетом бонуса атаки %+d против AC %d)", attackerName, targetName, minRollToHit, attackerAttackBonus, targetAC),
 	}
 
 	logger.Info("CompareAttackVsDefenseTool: completed successfully",

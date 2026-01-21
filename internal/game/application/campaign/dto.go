@@ -12,10 +12,10 @@ type QuestDTO struct {
 }
 
 type LocationDTO struct {
-	Name             string              `json:"name"`
-	Description      string              `json:"description"`
-	NPCs             []NPCDTO            `json:"npcs"`
-	Connections      []ConnectionDTO     `json:"connections,omitempty"`
+	Name             string               `json:"name"`
+	Description      string               `json:"description"`
+	NPCs             []NPCDTO             `json:"npcs"`
+	Connections      []ConnectionDTO      `json:"connections,omitempty"`
 	PredefinedChecks []PredefinedCheckDTO `json:"predefined_checks,omitempty"`
 }
 

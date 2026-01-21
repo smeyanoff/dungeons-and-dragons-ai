@@ -22,7 +22,7 @@ func (r *SubscriptionRepository) GetByTgUserID(ctx context.Context, tgUserID int
 	err := r.db.WithContext(ctx).
 		Where("tg_user_id = ?", tgUserID).
 		First(&sub).Error
-	
+
 	if err == gorm.ErrRecordNotFound {
 		// Если подписки нет, создаем бесплатную подписку
 		return r.createFreeSubscription(ctx, tgUserID)
@@ -30,7 +30,7 @@ func (r *SubscriptionRepository) GetByTgUserID(ctx context.Context, tgUserID int
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &sub, nil
 }
 
@@ -38,17 +38,17 @@ func (r *SubscriptionRepository) GetByTgUserID(ctx context.Context, tgUserID int
 func (r *SubscriptionRepository) createFreeSubscription(ctx context.Context, tgUserID int64) (*subscription.Subscription, error) {
 	now := time.Now()
 	sub := &subscription.Subscription{
-		TgUserID: tgUserID,
-		Plan:     subscription.PlanFree,
-		Status:   subscription.StatusActive,
+		TgUserID:  tgUserID,
+		Plan:      subscription.PlanFree,
+		Status:    subscription.StatusActive,
 		StartedAt: &now,
 	}
-	
+
 	err := r.db.WithContext(ctx).Create(sub).Error
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return sub, nil
 }
 
@@ -69,15 +69,15 @@ func (r *SubscriptionRepository) UpdateStatus(ctx context.Context, tgUserID int6
 func (r *SubscriptionRepository) GetActiveSubscriptions(ctx context.Context) ([]*subscription.Subscription, error) {
 	var subs []*subscription.Subscription
 	now := time.Now()
-	
+
 	err := r.db.WithContext(ctx).
 		Where("status = ? AND (expires_at IS NULL OR expires_at > ?)", subscription.StatusActive, now).
 		Find(&subs).Error
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return subs, nil
 }
 
@@ -85,15 +85,15 @@ func (r *SubscriptionRepository) GetActiveSubscriptions(ctx context.Context) ([]
 func (r *SubscriptionRepository) GetExpiredSubscriptions(ctx context.Context) ([]*subscription.Subscription, error) {
 	var subs []*subscription.Subscription
 	now := time.Now()
-	
+
 	err := r.db.WithContext(ctx).
 		Where("status = ? AND expires_at IS NOT NULL AND expires_at <= ?", subscription.StatusActive, now).
 		Find(&subs).Error
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return subs, nil
 }
 

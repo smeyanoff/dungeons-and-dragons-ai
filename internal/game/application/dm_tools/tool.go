@@ -11,13 +11,13 @@ import (
 type Tool interface {
 	// Name возвращает имя инструмента (используется для вызова)
 	Name() string
-	
+
 	// Description возвращает описание инструмента для промпта DM
 	Description() string
-	
+
 	// Parameters возвращает схему параметров в формате JSON Schema
 	Parameters() json.RawMessage
-	
+
 	// Execute выполняет инструмент и возвращает результат
 	Execute(ctx context.Context, args map[string]interface{}) (interface{}, error)
 }
@@ -73,7 +73,7 @@ func (r *ToolRegistry) ExecuteToolCall(ctx context.Context, call ToolCall) ToolR
 	logger.Debug("Executing tool call via registry",
 		logger.String("tool_name", call.Name),
 	)
-	
+
 	tool, ok := r.Get(call.Name)
 	if !ok {
 		logger.Warn("Tool not found in registry",
@@ -86,7 +86,7 @@ func (r *ToolRegistry) ExecuteToolCall(ctx context.Context, call ToolCall) ToolR
 			Error:    "tool not found: " + call.Name,
 		}
 	}
-	
+
 	result, err := tool.Execute(ctx, call.Arguments)
 	if err != nil {
 		logger.Error("Tool execution failed",
@@ -99,11 +99,11 @@ func (r *ToolRegistry) ExecuteToolCall(ctx context.Context, call ToolCall) ToolR
 			Error:    err.Error(),
 		}
 	}
-	
+
 	logger.Debug("Tool execution completed",
 		logger.String("tool_name", call.Name),
 	)
-	
+
 	return ToolResult{
 		ToolName: call.Name,
 		Success:  true,
@@ -113,9 +113,9 @@ func (r *ToolRegistry) ExecuteToolCall(ctx context.Context, call ToolCall) ToolR
 
 // JSONSchemaParam представляет параметр в формате JSON Schema
 type JSONSchemaParam struct {
-	Type        string      `json:"type"`        // "string", "number", "integer", "boolean", "object", "array"
-	Description string      `json:"description"` // Описание параметра
-	Required    bool        `json:"required,omitempty"` // Обязателен ли параметр
+	Type        string        `json:"type"`               // "string", "number", "integer", "boolean", "object", "array"
+	Description string        `json:"description"`        // Описание параметра
+	Required    bool          `json:"required,omitempty"` // Обязателен ли параметр
 	Enum        []interface{} `json:"enum,omitempty"`     // Возможные значения (для enum)
 }
 
@@ -129,7 +129,7 @@ func BuildJSONSchema(properties JSONSchemaProperties, required []string) json.Ra
 		"properties": properties,
 		"required":   required,
 	}
-	
+
 	data, _ := json.Marshal(schema)
 	return json.RawMessage(data)
 }

@@ -17,8 +17,8 @@ type ImageGenerationLimiter interface {
 
 // InMemoryRateLimiter простая реализация лимитера в памяти
 type InMemoryRateLimiter struct {
-	dailyLimit int                    // Лимит на день (5 для Free)
-	records    map[int64][]time.Time  // Записи генераций по userID
+	dailyLimit int                   // Лимит на день (5 для Free)
+	records    map[int64][]time.Time // Записи генераций по userID
 }
 
 // NewInMemoryRateLimiter создает новый InMemoryRateLimiter
@@ -32,7 +32,7 @@ func NewInMemoryRateLimiter(dailyLimit int) *InMemoryRateLimiter {
 // CheckLimit проверяет, можно ли генерировать изображение
 func (r *InMemoryRateLimiter) CheckLimit(ctx context.Context, userID int64) (bool, error) {
 	today := time.Now().Truncate(24 * time.Hour)
-	
+
 	// Получаем записи за сегодня
 	records, exists := r.records[userID]
 	if !exists {
@@ -53,16 +53,16 @@ func (r *InMemoryRateLimiter) CheckLimit(ctx context.Context, userID int64) (boo
 // RecordGeneration записывает факт генерации изображения
 func (r *InMemoryRateLimiter) RecordGeneration(ctx context.Context, userID int64) error {
 	now := time.Now()
-	
+
 	if r.records[userID] == nil {
 		r.records[userID] = []time.Time{}
 	}
-	
+
 	r.records[userID] = append(r.records[userID], now)
-	
+
 	// Очищаем старые записи (старше 7 дней)
 	r.cleanupOldRecords(userID)
-	
+
 	return nil
 }
 
@@ -97,13 +97,13 @@ func (r *InMemoryRateLimiter) GetRemainingQuota(ctx context.Context, userID int6
 func (r *InMemoryRateLimiter) cleanupOldRecords(userID int64) {
 	cutoff := time.Now().AddDate(0, 0, -7)
 	records := r.records[userID]
-	
+
 	filtered := []time.Time{}
 	for _, t := range records {
 		if t.After(cutoff) {
 			filtered = append(filtered, t)
 		}
 	}
-	
+
 	r.records[userID] = filtered
 }

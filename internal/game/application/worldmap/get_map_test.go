@@ -32,11 +32,11 @@ func (m *mockSessionRepository) Delete(ctx context.Context, chatID int64) error 
 
 func TestGetMapUseCase_Execute(t *testing.T) {
 	tests := []struct {
-		name           string
-		chatID         int64
-		setupMocks     func(*mockSessionRepository)
-		expectedError  bool
-		expectedInMap  []string // Строки, которые должны быть в карте
+		name             string
+		chatID           int64
+		setupMocks       func(*mockSessionRepository)
+		expectedError    bool
+		expectedInMap    []string // Строки, которые должны быть в карте
 		expectedNotInMap []string // Строки, которых не должно быть в карте
 	}{
 		{
@@ -175,8 +175,8 @@ func TestGetMapUseCase_Execute(t *testing.T) {
 					return &session.GameSession{
 						ChatID: chatID,
 						World: world.World{
-							ID:       1,
-							Name:     "Test World",
+							ID:        1,
+							Name:      "Test World",
 							TimeOfDay: "evening",
 							Weather:   "rainy",
 							Locations: []world.Location{
@@ -216,8 +216,8 @@ func TestGetMapUseCase_Execute(t *testing.T) {
 					}, nil
 				}
 			},
-			expectedError: false,
-			expectedInMap: []string{"..."},
+			expectedError:    false,
+			expectedInMap:    []string{"..."},
 			expectedNotInMap: []string{strings.Repeat("a", 150)}, // Полное описание не должно быть
 		},
 		{
@@ -232,9 +232,9 @@ func TestGetMapUseCase_Execute(t *testing.T) {
 							Name: "Test World",
 							Locations: []world.Location{
 								{
-									ID:          1,
-									WorldID:     1,
-									Name:        "Location 1",
+									ID:      1,
+									WorldID: 1,
+									Name:    "Location 1",
 									Connections: []world.LocationConnection{
 										{
 											ID:             1,
@@ -264,9 +264,9 @@ func TestGetMapUseCase_Execute(t *testing.T) {
 							Name: "Test World",
 							Locations: []world.Location{
 								{
-									ID:          1,
-									WorldID:     1,
-									Name:        "Center",
+									ID:      1,
+									WorldID: 1,
+									Name:    "Center",
 									Connections: []world.LocationConnection{
 										{ID: 1, FromLocationID: 1, ToLocationID: 2, Direction: "north"},
 										{ID: 2, FromLocationID: 1, ToLocationID: 3, Direction: "south"},
@@ -405,7 +405,7 @@ func TestGetMapUseCase_TranslateWeather(t *testing.T) {
 	uc := NewGetMapUseCase(nil)
 
 	tests := []struct {
-		weather string
+		weather  string
 		expected string
 	}{
 		{"clear", "Ясно"},

@@ -25,7 +25,7 @@ func NewCheckAchievementsUseCase(
 }
 
 type CheckAchievementsRequest struct {
-	PlayerID      uint
+	PlayerID       uint
 	RequirementKey string
 	CurrentValue   int
 }
@@ -37,13 +37,13 @@ type AchievementUnlocked struct {
 
 func (uc *CheckAchievementsUseCase) Execute(ctx context.Context, req CheckAchievementsRequest) ([]*AchievementUnlocked, error) {
 	var unlocked []*AchievementUnlocked
-	
+
 	// Получаем все достижения с указанным ключом требования
 	allAchievements, err := uc.achievementRepo.GetAll(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get achievements: %w", err)
 	}
-	
+
 	// Фильтруем достижения по ключу требования
 	var relevantAchievements []*achievement.Achievement
 	for _, a := range allAchievements {
@@ -51,7 +51,7 @@ func (uc *CheckAchievementsUseCase) Execute(ctx context.Context, req CheckAchiev
 			relevantAchievements = append(relevantAchievements, a)
 		}
 	}
-	
+
 	// Проверяем каждое достижение
 	for _, a := range relevantAchievements {
 		// Проверяем, получено ли уже это достижение
@@ -59,18 +59,18 @@ func (uc *CheckAchievementsUseCase) Execute(ctx context.Context, req CheckAchiev
 		if err != nil {
 			return nil, fmt.Errorf("failed to check player achievement: %w", err)
 		}
-		
+
 		// Если достижение не повторяемое и уже получено, пропускаем
 		if existing != nil && !a.IsRepeatable {
 			continue
 		}
-		
+
 		// Получаем текущий прогресс
 		progress, err := uc.achievementRepo.GetAchievementProgress(ctx, req.PlayerID, a.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get achievement progress: %w", err)
 		}
-		
+
 		// Вычисляем новое значение прогресса
 		// Если прогресс есть, увеличиваем на переданное значение, иначе используем переданное значение
 		newValue := req.CurrentValue
@@ -86,7 +86,7 @@ func (uc *CheckAchievementsUseCase) Execute(ctx context.Context, req CheckAchiev
 				newValue = progress.CurrentValue
 			}
 		}
-		
+
 		// Проверяем, выполнено ли условие с новым значением
 		if a.IsCompleted(newValue) {
 			// Обновляем или создаем прогресс
@@ -101,11 +101,11 @@ func (uc *CheckAchievementsUseCase) Execute(ctx context.Context, req CheckAchiev
 				progress.CurrentValue = newValue
 				progress.IsCompleted = true
 			}
-			
+
 			if err := uc.achievementRepo.SaveAchievementProgress(ctx, progress); err != nil {
 				return nil, fmt.Errorf("failed to save achievement progress: %w", err)
 			}
-			
+
 			// Если достижение еще не получено, создаем его
 			if existing == nil {
 				playerAchievement := &achievement.PlayerAchievement{
@@ -115,11 +115,11 @@ func (uc *CheckAchievementsUseCase) Execute(ctx context.Context, req CheckAchiev
 					EarnedAt:      time.Now(),
 					EarnedCount:   1,
 				}
-				
+
 				if err := uc.achievementRepo.SavePlayerAchievement(ctx, playerAchievement); err != nil {
 					return nil, fmt.Errorf("failed to save player achievement: %w", err)
 				}
-				
+
 				// Формируем сообщение о разблокировке
 				icon := a.Icon
 				if icon == "" {
@@ -129,7 +129,7 @@ func (uc *CheckAchievementsUseCase) Execute(ctx context.Context, req CheckAchiev
 				if a.GoldReward > 0 {
 					message += fmt.Sprintf(", +%d золота", a.GoldReward)
 				}
-				
+
 				unlocked = append(unlocked, &AchievementUnlocked{
 					Achievement: a,
 					Message:     message,
@@ -156,12 +156,12 @@ func (uc *CheckAchievementsUseCase) Execute(ctx context.Context, req CheckAchiev
 				progress.CurrentValue = newValue
 				progress.IsCompleted = false
 			}
-			
+
 			if err := uc.achievementRepo.SaveAchievementProgress(ctx, progress); err != nil {
 				return nil, fmt.Errorf("failed to save achievement progress: %w", err)
 			}
 		}
 	}
-	
+
 	return unlocked, nil
 }

@@ -13,9 +13,9 @@ import (
 
 // mockRatingRepo мок для RatingRepository
 type mockRatingRepo struct {
-	saveFunc              func(ctx context.Context, rating *rating.PlayerRating) error
+	saveFunc                   func(ctx context.Context, rating *rating.PlayerRating) error
 	getByTgUserIDAndMetricFunc func(ctx context.Context, tgUserID int64, metricType rating.RatingMetricType) (*rating.PlayerRating, error)
-	updateRanksFunc       func(ctx context.Context, metricType rating.RatingMetricType) error
+	updateRanksFunc            func(ctx context.Context, metricType rating.RatingMetricType) error
 }
 
 func (m *mockRatingRepo) Save(ctx context.Context, r *rating.PlayerRating) error {
@@ -81,7 +81,7 @@ func (m *mockUpdateRatingPlayerRepo) GetByTgUserIDAndSessionID(ctx context.Conte
 
 // mockAchievementRepo мок для AchievementRepository
 type mockUpdateRatingAchievementRepo struct {
-	getAchievementProgressFunc            func(ctx context.Context, playerID uint, achievementID uint) (*AchievementProgress, error)
+	getAchievementProgressFunc                 func(ctx context.Context, playerID uint, achievementID uint) (*AchievementProgress, error)
 	getAchievementProgressByRequirementKeyFunc func(ctx context.Context, playerID uint, requirementKey string) (int, error)
 }
 
@@ -108,7 +108,7 @@ func TestUpdateRatingUseCase_Execute_Success(t *testing.T) {
 	char, _ := character.NewCharacter("Test", character.ClassFighter, character.RaceHuman, character.Stats{})
 	char.Level = 5
 	char.Experience = 1000
-	
+
 	testPlayer := &player.Player{
 		ID:            1,
 		TgUserID:      tgUserID,

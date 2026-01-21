@@ -28,7 +28,7 @@ func NewGetSpellsUseCase(
 }
 
 type GetSpellsRequest struct {
-	ChatID  int64
+	ChatID   int64
 	TgUserID int64
 }
 
@@ -54,7 +54,7 @@ func (uc *GetSpellsUseCase) Execute(ctx context.Context, req GetSpellsRequest) (
 
 	// Проверяем, является ли персонаж заклинателем
 	if !player.Character.IsSpellcaster() {
-		return fmt.Sprintf("Ваш класс (%s) не использует заклинания. Заклинания доступны для классов: Wizard, Cleric, Ranger.", 
+		return fmt.Sprintf("Ваш класс (%s) не использует заклинания. Заклинания доступны для классов: Wizard, Cleric, Ranger.",
 			player.Character.Class), nil
 	}
 
@@ -77,7 +77,7 @@ func (uc *GetSpellsUseCase) Execute(ctx context.Context, req GetSpellsRequest) (
 	}
 
 	var result strings.Builder
-	result.WriteString(fmt.Sprintf("📜 Заклинания персонажа %s (%s)\n\n", 
+	result.WriteString(fmt.Sprintf("📜 Заклинания персонажа %s (%s)\n\n",
 		player.Character.Name, player.Character.Class))
 
 	// Группируем заклинания по уровню
@@ -105,7 +105,7 @@ func (uc *GetSpellsUseCase) Execute(ctx context.Context, req GetSpellsRequest) (
 			if usedSlots >= maxSlots {
 				slotEmoji = "❌"
 			}
-			result.WriteString(fmt.Sprintf("  %s Уровень %d: %d/%d\n", 
+			result.WriteString(fmt.Sprintf("  %s Уровень %d: %d/%d\n",
 				slotEmoji, i, maxSlots-usedSlots, maxSlots))
 		}
 	}
@@ -141,7 +141,7 @@ func (uc *GetSpellsUseCase) Execute(ctx context.Context, req GetSpellsRequest) (
 			}
 
 			result.WriteString(fmt.Sprintf("  %s %s - %s\n", icon, s.Name, status))
-			
+
 			// Для известных заклинаний показываем краткую информацию
 			if known {
 				result.WriteString(fmt.Sprintf("     %s\n", s.Description))
@@ -151,7 +151,7 @@ func (uc *GetSpellsUseCase) Execute(ctx context.Context, req GetSpellsRequest) (
 				if s.Healing != "" {
 					result.WriteString(fmt.Sprintf("     Лечение: %s\n", s.Healing))
 				}
-				result.WriteString(fmt.Sprintf("     Время каста: %s, Дистанция: %s\n", 
+				result.WriteString(fmt.Sprintf("     Время каста: %s, Дистанция: %s\n",
 					s.CastingTime, s.Range))
 			}
 			result.WriteString("\n")
@@ -159,7 +159,7 @@ func (uc *GetSpellsUseCase) Execute(ctx context.Context, req GetSpellsRequest) (
 	}
 
 	if len(allSpells) == 0 {
-		return fmt.Sprintf("Для вашего класса (%s) пока нет доступных заклинаний.", 
+		return fmt.Sprintf("Для вашего класса (%s) пока нет доступных заклинаний.",
 			player.Character.Class), nil
 	}
 

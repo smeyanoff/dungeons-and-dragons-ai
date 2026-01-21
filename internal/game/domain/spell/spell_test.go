@@ -184,40 +184,40 @@ func TestSpellSlots_GetUsedSlotsByLevel(t *testing.T) {
 
 func TestSpellSlots_UseSpellSlot(t *testing.T) {
 	tests := []struct {
-		name        string
-		slots       *SpellSlots
-		level       int
-		expected    bool
+		name         string
+		slots        *SpellSlots
+		level        int
+		expected     bool
 		expectedUsed int
 	}{
 		{
 			name: "use slot when available",
 			slots: &SpellSlots{
-				Level1:    3,
+				Level1:     3,
 				UsedLevel1: 1,
 			},
-			level:       1,
-			expected:    true,
+			level:        1,
+			expected:     true,
 			expectedUsed: 2,
 		},
 		{
 			name: "cannot use when all slots used",
 			slots: &SpellSlots{
-				Level1:    2,
+				Level1:     2,
 				UsedLevel1: 2,
 			},
-			level:       1,
-			expected:    false,
+			level:        1,
+			expected:     false,
 			expectedUsed: 2,
 		},
 		{
 			name: "use last slot",
 			slots: &SpellSlots{
-				Level1:    1,
+				Level1:     1,
 				UsedLevel1: 0,
 			},
-			level:       1,
-			expected:    true,
+			level:        1,
+			expected:     true,
 			expectedUsed: 1,
 		},
 		{
@@ -225,8 +225,8 @@ func TestSpellSlots_UseSpellSlot(t *testing.T) {
 			slots: &SpellSlots{
 				Level1: 2,
 			},
-			level:       0,
-			expected:    false,
+			level:        0,
+			expected:     false,
 			expectedUsed: 0,
 		},
 	}
@@ -247,13 +247,13 @@ func TestSpellSlots_UseSpellSlot(t *testing.T) {
 
 func TestSpellSlots_RestoreSpellSlots(t *testing.T) {
 	slots := &SpellSlots{
-		Level1:      2,
-		Level2:      3,
-		Level3:      4,
-		UsedLevel1:  2,
-		UsedLevel2:  3,
-		UsedLevel3:  1,
-		UsedLevel4:  1,
+		Level1:     2,
+		Level2:     3,
+		Level3:     4,
+		UsedLevel1: 2,
+		UsedLevel2: 3,
+		UsedLevel3: 1,
+		UsedLevel4: 1,
 	}
 
 	slots.RestoreSpellSlots()

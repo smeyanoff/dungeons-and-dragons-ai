@@ -250,6 +250,30 @@ func extractFirstCallbackData(replyMarkup string) (string, bool) {
 	return "", false
 }
 
+func findToolLeak(calls []tgCapturedCall, chatID int64) string {
+	for _, call := range calls {
+		if call.ChatID != chatID {
+			continue
+		}
+		if call.Method != "sendMessage" && call.Method != "editMessageText" {
+			continue
+		}
+		text := strings.TrimSpace(call.Text)
+		if text == "" || text == "🤔 Думаю..." {
+			continue
+		}
+		if strings.Contains(text, "<tool_call") ||
+			strings.Contains(text, "request_ability_check") ||
+			strings.Contains(text, "evaluate_check") ||
+			strings.Contains(text, "\"tool_calls\"") ||
+			strings.Contains(text, "tool_call") ||
+			strings.Contains(text, "already_checked") {
+			return text
+		}
+	}
+	return ""
+}
+
 // TestTelegramBotSimulation_UserJourney прогоняет основной пользовательский сценарий "как в Telegram":
 // команды, сообщения игрока, callbacks (навигация по карте).
 func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
@@ -273,7 +297,8 @@ func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
 	// Repos for bot-only features
 	combatRepo := persistence.NewCombatRepository(cfg.db)
 	feedbackRepo := persistence.NewFeedbackRepository(cfg.db)
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(cfg.sessionRepo)
+	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(cfg.sessionRepo, worldEventRepo, nil, nil)
 
 	// IMPORTANT: to avoid extra (costly) model calls, we pass generateImageUC=nil and indexDocUC=nil in bot.
 	bot, err := telegrambot.NewBotWithAPIEndpoint(
@@ -335,6 +360,15 @@ func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
 		// Это критично для /map + navigation callbacks.
 		problems = append(problems, "После /newgame не установлена CurrentLocationID (навигация по карте может не работать)")
 	}
+	hasConnections := false
+	if gs != nil {
+		for _, loc := range gs.World.Locations {
+			if len(loc.Connections) > 0 {
+				hasConnections = true
+				break
+			}
+		}
+	}
 
 	// 2) /createcharacter
 	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/createcharacter ТестовыйГерой elf wizard")); err != nil {
@@ -393,9 +427,9 @@ func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
 		}
 	}
 	cbData, ok := extractFirstCallbackData(navReplyMarkup)
-	if navMsgID == 0 || !ok {
+	if hasConnections && (navMsgID == 0 || !ok) {
 		problems = append(problems, "После /map не удалось найти сообщение с inline-кнопками навигации (map_to_*)")
-	} else {
+	} else if navMsgID != 0 && ok {
 		if err := bot.HandleUpdate(ctx, makeCallbackUpdate(chatID, tgUserID, navMsgID, cbData)); err != nil {
 			problems = append(problems, fmt.Sprintf("map navigation callback (%s): %v", cbData, err))
 			t.Errorf("map navigation callback: %v", err)
@@ -426,8 +460,12 @@ func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
 	if len(problems) > 0 {
 		writeToTestingReport(problems)
 	}
+
+	// Проверяем, что в player-facing ответах нет технических маркеров tools/JSON.
+	if leak := findToolLeak(fakeAPI.snapshotCalls(), chatID); leak != "" {
+		t.Fatalf("Обнаружен tool-текст в player-facing сообщении: %s", leak)
+	}
 	if len(llmFeedback) > 0 {
 		writeToFeedback(llmFeedback)
 	}
 }
-

@@ -10,7 +10,7 @@ import (
 // SubscriptionImageLimiter адаптирует CheckLimitsUseCase для работы с ImageGenerationLimiter
 // Это позволяет использовать систему подписок для проверки лимитов генерации изображений
 type SubscriptionImageLimiter struct {
-	checkLimitsUC *CheckLimitsUseCase
+	checkLimitsUC   *CheckLimitsUseCase
 	fallbackLimiter imageapp.ImageGenerationLimiter // Fallback для подсчета использования
 }
 

@@ -59,7 +59,7 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 		parts = append(parts, "\nЛокации:")
 		for _, loc := range gs.World.Locations {
 			parts = append(parts, fmt.Sprintf("- %s: %s", loc.Name, loc.Description))
-			
+
 			// Добавляем предопределенные проверки для локации
 			predefinedChecks := loc.PredefinedChecks()
 			if len(predefinedChecks) > 0 {

@@ -23,8 +23,8 @@ func TestLocation_PredefinedChecks(t *testing.T) {
 			expectedCount: 0,
 		},
 		{
-			name:     "single predefined check",
-			jsonData: json.RawMessage(`[{"ability":"strength","dc":15,"description":"Поднять камень","location_hint":"У входа"}]`),
+			name:          "single predefined check",
+			jsonData:      json.RawMessage(`[{"ability":"strength","dc":15,"description":"Поднять камень","location_hint":"У входа"}]`),
 			expectedCount: 1,
 			expectedChecks: []PredefinedCheck{
 				{
@@ -36,8 +36,8 @@ func TestLocation_PredefinedChecks(t *testing.T) {
 			},
 		},
 		{
-			name:     "multiple predefined checks",
-			jsonData: json.RawMessage(`[{"ability":"wisdom","dc":12,"description":"Заметить скрытую дверь","location_hint":"Северная стена"},{"ability":"dexterity","dc":15,"description":"Пройти по узкому мосту","location_hint":"Над пропастью"}]`),
+			name:          "multiple predefined checks",
+			jsonData:      json.RawMessage(`[{"ability":"wisdom","dc":12,"description":"Заметить скрытую дверь","location_hint":"Северная стена"},{"ability":"dexterity","dc":15,"description":"Пройти по узкому мосту","location_hint":"Над пропастью"}]`),
 			expectedCount: 2,
 			expectedChecks: []PredefinedCheck{
 				{
@@ -99,10 +99,10 @@ func TestLocation_PredefinedChecks(t *testing.T) {
 
 func TestLocation_SetPredefinedChecks(t *testing.T) {
 	tests := []struct {
-		name           string
-		checks         []PredefinedCheck
-		expectedError  bool
-		validateJSON   func(*testing.T, json.RawMessage)
+		name          string
+		checks        []PredefinedCheck
+		expectedError bool
+		validateJSON  func(*testing.T, json.RawMessage)
 	}{
 		{
 			name:          "empty slice sets nil JSON",

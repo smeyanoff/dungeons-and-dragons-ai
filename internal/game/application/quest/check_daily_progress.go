@@ -32,8 +32,8 @@ func NewCheckDailyQuestProgressUseCase(
 
 // CheckProgressRequest запрос на проверку прогресса
 type CheckProgressRequest struct {
-	ChatID   int64
-	TgUserID int64
+	ChatID    int64
+	TgUserID  int64
 	QuestType quest.DailyQuestType
 	Increment int // На сколько увеличить прогресс
 }

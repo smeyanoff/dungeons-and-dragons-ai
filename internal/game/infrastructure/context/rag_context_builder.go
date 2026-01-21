@@ -3,6 +3,8 @@ package context
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ type RAGContextBuilder struct {
 	eventRepo     EventRepository
 	inventoryRepo InventoryRepository
 	combatRepo    CombatRepository
+	config        ragContextConfig
 }
 
 type EventRepository interface {
@@ -47,6 +50,7 @@ func NewRAGContextBuilder(
 		eventRepo:     eventRepo,
 		inventoryRepo: inventoryRepo,
 		combatRepo:    combatRepo,
+		config:        loadRAGContextConfig(),
 	}
 }
 
@@ -55,6 +59,13 @@ func (b *RAGContextBuilder) BuildContext(
 	gs *session.GameSession,
 	playerMessage string,
 ) (string, error) {
+	// Эти лимиты — по СИМВОЛАМ, не по токенам.
+	maxRecentEvents := b.config.maxRecentEvents
+	maxEventChars := b.config.maxEventChars
+	maxRAGDocs := b.config.maxRAGDocs
+	maxRAGDocChars := b.config.maxRAGDocChars
+	maxRAGTotalChars := b.config.maxRAGTotalChars
+
 	// Сначала получаем базовый контекст с таймаутом для БД операций
 	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer dbCancel()
@@ -140,8 +151,8 @@ func (b *RAGContextBuilder) BuildContext(
 			parts = append(parts, "\n--- Последние сообщения ---")
 			// Берем последние 5-10 сообщений для контекста
 			startIdx := 0
-			if len(recentEvents) > 5 {
-				startIdx = len(recentEvents) - 5
+			if len(recentEvents) > maxRecentEvents {
+				startIdx = len(recentEvents) - maxRecentEvents
 			}
 			for i := startIdx; i < len(recentEvents); i++ {
 				e := recentEvents[i]
@@ -156,7 +167,7 @@ func (b *RAGContextBuilder) BuildContext(
 				default:
 					authorPrefix = "?"
 				}
-				parts = append(parts, fmt.Sprintf("%s: %s", authorPrefix, e.Content))
+				parts = append(parts, fmt.Sprintf("%s: %s", authorPrefix, truncateText(e.Content, maxEventChars)))
 			}
 			logger.Debug("Added recent events to context",
 				logger.Uint("session_id", gs.ID),
@@ -181,7 +192,7 @@ func (b *RAGContextBuilder) BuildContext(
 			if currentTurnMessage != "" {
 				parts = append(parts, currentTurnMessage)
 			}
-			
+
 			// Подсчитываем количество игроков и врагов в бою
 			playersInCombat := 0
 			enemiesInCombat := 0
@@ -195,12 +206,12 @@ func (b *RAGContextBuilder) BuildContext(
 				}
 			}
 			parts = append(parts, fmt.Sprintf("Игроков в бою: %d, Врагов: %d", playersInCombat, enemiesInCombat))
-			
+
 			// Если игрок один в бою, явно указываем это
 			if playerCount == 1 && playersInCombat == 1 {
 				parts = append(parts, "⚠️ ВАЖНО: Игрок один в бою. Нет союзников, товарищей или других NPC.")
 			}
-			
+
 			// Добавляем информацию об участниках боя и их HP
 			parts = append(parts, "Участники боя:")
 			for i, participant := range activeCombat.Participants {
@@ -218,7 +229,7 @@ func (b *RAGContextBuilder) BuildContext(
 					parts = append(parts, fmt.Sprintf("%d. %s (%s) - HP: %d/%d, Инициатива: %d", i+1, name, role, hp, maxHP, initiative))
 				}
 			}
-			
+
 			// КРИТИЧЕСКИ ВАЖНО: Инструкция для DM о невыдумывании участников
 			parts = append(parts, "")
 			parts = append(parts, "⚠️ КРИТИЧЕСКИ ВАЖНО: Используй ТОЛЬКО реальных участников боя из списка выше.")
@@ -419,7 +430,7 @@ func (b *RAGContextBuilder) BuildContext(
 	)
 	ragCtx, ragCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer ragCancel()
-	ragDocs, err := b.retrieveUC.Execute(ragCtx, gs.ID, playerMessage, 5)
+	ragDocs, err := b.retrieveUC.Execute(ragCtx, gs.ID, playerMessage, maxRAGDocs)
 	if err != nil {
 		// Если RAG не работает, возвращаем базовый контекст с информацией о персонаже
 		logger.Warn("Failed to retrieve RAG context",
@@ -431,8 +442,17 @@ func (b *RAGContextBuilder) BuildContext(
 
 	if len(ragDocs) > 0 {
 		parts = append(parts, "\n--- Релевантная история игры (найдено через поиск) ---")
+		totalChars := 0
 		for i, doc := range ragDocs {
-			parts = append(parts, fmt.Sprintf("[%d] %s", i+1, doc.Text))
+			if i >= maxRAGDocs || totalChars >= maxRAGTotalChars {
+				break
+			}
+			docText := truncateText(doc.Text, maxRAGDocChars)
+			if totalChars+len(docText) > maxRAGTotalChars {
+				docText = truncateText(docText, maxRAGTotalChars-totalChars)
+			}
+			totalChars += len(docText)
+			parts = append(parts, fmt.Sprintf("[%d] %s", i+1, docText))
 		}
 		logger.Debug("Added RAG documents to context",
 			logger.Uint("session_id", gs.ID),
@@ -445,6 +465,14 @@ func (b *RAGContextBuilder) BuildContext(
 	}
 
 	return strings.Join(parts, "\n"), nil
+}
+
+func truncateText(text string, maxLen int) string {
+	trimmed := strings.TrimSpace(text)
+	if maxLen <= 0 || len(trimmed) <= maxLen {
+		return trimmed
+	}
+	return strings.TrimSpace(trimmed[:maxLen]) + "…"
 }
 
 // isInventoryQuery определяет, является ли сообщение игрока запросом об инвентаре
@@ -472,4 +500,39 @@ func (b *RAGContextBuilder) isInventoryQuery(message string) bool {
 		}
 	}
 	return false
+}
+
+type ragContextConfig struct {
+	maxRecentEvents  int
+	maxEventChars    int
+	maxRAGDocs       int
+	maxRAGDocChars   int
+	maxRAGTotalChars int
+}
+
+func loadRAGContextConfig() ragContextConfig {
+	return ragContextConfig{
+		maxRecentEvents:  getEnvInt("RAG_MAX_RECENT_EVENTS", 8),
+		maxEventChars:    getEnvInt("RAG_MAX_EVENT_CHARS", 800),
+		maxRAGDocs:       getEnvInt("RAG_MAX_DOCS", 6),
+		maxRAGDocChars:   getEnvInt("RAG_MAX_DOC_CHARS", 1200),
+		maxRAGTotalChars: getEnvInt("RAG_MAX_TOTAL_CHARS", 5000),
+	}
+}
+
+func getEnvInt(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		logger.Warn("Invalid env value, using fallback",
+			logger.String("key", key),
+			logger.String("value", raw),
+			logger.Int("fallback", fallback),
+		)
+		return fallback
+	}
+	return value
 }

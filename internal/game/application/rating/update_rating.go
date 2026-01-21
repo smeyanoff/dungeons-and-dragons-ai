@@ -11,9 +11,9 @@ import (
 )
 
 type UpdateRatingUseCase struct {
-	ratingRepo     RatingRepository
-	sessionRepo    session.Repository
-	playerRepo     PlayerRepository
+	ratingRepo      RatingRepository
+	sessionRepo     session.Repository
+	playerRepo      PlayerRepository
 	achievementRepo AchievementRepository // Опциональная зависимость для сбора статистик
 }
 
@@ -28,9 +28,9 @@ type AchievementRepository interface {
 
 // AchievementProgress представляет прогресс по достижению (локальный тип)
 type AchievementProgress struct {
-	PlayerID     uint
+	PlayerID      uint
 	AchievementID uint
-	CurrentValue int
+	CurrentValue  int
 }
 
 func NewUpdateRatingUseCase(
@@ -40,9 +40,9 @@ func NewUpdateRatingUseCase(
 	achievementRepo AchievementRepository, // Опциональная зависимость
 ) *UpdateRatingUseCase {
 	return &UpdateRatingUseCase{
-		ratingRepo:     ratingRepo,
-		sessionRepo:    sessionRepo,
-		playerRepo:     playerRepo,
+		ratingRepo:      ratingRepo,
+		sessionRepo:     sessionRepo,
+		playerRepo:      playerRepo,
 		achievementRepo: achievementRepo,
 	}
 }
@@ -60,29 +60,29 @@ func (uc *UpdateRatingUseCase) Execute(ctx context.Context, req UpdateRatingRequ
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
-	
+
 	if gs == nil {
 		return nil // Сессия не найдена, пропускаем
 	}
-	
+
 	// Получаем игрока
 	player, err := uc.playerRepo.GetByTgUserIDAndSessionID(ctx, req.TgUserID, gs.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get player: %w", err)
 	}
-	
+
 	if player == nil {
 		return nil // Игрок не найден, пропускаем
 	}
-	
+
 	// Собираем статистики игрока
 	stats := uc.collectPlayerStats(ctx, player)
-	
+
 	// Обновляем рейтинги по всем метрикам
 	if err := uc.updateAllRatings(ctx, req.TgUserID, stats); err != nil {
 		return fmt.Errorf("failed to update ratings: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -95,7 +95,7 @@ func (uc *UpdateRatingUseCase) collectPlayerStats(ctx context.Context, p *player
 		CombatWins:      0,
 		QuestsCompleted: 0,
 	}
-	
+
 	// Собираем статистики из достижений, если репозиторий доступен
 	if uc.achievementRepo != nil {
 		// Получаем прогресс по победам в боях
@@ -103,14 +103,14 @@ func (uc *UpdateRatingUseCase) collectPlayerStats(ctx context.Context, p *player
 		if err == nil {
 			stats.CombatWins = combatWins
 		}
-		
+
 		// Получаем прогресс по завершенным квестам
 		questsCompleted, err := uc.achievementRepo.GetAchievementProgressByRequirementKey(ctx, p.ID, "quests_completed")
 		if err == nil {
 			stats.QuestsCompleted = questsCompleted
 		}
 	}
-	
+
 	return stats
 }
 
@@ -123,7 +123,7 @@ func (uc *UpdateRatingUseCase) updateAllRatings(ctx context.Context, tgUserID in
 		rating.MetricTypeQuestsCompleted,
 		rating.MetricTypeTotalRating,
 	}
-	
+
 	for _, metricType := range metrics {
 		// Получаем или создаем рейтинг
 		playerRating, err := uc.ratingRepo.GetByTgUserIDAndMetric(ctx, tgUserID, metricType)
@@ -135,7 +135,7 @@ func (uc *UpdateRatingUseCase) updateAllRatings(ctx context.Context, tgUserID in
 			)
 			continue
 		}
-		
+
 		if playerRating == nil {
 			// Создаем новый рейтинг
 			playerRating = &rating.PlayerRating{
@@ -143,10 +143,10 @@ func (uc *UpdateRatingUseCase) updateAllRatings(ctx context.Context, tgUserID in
 				MetricType: metricType,
 			}
 		}
-		
+
 		// Обновляем из статистик
 		playerRating.UpdateFromStats(stats)
-		
+
 		// Сохраняем
 		if err := uc.ratingRepo.Save(ctx, playerRating); err != nil {
 			logger.Warn("Failed to save rating",
@@ -157,6 +157,6 @@ func (uc *UpdateRatingUseCase) updateAllRatings(ctx context.Context, tgUserID in
 			continue
 		}
 	}
-	
+
 	return nil
 }

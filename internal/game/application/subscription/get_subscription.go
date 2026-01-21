@@ -23,11 +23,11 @@ type GetSubscriptionRequest struct {
 }
 
 type GetSubscriptionResponse struct {
-	Subscription *subscription.Subscription
-	PlanDetails  subscription.PlanDetails
-	IsActive     bool
+	Subscription  *subscription.Subscription
+	PlanDetails   subscription.PlanDetails
+	IsActive      bool
 	DaysRemaining int
-	Message      string
+	Message       string
 }
 
 // Execute получает информацию о подписке пользователя
@@ -54,10 +54,10 @@ func (uc *GetSubscriptionUseCase) Execute(ctx context.Context, req GetSubscripti
 	}
 
 	return &GetSubscriptionResponse{
-		Subscription: sub,
-		PlanDetails:  planDetails,
-		IsActive:     isActive,
+		Subscription:  sub,
+		PlanDetails:   planDetails,
+		IsActive:      isActive,
 		DaysRemaining: daysRemaining,
-		Message:      message,
+		Message:       message,
 	}, nil
 }

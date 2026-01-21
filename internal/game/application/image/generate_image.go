@@ -36,13 +36,13 @@ func (uc *ImageGenerationUseCase) SetLimiter(limiter ImageGenerationLimiter) {
 
 // GenerateImageRequest запрос на генерацию изображения
 type GenerateImageRequest struct {
-	SystemPrompt   string // Системный промпт (стиль художника)
-	UserPrompt     string // Пользовательский промпт (что нарисовать)
-	Type           string // Тип изображения: "location", "npc", "item", "character", "custom"
-	EntityID       uint   // ID сущности (локации, NPC, предмета)
-	ForceRegenerate bool  // Принудительная регенерация (игнорировать кэш)
-	UserID         int64  // ID пользователя для проверки лимитов
-	SkipLimitCheck bool   // Пропустить проверку лимита (для Premium пользователей)
+	SystemPrompt    string // Системный промпт (стиль художника)
+	UserPrompt      string // Пользовательский промпт (что нарисовать)
+	Type            string // Тип изображения: "location", "npc", "item", "character", "custom"
+	EntityID        uint   // ID сущности (локации, NPC, предмета)
+	ForceRegenerate bool   // Принудительная регенерация (игнорировать кэш)
+	UserID          int64  // ID пользователя для проверки лимитов
+	SkipLimitCheck  bool   // Пропустить проверку лимита (для Premium пользователей)
 }
 
 // GenerateImageResponse ответ на запрос генерации изображения

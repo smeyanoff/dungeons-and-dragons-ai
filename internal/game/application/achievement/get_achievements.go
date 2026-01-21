@@ -27,7 +27,7 @@ func NewGetAchievementsUseCase(
 }
 
 type GetAchievementsRequest struct {
-	ChatID  int64
+	ChatID   int64
 	TgUserID int64
 }
 
@@ -63,7 +63,7 @@ func (uc *GetAchievementsUseCase) Execute(ctx context.Context, req GetAchievemen
 	if err != nil {
 		return "", fmt.Errorf("failed to get all achievements: %w", err)
 	}
-	
+
 	// Создаем карту полученных достижений для быстрого поиска
 	earnedAchievements := make(map[uint]*achievement.PlayerAchievement)
 	for _, pa := range playerAchievements {
@@ -104,14 +104,14 @@ func (uc *GetAchievementsUseCase) Execute(ctx context.Context, req GetAchievemen
 	for _, ai := range achievementsWithProgress {
 		achievementsByType[ai.Achievement.Type] = append(achievementsByType[ai.Achievement.Type], ai)
 	}
-	
+
 	// Формируем текст
 	var sb strings.Builder
 	sb.WriteString("🏆 Ваши достижения\n\n")
-	
+
 	earnedCount := len(playerAchievements)
 	sb.WriteString(fmt.Sprintf("Получено: %d из %d достижений\n\n", earnedCount, len(allAchievements)))
-	
+
 	// Определяем порядок типов для отображения
 	typeOrder := []achievement.AchievementType{
 		achievement.AchievementTypeProgress,
@@ -121,16 +121,16 @@ func (uc *GetAchievementsUseCase) Execute(ctx context.Context, req GetAchievemen
 		achievement.AchievementTypeCollection,
 		achievement.AchievementTypeSpecial,
 	}
-	
+
 	typeNames := map[achievement.AchievementType]string{
-		achievement.AchievementTypeProgress:     "📊 Прогресс",
-		achievement.AchievementTypeCombat:       "⚔️ Бой",
-		achievement.AchievementTypeQuest:        "📜 Квесты",
-		achievement.AchievementTypeExploration:  "🗺️ Исследование",
-		achievement.AchievementTypeCollection:   "🎒 Коллекции",
-		achievement.AchievementTypeSpecial:      "⭐ Особые",
+		achievement.AchievementTypeProgress:    "📊 Прогресс",
+		achievement.AchievementTypeCombat:      "⚔️ Бой",
+		achievement.AchievementTypeQuest:       "📜 Квесты",
+		achievement.AchievementTypeExploration: "🗺️ Исследование",
+		achievement.AchievementTypeCollection:  "🎒 Коллекции",
+		achievement.AchievementTypeSpecial:     "⭐ Особые",
 	}
-	
+
 	rarityIcons := map[achievement.Rarity]string{
 		achievement.RarityCommon:    "⚪",
 		achievement.RarityUncommon:  "🟢",
@@ -138,13 +138,13 @@ func (uc *GetAchievementsUseCase) Execute(ctx context.Context, req GetAchievemen
 		achievement.RarityEpic:      "🟣",
 		achievement.RarityLegendary: "🟠",
 	}
-	
+
 	for _, achievementType := range typeOrder {
 		achievements := achievementsByType[achievementType]
 		if len(achievements) == 0 {
 			continue
 		}
-		
+
 		// Сортируем по редкости
 		sort.Slice(achievements, func(i, j int) bool {
 			rarityOrder := map[achievement.Rarity]int{
@@ -156,7 +156,7 @@ func (uc *GetAchievementsUseCase) Execute(ctx context.Context, req GetAchievemen
 			}
 			return rarityOrder[achievements[i].Achievement.Rarity] > rarityOrder[achievements[j].Achievement.Rarity]
 		})
-		
+
 		sb.WriteString(fmt.Sprintf("%s:\n", typeNames[achievementType]))
 		for _, ai := range achievements {
 			rarityIcon := rarityIcons[ai.Achievement.Rarity]
@@ -164,7 +164,7 @@ func (uc *GetAchievementsUseCase) Execute(ctx context.Context, req GetAchievemen
 			if icon == "" {
 				icon = "🏆"
 			}
-			
+
 			status := "❌"
 			progressText := ""
 			if ai.IsEarned {
@@ -174,18 +174,18 @@ func (uc *GetAchievementsUseCase) Execute(ctx context.Context, req GetAchievemen
 				percentage := ai.Achievement.GetProgressPercentage(ai.CurrentValue)
 				progressText = fmt.Sprintf(" (%d/%d - %d%%)", ai.CurrentValue, ai.Achievement.RequirementValue, percentage)
 			}
-			
+
 			// Для скрытых достижений, которые еще не получены, показываем только тип
 			if ai.Achievement.IsHidden && !ai.IsEarned {
 				sb.WriteString(fmt.Sprintf("  %s %s %s ??? - ???\n", rarityIcon, icon, status))
 			} else {
-				sb.WriteString(fmt.Sprintf("  %s %s %s %s - %s%s\n", 
+				sb.WriteString(fmt.Sprintf("  %s %s %s %s - %s%s\n",
 					rarityIcon, icon, status, ai.Achievement.Title, ai.Achievement.Description, progressText))
 			}
 		}
 		sb.WriteString("\n")
 	}
-	
+
 	return sb.String(), nil
 }
 

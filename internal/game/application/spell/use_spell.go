@@ -9,8 +9,8 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/dice"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
-	"dungeons-and-dragons-ai/internal/game/domain/spell"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/spell"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	"dungeons-and-dragons-ai/pkg/logger"
 )
@@ -47,20 +47,20 @@ func NewUseSpellUseCase(
 }
 
 type UseSpellRequest struct {
-	ChatID   int64
-	TgUserID int64
+	ChatID    int64
+	TgUserID  int64
 	SpellName string // Имя заклинания для использования
-	Target   string  // Цель заклинания (опционально, для боевых заклинаний)
+	Target    string // Цель заклинания (опционально, для боевых заклинаний)
 }
 
 type UseSpellResponse struct {
-	Success      bool
-	Message      string
-	SpellUsed    *spell.Spell
-	DamageDealt  int  // Урон, нанесенный заклинанием
-	HealingDone  int  // Лечение, сделанное заклинанием
-	SlotUsed     bool // Был ли использован слот заклинания
-	SpellLevel   int  // Уровень использованного заклинания
+	Success     bool
+	Message     string
+	SpellUsed   *spell.Spell
+	DamageDealt int  // Урон, нанесенный заклинанием
+	HealingDone int  // Лечение, сделанное заклинанием
+	SlotUsed    bool // Был ли использован слот заклинания
+	SpellLevel  int  // Уровень использованного заклинания
 }
 
 // Execute использует заклинание персонажем

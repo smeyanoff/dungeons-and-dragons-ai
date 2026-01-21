@@ -392,34 +392,34 @@ func TestGetInitiativeOrderMessage(t *testing.T) {
 			createMonsterParticipant("Goblin", 10, 12),
 		},
 	}
-	
+
 	// Устанавливаем инициативу вручную для тестирования
 	combat.Participants[0].Initiative = 18
 	combat.Participants[1].Initiative = 12
 
 	message := combat.GetInitiativeOrderMessage()
-	
+
 	if message == "" {
 		t.Error("expected non-empty message")
 	}
-	
+
 	// Проверяем наличие ключевых элементов сообщения
 	if !strings.Contains(message, "⚔️ Бой начался! Порядок ходов:") {
 		t.Error("message should contain combat start text")
 	}
-	
+
 	if !strings.Contains(message, "Player 1") {
 		t.Error("message should contain player name")
 	}
-	
+
 	if !strings.Contains(message, "Goblin") {
 		t.Error("message should contain monster name")
 	}
-	
+
 	if !strings.Contains(message, "инициатива: 18") {
 		t.Error("message should contain initiative value")
 	}
-	
+
 	if !strings.Contains(message, "🎯 Текущий ход:") {
 		t.Error("message should contain current turn text")
 	}
@@ -434,7 +434,7 @@ func TestGetInitiativeOrderMessage_InactiveCombat(t *testing.T) {
 	}
 
 	message := combat.GetInitiativeOrderMessage()
-	
+
 	if message != "" {
 		t.Errorf("expected empty message for inactive combat, got: %s", message)
 	}
@@ -442,12 +442,12 @@ func TestGetInitiativeOrderMessage_InactiveCombat(t *testing.T) {
 
 func TestGetInitiativeOrderMessage_EmptyParticipants(t *testing.T) {
 	combat := &Combat{
-		State:       CombatStateActive,
+		State:        CombatStateActive,
 		Participants: []CombatParticipant{},
 	}
 
 	message := combat.GetInitiativeOrderMessage()
-	
+
 	if message != "" {
 		t.Errorf("expected empty message for empty participants, got: %s", message)
 	}
@@ -462,21 +462,21 @@ func TestGetInitiativeOrderMessage_WithDeadParticipant(t *testing.T) {
 			createMonsterParticipant("Goblin", 10, 12),
 		},
 	}
-	
+
 	// Устанавливаем инициативу
 	combat.Participants[0].Initiative = 18
 	combat.Participants[1].Initiative = 12
-	
+
 	// Убиваем монстра
 	combat.Participants[1].MonsterHP = 0
 
 	message := combat.GetInitiativeOrderMessage()
-	
+
 	// Мертвый участник не должен быть в списке, но игрок должен быть
 	if !strings.Contains(message, "Player 1") {
 		t.Error("message should contain alive player name")
 	}
-	
+
 	// Мертвый участник не должен появляться в списке
 	// Проверяем, что Goblin не упоминается в порядке ходов (только если он мертв)
 	if strings.Contains(message, "Goblin") {
@@ -498,7 +498,7 @@ func TestGetInitiativeOrderMessage_PlayerAndCompanionsDisplay(t *testing.T) {
 			createMonsterParticipant("Orc", 15, 14),
 		},
 	}
-	
+
 	// Устанавливаем инициативу вручную для предсказуемости теста
 	combat.Participants[0].Initiative = 20 // Игрок первый
 	combat.Participants[1].Initiative = 15 // Спутник второй
@@ -506,7 +506,7 @@ func TestGetInitiativeOrderMessage_PlayerAndCompanionsDisplay(t *testing.T) {
 	combat.Participants[3].Initiative = 10 // Орк четвертый
 
 	message := combat.GetInitiativeOrderMessage()
-	
+
 	// Проверяем наличие всех участников
 	if !strings.Contains(message, "Player 1") {
 		t.Error("message should contain player name")
@@ -520,7 +520,7 @@ func TestGetInitiativeOrderMessage_PlayerAndCompanionsDisplay(t *testing.T) {
 	if !strings.Contains(message, "Orc") {
 		t.Error("message should contain second enemy name")
 	}
-	
+
 	// Проверяем наличие иконок типа участника (Task #69)
 	if !strings.Contains(message, "👤 Игрок") {
 		t.Error("message should contain player icon (👤 Игрок)")
@@ -528,7 +528,7 @@ func TestGetInitiativeOrderMessage_PlayerAndCompanionsDisplay(t *testing.T) {
 	if !strings.Contains(message, "👹 Враг") {
 		t.Error("message should contain enemy icon (👹 Враг)")
 	}
-	
+
 	// Проверяем правильную нумерацию с отдельным счетчиком (1, 2, 3, 4...)
 	// Должна быть последовательная нумерация независимо от индексов массива
 	lines := strings.Split(message, "\n")
@@ -538,11 +538,11 @@ func TestGetInitiativeOrderMessage_PlayerAndCompanionsDisplay(t *testing.T) {
 			turnOrderLines = append(turnOrderLines, line)
 		}
 	}
-	
+
 	if len(turnOrderLines) != 4 {
 		t.Errorf("expected 4 participants in turn order, got %d", len(turnOrderLines))
 	}
-	
+
 	// Проверяем, что нумерация начинается с 1 и последовательна
 	for i, line := range turnOrderLines {
 		expectedNumber := i + 1
@@ -560,26 +560,26 @@ func TestGetInitiativeOrderMessage_CorrectNumberingWithDead(t *testing.T) {
 		CurrentTurn: 0,
 		Participants: []CombatParticipant{
 			createPlayerParticipant("Player 1", 16, 14, 15),
-			createMonsterParticipant("Dead Goblin", 10, 12), // Мертвый
-			createMonsterParticipant("Orc", 15, 14),         // Живой
-			createMonsterParticipant("Dead Orc", 15, 14),    // Мертвый
+			createMonsterParticipant("Dead Goblin", 10, 12),  // Мертвый
+			createMonsterParticipant("Orc", 15, 14),          // Живой
+			createMonsterParticipant("Dead Orc", 15, 14),     // Мертвый
 			createPlayerParticipant("Companion", 14, 12, 13), // Живой спутник
 		},
 	}
-	
+
 	// Устанавливаем инициативу
 	combat.Participants[0].Initiative = 18
 	combat.Participants[1].Initiative = 12
 	combat.Participants[2].Initiative = 15
 	combat.Participants[3].Initiative = 10
 	combat.Participants[4].Initiative = 14
-	
+
 	// Убиваем некоторых участников
 	combat.Participants[1].MonsterHP = 0 // Dead Goblin
 	combat.Participants[3].MonsterHP = 0 // Dead Orc
 
 	message := combat.GetInitiativeOrderMessage()
-	
+
 	// Проверяем, что живые участники присутствуют
 	if !strings.Contains(message, "Player 1") {
 		t.Error("message should contain alive player name")
@@ -590,7 +590,7 @@ func TestGetInitiativeOrderMessage_CorrectNumberingWithDead(t *testing.T) {
 	if !strings.Contains(message, "Companion") {
 		t.Error("message should contain alive companion name")
 	}
-	
+
 	// Проверяем, что мертвые участники НЕ присутствуют в порядке ходов
 	// (могут быть упомянуты только в текущем ходе, если CurrentTurn указывает на них)
 	if strings.Contains(message, "Dead Goblin") && strings.Contains(message, "инициатива:") {
@@ -599,7 +599,7 @@ func TestGetInitiativeOrderMessage_CorrectNumberingWithDead(t *testing.T) {
 			t.Error("dead participant should not appear in turn order list")
 		}
 	}
-	
+
 	// Проверяем правильную нумерацию (1, 2, 3 для трех живых участников)
 	// Мертвые участники не должны влиять на нумерацию
 	lines := strings.Split(message, "\n")
@@ -610,12 +610,12 @@ func TestGetInitiativeOrderMessage_CorrectNumberingWithDead(t *testing.T) {
 			turnOrderLines = append(turnOrderLines, trimmed)
 		}
 	}
-	
+
 	expectedLivingParticipants := 3 // Player 1, Orc, Companion
 	if len(turnOrderLines) != expectedLivingParticipants {
 		t.Errorf("expected %d living participants in turn order, got %d. Message: %s", expectedLivingParticipants, len(turnOrderLines), message)
 	}
-	
+
 	// Проверяем, что нумерация последовательна (1, 2, 3)
 	for i, line := range turnOrderLines {
 		expectedNumber := i + 1
@@ -636,20 +636,20 @@ func TestGetCurrentTurnMessage(t *testing.T) {
 	}
 
 	message := combat.GetCurrentTurnMessage()
-	
+
 	if message == "" {
 		t.Error("expected non-empty message")
 	}
-	
+
 	// Проверяем формат сообщения для игрока
 	if !strings.Contains(message, "🎯") {
 		t.Error("message should contain turn indicator")
 	}
-	
+
 	if !strings.Contains(message, "Player 1") {
 		t.Error("message should contain participant name")
 	}
-	
+
 	// Для игрока должно быть "Ваш ход"
 	if !strings.Contains(message, "Ваш ход") {
 		t.Logf("Message: %s - may be monster turn", message)
@@ -667,19 +667,19 @@ func TestGetCurrentTurnMessage_MonsterTurn(t *testing.T) {
 	}
 
 	message := combat.GetCurrentTurnMessage()
-	
+
 	if message == "" {
 		t.Error("expected non-empty message")
 	}
-	
+
 	if !strings.Contains(message, "🎯") {
 		t.Error("message should contain turn indicator")
 	}
-	
+
 	if !strings.Contains(message, "Goblin") {
 		t.Error("message should contain monster name")
 	}
-	
+
 	// Для монстра должно быть "Ход:" (без "Ваш")
 	if strings.Contains(message, "Ваш ход") {
 		t.Error("message should not contain 'Ваш ход' for monster turn")
@@ -695,7 +695,7 @@ func TestGetCurrentTurnMessage_InactiveCombat(t *testing.T) {
 	}
 
 	message := combat.GetCurrentTurnMessage()
-	
+
 	if message != "" {
 		t.Errorf("expected empty message for inactive combat, got: %s", message)
 	}
@@ -703,12 +703,12 @@ func TestGetCurrentTurnMessage_InactiveCombat(t *testing.T) {
 
 func TestGetCurrentTurnMessage_EmptyParticipants(t *testing.T) {
 	combat := &Combat{
-		State:       CombatStateActive,
+		State:        CombatStateActive,
 		Participants: []CombatParticipant{},
 	}
 
 	message := combat.GetCurrentTurnMessage()
-	
+
 	if message != "" {
 		t.Errorf("expected empty message for empty participants, got: %s", message)
 	}
@@ -723,17 +723,17 @@ func TestGetCurrentTurnMessage_DeadParticipant(t *testing.T) {
 			createMonsterParticipant("Goblin", 10, 12),
 		},
 	}
-	
+
 	// Убиваем текущего участника (игрока)
 	combat.Participants[0].Character.Kill()
 
 	message := combat.GetCurrentTurnMessage()
-	
+
 	// Должен вернуться ход следующего живого участника (монстра)
 	if message == "" {
 		t.Error("expected message for next alive participant")
 	}
-	
+
 	if !strings.Contains(message, "Goblin") {
 		t.Error("message should contain next alive participant name")
 	}
@@ -840,7 +840,7 @@ func TestNextTurn_EnemyTurnDetection(t *testing.T) {
 	if currentParticipant == nil {
 		t.Fatal("expected participant after NextTurn, got nil")
 	}
-	
+
 	// Проверяем, что текущий ход - враг (Task #70: это условие для автоматического выполнения ходов врагов)
 	if currentParticipant.IsPlayer {
 		t.Error("expected enemy turn after NextTurn from player, but got player turn")
@@ -855,7 +855,7 @@ func TestNextTurn_EnemyTurnDetection(t *testing.T) {
 	if currentParticipant == nil {
 		t.Fatal("expected participant, got nil")
 	}
-	
+
 	// Должен быть спутник (второй игрок)
 	if !currentParticipant.IsPlayer {
 		t.Error("expected player/companion turn, got enemy turn")
@@ -867,7 +867,7 @@ func TestNextTurn_EnemyTurnDetection(t *testing.T) {
 	if currentParticipant == nil {
 		t.Fatal("expected participant, got nil")
 	}
-	
+
 	if currentParticipant.IsPlayer {
 		t.Error("expected enemy turn (Orc), but got player turn")
 	}

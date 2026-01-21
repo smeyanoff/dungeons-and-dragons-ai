@@ -24,12 +24,12 @@ func (c *Client) ChatWithMaxTokens(ctx context.Context, model string, message st
 			},
 		},
 	}
-	
+
 	// Устанавливаем max_tokens только если указано (nil означает отсутствие ограничения)
 	if maxTokens != nil {
 		reqBody.MaxTokens = maxTokens
 	}
-	
+
 	body, _ := json.Marshal(reqBody)
 
 	url := fmt.Sprintf("%s/chat/completions", c.cfg.APIBaseURL)

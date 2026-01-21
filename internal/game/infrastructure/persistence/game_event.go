@@ -26,7 +26,7 @@ func (r *GameEventRepository) CountMessagesPerDayByTgUserID(
 	// Начало текущего дня (00:00:00)
 	now := time.Now()
 	startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	
+
 	var count int64
 
 	// Подсчитываем сообщения игрока за день
@@ -62,14 +62,14 @@ func (r *GameEventRepository) SaveInTransaction(
 		if err := tx.Create(e).Error; err != nil {
 			return err
 		}
-		
+
 		// Выполняем дополнительные операции, если они указаны
 		if fn != nil {
 			if err := fn(tx); err != nil {
 				return err
 			}
 		}
-		
+
 		return nil
 	})
 }

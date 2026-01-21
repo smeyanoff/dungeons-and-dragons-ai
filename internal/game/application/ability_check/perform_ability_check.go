@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
+	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/dice"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
-	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/rag/application"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
@@ -32,13 +32,13 @@ type PerformAbilityCheckUseCase struct {
 }
 
 type PerformAbilityCheckResult struct {
-	Message      string
-	Ability      string
-	DC           int
-	BaseRoll     int
-	Modifier     int
-	Total        int
-	Success      bool
+	Message       string
+	Ability       string
+	DC            int
+	BaseRoll      int
+	Modifier      int
+	Total         int
+	Success       bool
 	CharacterName string
 }
 

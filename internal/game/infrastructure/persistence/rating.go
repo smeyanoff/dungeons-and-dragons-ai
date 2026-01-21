@@ -31,14 +31,14 @@ func (r *RatingRepository) GetByTgUserIDAndMetric(ctx context.Context, tgUserID 
 	err := r.db.WithContext(ctx).
 		Where("tg_user_id = ? AND metric_type = ?", tgUserID, metricType).
 		First(&rt).Error
-	
+
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &rt, nil
 }
 
@@ -51,11 +51,11 @@ func (r *RatingRepository) GetLeaderboard(ctx context.Context, metricType rating
 		Order("rating_score DESC, last_updated DESC").
 		Limit(limit).
 		Find(&ratings).Error
-	
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get leaderboard: %w", err)
 	}
-	
+
 	// Преобразуем в LeaderboardEntry с рангами
 	entries := make([]*rating.LeaderboardEntry, 0, len(ratings))
 	for i, rt := range ratings {
@@ -70,11 +70,11 @@ func (r *RatingRepository) GetLeaderboard(ctx context.Context, metricType rating
 			Order("id DESC").
 			Limit(1).
 			Scan(&playerName)
-		
+
 		if playerName == "" {
 			playerName = fmt.Sprintf("Игрок #%d", rt.TgUserID)
 		}
-		
+
 		// Определяем значение метрики для отображения
 		metricValue := rt.RatingScore
 		switch metricType {
@@ -89,7 +89,7 @@ func (r *RatingRepository) GetLeaderboard(ctx context.Context, metricType rating
 		case rating.MetricTypeTotalRating:
 			metricValue = rt.RatingScore
 		}
-		
+
 		entries = append(entries, &rating.LeaderboardEntry{
 			Rank:        i + 1,
 			TgUserID:    rt.TgUserID,
@@ -98,34 +98,34 @@ func (r *RatingRepository) GetLeaderboard(ctx context.Context, metricType rating
 			MetricValue: metricValue,
 		})
 	}
-	
+
 	return entries, nil
 }
 
 // GetRank получает ранг игрока по метрике
 func (r *RatingRepository) GetRank(ctx context.Context, tgUserID int64, metricType rating.RatingMetricType) (int, error) {
 	var count int64
-	
+
 	// Получаем рейтинг игрока
 	playerRating, err := r.GetByTgUserIDAndMetric(ctx, tgUserID, metricType)
 	if err != nil {
 		return 0, err
 	}
-	
+
 	if playerRating == nil {
 		return 0, nil // Игрок не в рейтинге
 	}
-	
+
 	// Подсчитываем, сколько игроков имеют больший рейтинг
 	err = r.db.WithContext(ctx).
 		Model(&rating.PlayerRating{}).
 		Where("metric_type = ? AND rating_score > ?", metricType, playerRating.RatingScore).
 		Count(&count).Error
-	
+
 	if err != nil {
 		return 0, fmt.Errorf("failed to get rank: %w", err)
 	}
-	
+
 	return int(count) + 1, nil
 }
 
@@ -137,27 +137,27 @@ func (r *RatingRepository) UpdateRanks(ctx context.Context, metricType rating.Ra
 		Where("metric_type = ?", metricType).
 		Order("rating_score DESC, last_updated DESC").
 		Find(&ratings).Error
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to get ratings: %w", err)
 	}
-	
+
 	// Обновляем ранги
 	for i := range ratings {
 		newRank := i + 1
 		ratings[i].PreviousRank = ratings[i].Rank
 		ratings[i].Rank = newRank
-		
+
 		if err := r.db.WithContext(ctx).
 			Model(&ratings[i]).
 			Updates(map[string]interface{}{
-				"rank":         newRank,
+				"rank":          newRank,
 				"previous_rank": ratings[i].PreviousRank,
 			}).Error; err != nil {
 			return fmt.Errorf("failed to update rank: %w", err)
 		}
 	}
-	
+
 	return nil
 }
 

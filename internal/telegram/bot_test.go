@@ -109,6 +109,39 @@ func TestSplitMessageEdgeCases(t *testing.T) {
 	}
 }
 
+func TestRedactTelegramBotToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "redacts token in url",
+			input:    "https://api.telegram.org/bot123456:ABC_DEF-123/getUpdates",
+			expected: "https://api.telegram.org/bot***/getUpdates",
+		},
+		{
+			name:     "redacts token without trailing slash",
+			input:    "api.telegram.org/bot123456:ABCDEF",
+			expected: "api.telegram.org/bot***",
+		},
+		{
+			name:     "no token no change",
+			input:    "https://example.com/ok",
+			expected: "https://example.com/ok",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := redactTelegramBotToken(tt.input)
+			if got != tt.expected {
+				t.Fatalf("expected %q, got %q", tt.expected, got)
+			}
+		})
+	}
+}
+
 func TestHandleCommand(t *testing.T) {
 	// Создаем мок бота с минимальными зависимостями
 	// Примечание: реальный бот требует tgbotapi.BotAPI, который сложно замокировать

@@ -236,7 +236,18 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 					return "invalid json", nil
 				}
 			},
-			expectedError: true,
+			expectedError: false, // После retry должен включиться fallback и игра должна продолжаться
+			validate: func(t *testing.T, w *world.World) {
+				if w == nil {
+					t.Fatal("expected world, got nil")
+				}
+				if w.MainQuest == nil || strings.TrimSpace(w.MainQuest.Title) == "" {
+					t.Fatalf("expected fallback main quest, got: %+v", w.MainQuest)
+				}
+				if len(w.Locations) == 0 {
+					t.Fatalf("expected fallback locations, got 0")
+				}
+			},
 		},
 		{
 			name:       "truncated JSON - missing closing braces",
@@ -385,7 +396,18 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 					return string(jsonBytes), nil
 				}
 			},
-			expectedError: true, // Должен быть retry
+			expectedError: false, // После retry должен включиться fallback для main quest
+			validate: func(t *testing.T, w *world.World) {
+				if w == nil {
+					t.Fatal("expected world, got nil")
+				}
+				if w.MainQuest == nil || strings.TrimSpace(w.MainQuest.Title) == "" {
+					t.Fatalf("expected fallback main quest, got: %+v", w.MainQuest)
+				}
+				if len(w.Locations) == 0 {
+					t.Fatalf("expected locations to exist (LLM or fallback), got 0")
+				}
+			},
 		},
 		{
 			name:       "no locations",
@@ -403,7 +425,18 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 					return string(jsonBytes), nil
 				}
 			},
-			expectedError: true, // Должен быть retry
+			expectedError: false, // После retry должен включиться fallback локаций
+			validate: func(t *testing.T, w *world.World) {
+				if w == nil {
+					t.Fatal("expected world, got nil")
+				}
+				if w.MainQuest == nil || strings.TrimSpace(w.MainQuest.Title) == "" {
+					t.Fatalf("expected main quest, got: %+v", w.MainQuest)
+				}
+				if len(w.Locations) == 0 {
+					t.Fatalf("expected fallback locations, got 0")
+				}
+			},
 		},
 		{
 			name:       "world repo save error",

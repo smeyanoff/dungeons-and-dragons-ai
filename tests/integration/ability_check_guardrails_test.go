@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	dmtools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
+	dmtools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
-	"dungeons-and-dragons-ai/internal/game/domain/session"
 	questdomain "dungeons-and-dragons-ai/internal/game/domain/quest"
+	"dungeons-and-dragons-ai/internal/game/domain/session"
 	worlddomain "dungeons-and-dragons-ai/internal/game/domain/world"
 )
 
@@ -196,4 +196,3 @@ func TestAbilityCheck_Guardrails_Cooldown(t *testing.T) {
 		t.Fatalf("ожидали непустой warning при cooldown")
 	}
 }
-

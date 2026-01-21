@@ -28,16 +28,16 @@ func NewGetLeaderboardUseCase(ratingRepo RatingRepository) *GetLeaderboardUseCas
 // GetLeaderboardRequest запрос на получение лидерборда
 type GetLeaderboardRequest struct {
 	MetricType rating.RatingMetricType // Тип метрики для лидерборда
-	Limit      int                      // Количество записей (по умолчанию 10)
-	TgUserID   int64                    // ID пользователя для получения его ранга
+	Limit      int                     // Количество записей (по умолчанию 10)
+	TgUserID   int64                   // ID пользователя для получения его ранга
 }
 
 // GetLeaderboardResponse ответ с лидербордом
 type GetLeaderboardResponse struct {
-	MetricType string                      // Тип метрики (для отображения)
-	Entries    []*rating.LeaderboardEntry  // Записи лидерборда
-	UserRank   int                         // Ранг текущего пользователя (0 если не в топе)
-	UserRating int                         // Рейтинг текущего пользователя
+	MetricType string                     // Тип метрики (для отображения)
+	Entries    []*rating.LeaderboardEntry // Записи лидерборда
+	UserRank   int                        // Ранг текущего пользователя (0 если не в топе)
+	UserRating int                        // Рейтинг текущего пользователя
 }
 
 // Execute получает лидерборд по указанной метрике
@@ -46,13 +46,13 @@ func (uc *GetLeaderboardUseCase) Execute(ctx context.Context, req GetLeaderboard
 	if limit <= 0 || limit > 100 {
 		limit = 10 // По умолчанию топ-10
 	}
-	
+
 	// Получаем лидерборд
 	entries, err := uc.ratingRepo.GetLeaderboard(ctx, req.MetricType, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get leaderboard: %w", err)
 	}
-	
+
 	// Получаем ранг пользователя
 	userRank := 0
 	userRating := 0
@@ -69,10 +69,10 @@ func (uc *GetLeaderboardUseCase) Execute(ctx context.Context, req GetLeaderboard
 			}
 		}
 	}
-	
+
 	// Получаем название метрики для отображения
 	metricName := getMetricDisplayName(req.MetricType)
-	
+
 	return &GetLeaderboardResponse{
 		MetricType: metricName,
 		Entries:    entries,
@@ -84,13 +84,13 @@ func (uc *GetLeaderboardUseCase) Execute(ctx context.Context, req GetLeaderboard
 // getMetricDisplayName возвращает отображаемое название метрики
 func getMetricDisplayName(metricType rating.RatingMetricType) string {
 	names := map[rating.RatingMetricType]string{
-		rating.MetricTypeLevel:          "Уровень",
-		rating.MetricTypeExperience:     "Опыт",
-		rating.MetricTypeCombatWins:     "Победы в боях",
+		rating.MetricTypeLevel:           "Уровень",
+		rating.MetricTypeExperience:      "Опыт",
+		rating.MetricTypeCombatWins:      "Победы в боях",
 		rating.MetricTypeQuestsCompleted: "Завершенные квесты",
-		rating.MetricTypeTotalRating:    "Общий рейтинг",
+		rating.MetricTypeTotalRating:     "Общий рейтинг",
 	}
-	
+
 	if name, ok := names[metricType]; ok {
 		return name
 	}

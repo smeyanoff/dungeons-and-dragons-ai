@@ -16,25 +16,25 @@ import (
 type PlayerActionAnalysis struct {
 	// Нужна ли проверка навыка
 	NeedsAbilityCheck bool `json:"needs_ability_check"`
-	
+
 	// Если нужна проверка, детали:
 	AbilityCheck *AbilityCheckDetails `json:"ability_check,omitempty"`
-	
+
 	// Нужно ли использовать предопределенную проверку из локации
 	NeedsPredefinedCheck bool `json:"needs_predefined_check"`
-	
+
 	// Если нужна предопределенная проверка, детали:
 	PredefinedCheck *PredefinedCheckDetails `json:"predefined_check,omitempty"`
-	
+
 	// Нужно ли использовать roll_dice для случайного события
 	NeedsRandomRoll bool `json:"needs_random_roll"`
-	
+
 	// Если нужен случайный бросок, детали:
 	RandomRoll *RandomRollDetails `json:"random_roll,omitempty"`
-	
+
 	// Действие не требует проверок - просто описать результат
 	SimpleAction bool `json:"simple_action"`
-	
+
 	// Рекомендация для DM
 	Recommendation string `json:"recommendation,omitempty"`
 }
@@ -43,20 +43,20 @@ type PlayerActionAnalysis struct {
 type AbilityCheckDetails struct {
 	Ability string `json:"ability"` // "strength", "dexterity", "intelligence", "wisdom", "charisma", "constitution"
 	DC      int    `json:"dc"`      // Difficulty Class (10-20)
-	Reason  string `json:"reason"`   // Причина проверки
+	Reason  string `json:"reason"`  // Причина проверки
 }
 
 // PredefinedCheckDetails детали предопределенной проверки
 type PredefinedCheckDetails struct {
 	LocationName string `json:"location_name"` // Название локации
-	CheckIndex   int    `json:"check_index"`    // Индекс проверки в списке предопределенных проверок локации
-	Reason       string `json:"reason"`         // Причина использования предопределенной проверки
+	CheckIndex   int    `json:"check_index"`   // Индекс проверки в списке предопределенных проверок локации
+	Reason       string `json:"reason"`        // Причина использования предопределенной проверки
 }
 
 // RandomRollDetails детали случайного броска
 type RandomRollDetails struct {
 	DiceExpression string `json:"dice_expression"` // "d20", "2d6+3", etc.
-	Reason         string `json:"reason"`         // Причина броска
+	Reason         string `json:"reason"`          // Причина броска
 }
 
 // EventRepository интерфейс для работы с событиями
@@ -115,7 +115,7 @@ func (uc *AnalyzePlayerActionUseCase) Execute(
 	if err := json.Unmarshal([]byte(cleaned), &analysis); err != nil {
 		// Если не удалось распарсить, возвращаем простой анализ
 		return &PlayerActionAnalysis{
-			SimpleAction: true,
+			SimpleAction:   true,
 			Recommendation: "Просто опиши результат действия естественным языком БЕЗ проверки.",
 		}, nil
 	}

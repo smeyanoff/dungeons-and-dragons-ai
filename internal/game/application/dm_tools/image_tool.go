@@ -31,13 +31,13 @@ type ImageGenerationService interface {
 
 // GenerateImageRequest запрос на генерацию изображения (локальный тип для dm_tools)
 type GenerateImageRequest struct {
-	SystemPrompt   string
-	UserPrompt     string
-	Type           string
-	EntityID       uint
+	SystemPrompt    string
+	UserPrompt      string
+	Type            string
+	EntityID        uint
 	ForceRegenerate bool
-	UserID         int64
-	SkipLimitCheck bool
+	UserID          int64
+	SkipLimitCheck  bool
 }
 
 // GenerateImageResponse ответ на запрос генерации изображения (локальный тип для dm_tools)
@@ -49,9 +49,9 @@ type GenerateImageResponse struct {
 
 // GenerateImageTool позволяет DM генерировать изображения через GigaChat API
 type GenerateImageTool struct {
-	imageService      ImageGenerationService
-	chatID            int64
-	userID            int64
+	imageService        ImageGenerationService
+	chatID              int64
+	userID              int64
 	subscriptionChecker SubscriptionChecker // Опциональная зависимость для проверки Premium статуса
 }
 
@@ -66,9 +66,9 @@ func NewGenerateImageTool(
 		subscriptionChecker = &defaultSubscriptionChecker{}
 	}
 	return &GenerateImageTool{
-		imageService:       imageService,
-		chatID:             chatID,
-		userID:             userID,
+		imageService:        imageService,
+		chatID:              chatID,
+		userID:              userID,
 		subscriptionChecker: subscriptionChecker,
 	}
 }
@@ -149,7 +149,7 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]interfa
 
 	// Формируем системный промпт в стиле фэнтези/D&D
 	systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные, атмосферные и захватывающие изображения в стиле классического фэнтези-арта."
-	
+
 	// Формируем пользовательский промпт
 	userPrompt := fmt.Sprintf("Нарисуй %s", description)
 
@@ -196,9 +196,9 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]interfa
 			logger.String("description", description),
 		)
 		return map[string]interface{}{
-			"success":      false,
-			"error":        err.Error(),
-			"description":  description,
+			"success":     false,
+			"error":       err.Error(),
+			"description": description,
 		}, nil // Возвращаем ошибку как часть результата, не прерывая выполнение
 	}
 
@@ -216,14 +216,14 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]interfa
 	}
 
 	result := map[string]interface{}{
-		"success":      true,
-		"description":  description,
-		"image_type":   imageType,
-		"image_path":   imagePath,
-		"file_id":      resp.FileID,
-		"from_cache":   resp.FromCache,
-		"file_exists":  fileExists,
-		"message":      fmt.Sprintf("Изображение успешно сгенерировано: %s", description),
+		"success":     true,
+		"description": description,
+		"image_type":  imageType,
+		"image_path":  imagePath,
+		"file_id":     resp.FileID,
+		"from_cache":  resp.FromCache,
+		"file_exists": fileExists,
+		"message":     fmt.Sprintf("Изображение успешно сгенерировано: %s", description),
 	}
 
 	if resp.FromCache {

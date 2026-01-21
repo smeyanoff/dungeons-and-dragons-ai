@@ -27,7 +27,7 @@ func NewCheckWorldEventsUseCase(eventRepo WorldEventRepository) *CheckWorldEvent
 
 // CheckWorldEventsRequest запрос на проверку мировых событий
 type CheckWorldEventsRequest struct {
-	WorldID          uint
+	WorldID           uint
 	CurrentLocationID *uint // Текущая локация игрока (может быть nil)
 }
 
@@ -64,19 +64,19 @@ func (uc *CheckWorldEventsUseCase) Execute(
 	activatedEvents := make([]world.WorldEvent, 0)
 	for i := range scheduledEvents {
 		event := &scheduledEvents[i]
-		
+
 		// Проверяем, может ли событие быть активировано
 		if event.CanActivate(dayOfWeek, timeOfDay, weather, req.CurrentLocationID) {
 			// Активируем событие
 			event.Activate()
-			
+
 			// Сохраняем активированное событие
 			if err := uc.eventRepo.Save(ctx, event); err != nil {
 				// Логируем ошибку, но продолжаем обработку других событий
 				fmt.Printf("Failed to save activated event %d: %v\n", event.ID, err)
 				continue
 			}
-			
+
 			activatedEvents = append(activatedEvents, *event)
 		}
 	}
@@ -97,6 +97,6 @@ func (uc *CheckWorldEventsUseCase) GetActiveEventsDescription(events []world.Wor
 	for _, event := range events {
 		description += fmt.Sprintf("- %s (%s): %s\n", event.Name, event.Type, event.Description)
 	}
-	
+
 	return description
 }

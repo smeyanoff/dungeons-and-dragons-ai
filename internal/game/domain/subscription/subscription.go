@@ -15,22 +15,22 @@ const (
 
 // PlanDetails содержит детали тарифного плана
 type PlanDetails struct {
-	Plan                Plan
-	Name                string
-	Price               int    // Цена в рублях в месяц
-	MaxActiveGames      int    // Максимальное количество активных игр (0 = безлимит)
-	MaxMessagesPerDay   int    // Максимальное количество сообщений в день (0 = безлимит)
-	MaxImagesPerDay     int    // Максимальное количество изображений в день (0 = безлимит)
-	MaxSaves            int    // Максимальное количество сохранений (0 = безлимит)
-	MaxInventorySlots   int    // Максимальное количество слотов в инвентаре
-	MaxPlayersPerGame   int    // Максимальное количество игроков в игре (0 = безлимит)
-	PriorityProcessing  bool   // Приоритетная обработка запросов
-	APIAccess           bool   // Доступ к API
-	CustomMods          bool   // Доступ к кастомным модам
-	ExclusiveWorlds     bool   // Доступ к эксклюзивным мирам
-	PrioritySupport     bool   // Приоритетная поддержка
-	Analytics           bool   // Доступ к аналитике
-	ExportHistory       bool   // Экспорт истории
+	Plan               Plan
+	Name               string
+	Price              int  // Цена в рублях в месяц
+	MaxActiveGames     int  // Максимальное количество активных игр (0 = безлимит)
+	MaxMessagesPerDay  int  // Максимальное количество сообщений в день (0 = безлимит)
+	MaxImagesPerDay    int  // Максимальное количество изображений в день (0 = безлимит)
+	MaxSaves           int  // Максимальное количество сохранений (0 = безлимит)
+	MaxInventorySlots  int  // Максимальное количество слотов в инвентаре
+	MaxPlayersPerGame  int  // Максимальное количество игроков в игре (0 = безлимит)
+	PriorityProcessing bool // Приоритетная обработка запросов
+	APIAccess          bool // Доступ к API
+	CustomMods         bool // Доступ к кастомным модам
+	ExclusiveWorlds    bool // Доступ к эксклюзивным мирам
+	PrioritySupport    bool // Приоритетная поддержка
+	Analytics          bool // Доступ к аналитике
+	ExportHistory      bool // Экспорт истории
 }
 
 // GetPlanDetails возвращает детали тарифного плана
@@ -98,27 +98,27 @@ func GetPlanDetails(plan Plan) PlanDetails {
 
 // Subscription представляет подписку пользователя
 type Subscription struct {
-	ID        uint `gorm:"primaryKey"`
-	TgUserID  int64 `gorm:"uniqueIndex;not null"` // Telegram User ID
-	Plan      Plan `gorm:"type:varchar(16);not null;default:'free'"`
-	
+	ID       uint  `gorm:"primaryKey"`
+	TgUserID int64 `gorm:"uniqueIndex;not null"` // Telegram User ID
+	Plan     Plan  `gorm:"type:varchar(16);not null;default:'free'"`
+
 	// Статус подписки
-	Status    Status `gorm:"type:varchar(16);not null;default:'active'"`
-	
+	Status Status `gorm:"type:varchar(16);not null;default:'active'"`
+
 	// Даты подписки
-	StartedAt *time.Time `gorm:"type:timestamp"`
-	ExpiresAt *time.Time `gorm:"type:timestamp"` // null для бессрочных подписок
+	StartedAt  *time.Time `gorm:"type:timestamp"`
+	ExpiresAt  *time.Time `gorm:"type:timestamp"` // null для бессрочных подписок
 	CanceledAt *time.Time `gorm:"type:timestamp"` // Дата отмены (для автоотмены)
-	
+
 	// Платежная информация (опционально, для интеграции с платежными системами)
-	PaymentID    string `gorm:"type:varchar(128)"` // ID платежа в платежной системе
-	PaymentProvider string `gorm:"type:varchar(32)"` // Провайдер (yookassa, stripe)
-	
+	PaymentID       string `gorm:"type:varchar(128)"` // ID платежа в платежной системе
+	PaymentProvider string `gorm:"type:varchar(32)"`  // Провайдер (yookassa, stripe)
+
 	// Метаданные
-	AutoRenew   bool `gorm:"default:false"` // Автопродление подписки
-	TrialDays   int `gorm:"default:0"` // Дни пробного периода
-	TrialUsed   bool `gorm:"default:false"` // Использован ли пробный период
-	
+	AutoRenew bool `gorm:"default:false"` // Автопродление подписки
+	TrialDays int  `gorm:"default:0"`     // Дни пробного периода
+	TrialUsed bool `gorm:"default:false"` // Использован ли пробный период
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -138,12 +138,12 @@ func (s *Subscription) IsActive() bool {
 	if s.Status != StatusActive && s.Status != StatusTrial {
 		return false
 	}
-	
+
 	// Если есть дата истечения, проверяем её
 	if s.ExpiresAt != nil {
 		return time.Now().Before(*s.ExpiresAt)
 	}
-	
+
 	// Если нет даты истечения, подписка бессрочная (активна)
 	return true
 }
@@ -165,7 +165,7 @@ func (s *Subscription) GetPlanDetails() PlanDetails {
 func (s *Subscription) CanUseFeature(feature string) bool {
 	plan := s.GetPlan()
 	details := GetPlanDetails(plan)
-	
+
 	switch feature {
 	case "priority_processing":
 		return details.PriorityProcessing
@@ -191,12 +191,12 @@ func (s *Subscription) DaysRemaining() int {
 	if s.ExpiresAt == nil {
 		return -1 // бессрочная
 	}
-	
+
 	now := time.Now()
 	if now.After(*s.ExpiresAt) {
 		return 0 // истекла
 	}
-	
+
 	diff := s.ExpiresAt.Sub(now)
 	return int(diff.Hours() / 24)
 }

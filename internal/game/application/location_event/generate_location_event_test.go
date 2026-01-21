@@ -257,4 +257,3 @@ func TestLocationEventGenerator_Execute_TimestampsStable(t *testing.T) {
 		t.Fatalf("unexpected CreatedAt: %v", resp.Event.CreatedAt)
 	}
 }
-

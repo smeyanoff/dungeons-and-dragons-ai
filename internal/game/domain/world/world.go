@@ -3,7 +3,7 @@ package world
 import (
 	"context"
 	"time"
-	
+
 	"dungeons-and-dragons-ai/internal/game/domain/location"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
 )
@@ -59,17 +59,17 @@ func (w *World) AdvanceTime() {
 // AdvanceDay продвигает день в календаре
 func (w *World) AdvanceDay() {
 	w.Day++
-	
+
 	// Обновляем неделю (каждые 7 дней)
 	if w.Day%7 == 0 {
 		w.Week = (w.Day / 7) + 1
 	}
-	
+
 	// Обновляем месяц (каждые 30 дней)
 	if w.Day%30 == 0 {
 		w.Month = (w.Day / 30) + 1
 	}
-	
+
 	// Обновляем сезон (каждые 90 дней, 4 сезона)
 	seasonIndex := ((w.Day - 1) / 90) % 4
 	seasons := []string{"spring", "summer", "autumn", "winter"}
@@ -140,12 +140,12 @@ type World struct {
 	// Время суток и погода
 	TimeOfDay string // "morning", "noon", "afternoon", "evening", "night", "midnight"
 	Weather   string // "clear", "cloudy", "rainy", "stormy", "foggy", "snowy"
-	
+
 	// Календарь
-	Day      int    // День от начала игры (начинается с 1)
-	Week     int    // Неделя от начала игры (начинается с 1)
-	Month    int    // Месяц от начала игры (начинается с 1)
-	Season   string // Сезон: "spring", "summer", "autumn", "winter" (опционально)
+	Day       int       // День от начала игры (начинается с 1)
+	Week      int       // Неделя от начала игры (начинается с 1)
+	Month     int       // Месяц от начала игры (начинается с 1)
+	Season    string    // Сезон: "spring", "summer", "autumn", "winter" (опционально)
 	StartedAt time.Time `gorm:"type:timestamp"` // Время начала игры в мире
 }
 

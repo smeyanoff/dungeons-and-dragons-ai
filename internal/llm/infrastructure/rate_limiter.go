@@ -15,9 +15,9 @@ type LLMRateLimiter interface {
 // SimpleLLMRateLimiter простая реализация rate limiter для LLM запросов
 // Ограничивает частоту запросов, чтобы не ддосить модель
 type SimpleLLMRateLimiter struct {
-	mu        sync.Mutex
-	lastCall  time.Time
-	minDelay  time.Duration // Минимальная задержка между запросами
+	mu       sync.Mutex
+	lastCall time.Time
+	minDelay time.Duration // Минимальная задержка между запросами
 }
 
 // NewSimpleLLMRateLimiter создает новый SimpleLLMRateLimiter
@@ -44,7 +44,7 @@ func (r *SimpleLLMRateLimiter) Wait(ctx context.Context) error {
 
 	// Нужно подождать
 	waitTime := r.minDelay - timeSinceLastCall
-	
+
 	// Обновляем lastCall перед ожиданием, чтобы следующий запрос учел это ожидание
 	r.lastCall = now.Add(waitTime)
 

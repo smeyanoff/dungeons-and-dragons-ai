@@ -11,7 +11,7 @@ import (
 
 // UseSpellTool позволяет DM использовать заклинания персонажем
 type UseSpellTool struct {
-	useSpellUC *spell.UseSpellUseCase
+	useSpellUC  *spell.UseSpellUseCase
 	sessionRepo GameSessionRepository
 	sessionID   uint
 	chatID      int64
@@ -151,13 +151,13 @@ func (t *UseSpellTool) Execute(ctx context.Context, args map[string]interface{})
 
 	// Формируем результат для DM
 	result := map[string]interface{}{
-		"success":       true,
-		"spell_name":    resp.SpellUsed.Name,
-		"spell_level":   resp.SpellLevel,
-		"message":       resp.Message,
-		"damage_dealt":  resp.DamageDealt,
-		"healing_done":  resp.HealingDone,
-		"slot_used":     resp.SlotUsed,
+		"success":      true,
+		"spell_name":   resp.SpellUsed.Name,
+		"spell_level":  resp.SpellLevel,
+		"message":      resp.Message,
+		"damage_dealt": resp.DamageDealt,
+		"healing_done": resp.HealingDone,
+		"slot_used":    resp.SlotUsed,
 	}
 
 	// Добавляем детальную информацию о заклинании

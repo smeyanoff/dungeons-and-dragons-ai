@@ -46,4 +46,3 @@ func (g *GigachatImageGenerator) DownloadImage(ctx context.Context, fileID strin
 	}
 	return imageData, nil
 }
-

@@ -2,7 +2,7 @@ package character
 
 import (
 	"errors"
-	
+
 	"dungeons-and-dragons-ai/internal/game/domain/spell"
 )
 
@@ -48,7 +48,7 @@ type Character struct {
 	Status Status `gorm:"type:varchar(16);not null"`
 
 	Stats Stats
-	
+
 	// Система заклинаний (для магических классов)
 	SpellSlots spell.SpellSlots `gorm:"embedded;embeddedPrefix:spell_slots_"` // Встраивание структуры SpellSlots в Character
 }
@@ -137,7 +137,7 @@ func NewCharacter(
 		Status:     StatusAlive,
 		Stats:      stats,
 	}
-	
+
 	// Инициализируем слоты заклинаний для магических классов
 	char.InitializeSpellSlots()
 

@@ -4,15 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
+	diceapp "dungeons-and-dragons-ai/internal/game/application/dice"
 	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
-	diceapp "dungeons-and-dragons-ai/internal/game/application/dice"
 	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
@@ -25,6 +27,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/subscription"
+	"dungeons-and-dragons-ai/internal/game/domain/world"
 	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
 	"dungeons-and-dragons-ai/internal/llm/domain"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
@@ -35,27 +38,27 @@ import (
 )
 
 type HandleActionUseCase struct {
-	llm                  domain.LLM
-	sessionRepo          session.Repository
-	contextBuilder       ContextBuilder
-	eventRepo            EventRepository
-	indexDocUC           *ragapp.IndexDocument
-	combatRepo           CombatRepository
-	questRepo            QuestRepository
-	inventoryRepo        InventoryRepository
-	addExperienceUC      *characterapp.AddExperienceUseCase
-	checkWorldEventsUC   *worldeventapp.CheckWorldEventsUseCase
-	checkAchievementsUC  *achievementapp.CheckAchievementsUseCase // Для проверки достижений
-	notificationService  achievementapp.NotificationService       // Для отправки уведомлений о достижениях
-	generateImageUC      *imageapp.ImageGenerationUseCase         // Для генерации изображений
-	useSpellUC           *spellapp.UseSpellUseCase                // Для использования заклинаний (опционально)
-	responseCache        *dmcache.DMResponseCache
-	actionValidator      *ActionValidator
-	checkDailyProgressUC DailyQuestProgressChecker               // Для отслеживания ежедневных заданий
-	getSubscriptionUC    *subscriptionapp.GetSubscriptionUseCase // Для проверки Premium статуса для лимитов
-	updateRatingUC       RatingUpdater                           // Опциональная зависимость для обновления рейтингов
-	analyzePlayerActionUC *dm_analyzer.AnalyzePlayerActionUseCase // Анализатор действий игрока для определения необходимости проверок
-	generateLocationEventUC LocationEventGenerator               // Генератор событий локаций
+	llm                     domain.LLM
+	sessionRepo             session.Repository
+	contextBuilder          ContextBuilder
+	eventRepo               EventRepository
+	indexDocUC              *ragapp.IndexDocument
+	combatRepo              CombatRepository
+	questRepo               QuestRepository
+	inventoryRepo           InventoryRepository
+	addExperienceUC         *characterapp.AddExperienceUseCase
+	checkWorldEventsUC      *worldeventapp.CheckWorldEventsUseCase
+	checkAchievementsUC     *achievementapp.CheckAchievementsUseCase // Для проверки достижений
+	notificationService     achievementapp.NotificationService       // Для отправки уведомлений о достижениях
+	generateImageUC         *imageapp.ImageGenerationUseCase         // Для генерации изображений
+	useSpellUC              *spellapp.UseSpellUseCase                // Для использования заклинаний (опционально)
+	responseCache           *dmcache.DMResponseCache
+	actionValidator         *ActionValidator
+	checkDailyProgressUC    DailyQuestProgressChecker               // Для отслеживания ежедневных заданий
+	getSubscriptionUC       *subscriptionapp.GetSubscriptionUseCase // Для проверки Premium статуса для лимитов
+	updateRatingUC          RatingUpdater                           // Опциональная зависимость для обновления рейтингов
+	analyzePlayerActionUC   *dm_analyzer.AnalyzePlayerActionUseCase // Анализатор действий игрока для определения необходимости проверок
+	generateLocationEventUC LocationEventGenerator                  // Генератор событий локаций
 }
 
 // RatingUpdater интерфейс для обновления рейтингов
@@ -125,7 +128,7 @@ func (a *sessionRepoAdapterForDM) GetByChatID(ctx context.Context, chatID int64)
 	if err != nil || gs == nil {
 		return nil, err
 	}
-	
+
 	// Преобразуем локации мира в упрощенный формат для dm_analyzer
 	locations := make([]dm_analyzer.LocationSnapshot, 0, len(gs.World.Locations))
 	for _, loc := range gs.World.Locations {
@@ -134,7 +137,7 @@ func (a *sessionRepoAdapterForDM) GetByChatID(ctx context.Context, chatID int64)
 			Name: loc.Name,
 		})
 	}
-	
+
 	return &dm_analyzer.SessionSnapshot{
 		ID: gs.ID,
 		World: dm_analyzer.WorldSnapshot{
@@ -239,26 +242,26 @@ func NewHandleActionUseCase(
 	generateLocationEventUC LocationEventGenerator,
 ) *HandleActionUseCase {
 	return &HandleActionUseCase{
-		llm:                  llm,
-		sessionRepo:          sessionRepo,
-		contextBuilder:       contextBuilder,
-		eventRepo:            eventRepo,
-		indexDocUC:           indexDocUC,
-		combatRepo:           combatRepo,
-		questRepo:            questRepo,
-		inventoryRepo:        inventoryRepo,
-		addExperienceUC:      addExperienceUC,
-		checkWorldEventsUC:   checkWorldEventsUC,
-		checkAchievementsUC:  checkAchievementsUC,
-		notificationService:  notificationService,
-		generateImageUC:      generateImageUC,
-		useSpellUC:           useSpellUC,
-		responseCache:        responseCache,
-		actionValidator:      actionValidator,
-		checkDailyProgressUC: checkDailyProgressUC,
-		getSubscriptionUC:    getSubscriptionUC,
-		updateRatingUC:       updateRatingUC,
-		analyzePlayerActionUC: analyzePlayerActionUC,
+		llm:                     llm,
+		sessionRepo:             sessionRepo,
+		contextBuilder:          contextBuilder,
+		eventRepo:               eventRepo,
+		indexDocUC:              indexDocUC,
+		combatRepo:              combatRepo,
+		questRepo:               questRepo,
+		inventoryRepo:           inventoryRepo,
+		addExperienceUC:         addExperienceUC,
+		checkWorldEventsUC:      checkWorldEventsUC,
+		checkAchievementsUC:     checkAchievementsUC,
+		notificationService:     notificationService,
+		generateImageUC:         generateImageUC,
+		useSpellUC:              useSpellUC,
+		responseCache:           responseCache,
+		actionValidator:         actionValidator,
+		checkDailyProgressUC:    checkDailyProgressUC,
+		getSubscriptionUC:       getSubscriptionUC,
+		updateRatingUC:          updateRatingUC,
+		analyzePlayerActionUC:   analyzePlayerActionUC,
 		generateLocationEventUC: generateLocationEventUC,
 	}
 }
@@ -472,8 +475,29 @@ func (uc *HandleActionUseCase) Execute(
 		// Создаем реестр инструментов и регистрируем их
 		toolRegistry := uc.createToolRegistry(gs, player)
 
-		// Формируем промпт для DM
-		prompt := BuildDMPrompt(gameContext, playerMessage)
+		// Формируем промпт для DM.
+		// Важно: это лимиты ПО СИМВОЛАМ (не по токенам). Слишком низкие значения приводят к потере
+		// важных частей контекста (локации/связи/квесты) и эффекту "обрезания" мира DM.
+		maxContextLength := getEnvInt("DM_MAX_CONTEXT_CHARS", 16000)
+		maxPromptLength := getEnvInt("DM_MAX_PROMPT_CHARS", 24000)
+		contextForPrompt := truncateMiddle(gameContext, maxContextLength)
+		if contextForPrompt != gameContext {
+			logger.Warn("Game context truncated for prompt",
+				logger.Uint("session_id", gs.ID),
+				logger.Int("original_length", len(gameContext)),
+				logger.Int("truncated_length", len(contextForPrompt)),
+				logger.Int("max_context_length", maxContextLength),
+			)
+		}
+		prompt := BuildDMPrompt(contextForPrompt, playerMessage)
+		if len(prompt) > maxPromptLength {
+			prompt = truncateMiddle(prompt, maxPromptLength)
+			logger.Warn("Prompt length exceeded, truncating",
+				logger.Uint("session_id", gs.ID),
+				logger.Int("prompt_length", len(prompt)),
+				logger.Int("max_length", maxPromptLength),
+			)
+		}
 
 		// Получаем ответ от DM с поддержкой tools через multi-step loop
 		logger.Info("Generating DM response with tools",
@@ -486,7 +510,7 @@ func (uc *HandleActionUseCase) Execute(
 
 		// Multi-step loop: генерация → выполнение инструментов → финальная генерация
 		var imageResults []map[string]interface{}
-		response, imageResults, err = uc.generateWithToolsLoop(llmCtx, prompt, toolRegistry, gs.ID)
+		response, imageResults, err = uc.generateWithToolsLoop(llmCtx, prompt, toolRegistry, gs)
 		duration := time.Since(startTime)
 		if err != nil {
 			logger.Error("Failed to generate DM response with tools",
@@ -688,14 +712,14 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	}
 
 	// Настраиваем автоматическую генерацию изображений
-	if uc.generateImageUC != nil && player != nil {
+	if uc.generateImageUC != nil {
 		// Создаем адаптер для передачи ImageGenerationUseCase в dm_analyzer
 		imageServiceAdapter := &imageGenerationServiceAdapter{uc: uc.generateImageUC}
 		analyzer.SetImageGenerationService(imageServiceAdapter, player.TgUserID)
 	}
 
 	// Настраиваем отслеживание ежедневных заданий
-	if uc.checkDailyProgressUC != nil && player != nil {
+	if uc.checkDailyProgressUC != nil {
 		// Создаем адаптер для передачи CheckDailyQuestProgressUseCase в dm_analyzer
 		dailyQuestAdapter := &dailyQuestProgressAdapter{checkDailyProgressUC: uc.checkDailyProgressUC}
 		analyzer.SetCheckDailyProgress(dailyQuestAdapter, player.TgUserID)
@@ -709,6 +733,14 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		analyzer.SetSessionRepository(sessionRepoAdapter)
 	}
 
+	// Настраиваем запись событий локации в историю и RAG
+	if uc.eventRepo != nil {
+		analyzer.SetStoryEventRepository(uc.eventRepo)
+	}
+	if uc.indexDocUC != nil {
+		analyzer.SetRAGIndexer(uc.indexDocUC)
+	}
+
 	// Анализируем ответ DM
 	analysis, err := analyzer.Execute(ctx, dmResponse)
 	if err != nil {
@@ -718,9 +750,9 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		)
 		return dmResponse, ""
 	}
-	
+
 	// Обновляем рейтинг при завершении квеста
-	if uc.updateRatingUC != nil && player != nil && analysis != nil && analysis.QuestCompleted {
+	if uc.updateRatingUC != nil && analysis.QuestCompleted {
 		ratingReq := RatingUpdateRequest{
 			TgUserID: player.TgUserID,
 			ChatID:   gs.ChatID,
@@ -870,7 +902,7 @@ func (uc *HandleActionUseCase) generateEnemyTurn(
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
 
-	enemyResponse, _, err := uc.generateWithToolsLoop(llmCtx, enemyTurnPrompt, toolRegistry, gs.ID)
+	enemyResponse, _, err := uc.generateWithToolsLoop(llmCtx, enemyTurnPrompt, toolRegistry, gs)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate enemy turn: %w", err)
 	}
@@ -925,6 +957,74 @@ func cleanTechnicalDetails(text string) string {
 	// Удаляем множественные пустые строки
 	cleaned = regexp.MustCompile(`\n{3,}`).ReplaceAllString(cleaned, "\n\n")
 	return strings.TrimSpace(cleaned)
+}
+
+func sanitizePlayerFacingResponse(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+
+	// Удаляем fenced-блоки (```...```)
+	fencePattern := regexp.MustCompile("(?s)```.*?```")
+	text = fencePattern.ReplaceAllString(text, "")
+
+	lines := strings.Split(text, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+
+		// Убираем явные технические секции инструментов
+		if strings.Contains(lower, "результаты вызова инструментов") ||
+			strings.Contains(lower, "tool_call") ||
+			strings.Contains(lower, "tool_result") ||
+			strings.Contains(lower, "tool_name") ||
+			strings.Contains(lower, "arguments") {
+			continue
+		}
+
+		// Убираем строки с JSON-объектами/массивами (обычно это tool-артефакты)
+		if (strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}")) ||
+			(strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
+			continue
+		}
+
+		filtered = append(filtered, line)
+	}
+
+	result := strings.TrimSpace(strings.Join(filtered, "\n"))
+	if result == "" {
+		return ""
+	}
+
+	// Удаляем множественные пустые строки после фильтрации
+	result = regexp.MustCompile(`\n{3,}`).ReplaceAllString(result, "\n\n")
+	return strings.TrimSpace(result)
+}
+
+func truncateMiddle(text string, maxLen int) string {
+	if maxLen <= 0 || len(text) <= maxLen {
+		return text
+	}
+	trimmed := strings.TrimSpace(text)
+	if len(trimmed) <= maxLen {
+		return trimmed
+	}
+	marker := "\n...[context truncated]...\n"
+	if maxLen <= len(marker)+10 {
+		return trimmed[:maxLen]
+	}
+	headLen := (maxLen - len(marker)) * 2 / 3
+	tailLen := maxLen - len(marker) - headLen
+	if headLen < 0 {
+		headLen = 0
+	}
+	if tailLen < 0 {
+		tailLen = 0
+	}
+	head := trimmed[:headLen]
+	tail := trimmed[len(trimmed)-tailLen:]
+	return strings.TrimSpace(head) + marker + strings.TrimSpace(tail)
 }
 
 // buildCombatContext строит контекст боя для DM
@@ -1091,7 +1191,7 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 
 // generateWithToolsLoop реализует multi-step loop для работы с tools
 // Возвращает финальный ответ DM с явно включенными результатами combat tools
-func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt string, toolRegistry *dm_tools.ToolRegistry, sessionID uint) (string, []map[string]interface{}, error) {
+func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt string, toolRegistry *dm_tools.ToolRegistry, gs *session.GameSession) (string, []map[string]interface{}, error) {
 	const maxIterations = 3 // Максимальное количество итераций для предотвращения бесконечного цикла
 
 	allTools := toolRegistry.GetAll()
@@ -1120,6 +1220,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 			}
 			// Удаляем технические детали из ответа (шаги, инструкции)
 			finalResponse = cleanTechnicalDetails(finalResponse)
+			finalResponse = sanitizePlayerFacingResponse(finalResponse)
 
 			// Добавляем результаты combat tools в начало ответа, если они есть
 			if len(combatResults) > 0 {
@@ -1132,7 +1233,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 
 		// Выполняем вызовы инструментов
 		logger.Info("DM requested tool calls",
-			logger.Uint("session_id", sessionID),
+			logger.Uint("session_id", gs.ID),
 			logger.Int("iteration", iteration+1),
 			logger.Int("tool_calls_count", len(llmResponse.ToolCalls)),
 		)
@@ -1141,7 +1242,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 		for i, call := range llmResponse.ToolCalls {
 			argsJSON, _ := json.Marshal(call.Arguments)
 			logger.Info("DM tool call requested",
-				logger.Uint("session_id", sessionID),
+				logger.Uint("session_id", gs.ID),
 				logger.Int("iteration", iteration+1),
 				logger.Int("call_index", i+1),
 				logger.Int("total_calls", len(llmResponse.ToolCalls)),
@@ -1154,7 +1255,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 		results, err := executor.ExecuteToolCalls(ctx, llmResponse.ToolCalls)
 		if err != nil {
 			logger.Warn("Failed to execute tool calls",
-				logger.Uint("session_id", sessionID),
+				logger.Uint("session_id", gs.ID),
 				logger.ErrorField(err),
 				logger.Int("iteration", iteration+1),
 			)
@@ -1164,6 +1265,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 				cleanedResponse = dm_tools.CleanToolCallTags(cleanedResponse)
 			}
 			cleanedResponse = cleanTechnicalDetails(cleanedResponse)
+			cleanedResponse = sanitizePlayerFacingResponse(cleanedResponse)
 			// Возвращаем ответ с собранными результатами combat tools
 			if len(combatResults) > 0 {
 				combatSection := strings.Join(combatResults, "\n\n")
@@ -1201,6 +1303,16 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 					}
 				}
 			}
+
+			// Обработка результата evaluate_check для завершения событий локации
+			if result.Success && result.ToolName == "evaluate_check" {
+				if err := uc.resolveLocationEventFromCheck(ctx, gs, result); err != nil {
+					logger.Warn("Failed to resolve location event from evaluate_check",
+						logger.ErrorField(err),
+						logger.Uint("session_id", gs.ID),
+					)
+				}
+			}
 		}
 
 		// Форматируем результаты для передачи обратно DM
@@ -1227,7 +1339,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 		}
 
 		logger.Info("Tool calls execution completed",
-			logger.Uint("session_id", sessionID),
+			logger.Uint("session_id", gs.ID),
 			logger.Int("iteration", iteration+1),
 			logger.Int("total_calls", len(llmResponse.ToolCalls)),
 			logger.Int("successful", successfulCount),
@@ -1247,6 +1359,7 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 	}
 	// Удаляем технические детали из ответа
 	cleanedResponse = cleanTechnicalDetails(cleanedResponse)
+	cleanedResponse = sanitizePlayerFacingResponse(cleanedResponse)
 
 	// Добавляем результаты combat tools в начало ответа, если они есть
 	if len(combatResults) > 0 {
@@ -1255,6 +1368,141 @@ func (uc *HandleActionUseCase) generateWithToolsLoop(ctx context.Context, prompt
 	}
 
 	return cleanedResponse, imageResults, nil
+}
+
+func (uc *HandleActionUseCase) resolveLocationEventFromCheck(
+	ctx context.Context,
+	gs *session.GameSession,
+	result dm_tools.ToolResult,
+) error {
+	if gs == nil || gs.CurrentLocationID == nil || len(gs.World.Events) == 0 {
+		return nil
+	}
+
+	resultMap, ok := result.Result.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	success, ok := resultMap["success"].(bool)
+	if !ok {
+		return nil
+	}
+	message, _ := resultMap["message"].(string)
+
+	var target *world.WorldEvent
+	for i := range gs.World.Events {
+		ev := &gs.World.Events[i]
+		if !isLocationEventType(ev.Type) || ev.Status != world.WorldEventStatusActive {
+			continue
+		}
+		if ev.RequiredLocationID != nil && *ev.RequiredLocationID == *gs.CurrentLocationID {
+			target = ev
+			break
+		}
+	}
+
+	if target == nil {
+		return nil
+	}
+
+	now := time.Now()
+	if success {
+		target.Complete()
+		target.UpdatedAt = now
+		target.Metadata = updateLocationEventMetadataStatus(target.Metadata, "resolved_success")
+	} else {
+		target.Cancel()
+		target.CompletedAt = &now
+		target.UpdatedAt = now
+		target.Metadata = updateLocationEventMetadataStatus(target.Metadata, "resolved_fail")
+	}
+
+	if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+		return fmt.Errorf("failed to save location event outcome: %w", err)
+	}
+
+	outcome := "✅ Успех проверки. Событие локации завершено."
+	if !success {
+		outcome = "❌ Провал проверки. Событие локации завершено неудачей."
+	}
+	content := buildLocationEventOutcomeStory(target, outcome, message)
+
+	if uc.eventRepo != nil {
+		eventItem := &event.StoryEvent{
+			GameSessionID: gs.ID,
+			AuthorType:    event.AuthorTypeDM,
+			Content:       content,
+			CreatedAt:     time.Now(),
+		}
+		if err := uc.eventRepo.Save(ctx, eventItem); err != nil {
+			return fmt.Errorf("failed to save location outcome story event: %w", err)
+		}
+	}
+
+	if uc.indexDocUC != nil {
+		doc := ragdomain.Document{
+			ID:        uuid.New().String(),
+			Source:    ragdomain.SourceEvent,
+			SessionID: gs.ID,
+			Text:      content,
+			Timestamp: time.Now(),
+		}
+		if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
+			return fmt.Errorf("failed to index location outcome in RAG: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func isLocationEventType(t world.WorldEventType) bool {
+	switch t {
+	case world.WorldEventTypeLocationNPC,
+		world.WorldEventTypeLocationItem,
+		world.WorldEventTypeLocationTrap,
+		world.WorldEventTypeLocationPuzzle,
+		world.WorldEventTypeLocationEncounter:
+		return true
+	default:
+		return false
+	}
+}
+
+func updateLocationEventMetadataStatus(meta []byte, status string) []byte {
+	if len(meta) == 0 {
+		return meta
+	}
+	var payload world.LocationEventMetadata
+	if err := json.Unmarshal(meta, &payload); err != nil {
+		return meta
+	}
+	payload.Status = status
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		return meta
+	}
+	return updated
+}
+
+func buildLocationEventOutcomeStory(ev *world.WorldEvent, outcome, checkMessage string) string {
+	if ev == nil {
+		return outcome
+	}
+
+	var parts []string
+	parts = append(parts, fmt.Sprintf("Событие локации: %s", ev.Name))
+	if outcome != "" {
+		parts = append(parts, outcome)
+	}
+	if checkMessage != "" {
+		parts = append(parts, fmt.Sprintf("Результат проверки: %s", checkMessage))
+	}
+	if ev.Description != "" {
+		parts = append(parts, fmt.Sprintf("Описание: %s", ev.Description))
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 // extractNumber безопасно извлекает число из interface{}, обрабатывая int и float64
@@ -1274,6 +1522,23 @@ func extractNumber(v interface{}) float64 {
 	default:
 		return 0
 	}
+}
+
+func getEnvInt(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		logger.Warn("Invalid env value, using fallback",
+			logger.String("key", key),
+			logger.String("value", raw),
+			logger.Int("fallback", fallback),
+		)
+		return fallback
+	}
+	return value
 }
 
 // extractCombatToolMessage извлекает читаемое сообщение из результата combat tool для явного отображения в чате

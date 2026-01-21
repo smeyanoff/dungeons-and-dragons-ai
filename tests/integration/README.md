@@ -25,13 +25,14 @@
 ```bash
 # Через Makefile (рекомендуется)
 make test-integration              # Все интеграционные тесты
-make test-integration-gameplay     # Тесты игрового процесса (как пользователь)
+make test-telegram-stub            # Telegram e2e без реального LLM/Qdrant (только Postgres)
+make test-telegram-real            # Telegram e2e с реальным LLM (GigaChat)
+make test-telegram                 # Все Telegram gameplay тесты (stubbed + real; real может SKIP)
 
 # Из корня проекта напрямую
 go test -v ./tests/integration/...
 
 # С указанием конкретного теста
-go test -v ./tests/integration/... -run TestGameFlow_CompleteScenario
 go test -v ./tests/integration/... -run TestTelegramGameplay
 
 # С таймаутом (тесты могут занимать время из-за LLM запросов)
@@ -41,48 +42,6 @@ go test -v ./tests/integration/... -timeout 30m
 **Важно:** Результаты тестов автоматически записываются в `TESTING_REPORT.md` (проблемы) и `FEEDBACK.md` (странное поведение LLM).
 
 ## Что тестируется
-
-### TestGameFlow_CompleteScenario
-Полный сценарий игры:
-1. Создание новой игры
-2. Создание персонажа
-3. Игровое действие (исследование)
-4. Просмотр инвентаря
-5. Подбор предмета
-6. Бросок кубика
-7. Просмотр квестов
-8. Просмотр ежедневных заданий
-9. Просмотр карты
-10. Просмотр истории
-11. Просмотр достижений
-12. Просмотр заклинаний
-13. Завершение игры
-
-### TestCombatMechanics
-Боевые механики:
-- Инициация боя через действие
-- Атака через команду
-
-### TestCharacterCreation
-Создание персонажей разных рас и классов:
-- Elf Wizard
-- Human Fighter
-- Dwarf Cleric
-- Orc Rogue
-- Halfling Ranger
-
-### TestInventoryOperations
-Операции с инвентарем:
-- Просмотр пустого инвентаря
-- Подбор предмета
-
-### TestDiceRolling
-Броски кубиков:
-- d20
-- 2d6
-- d20+5
-- 2d6+3
-- d100
 
 ### TestTelegramGameplay_CompleteFlow
 Полный игровой процесс как реальный пользователь через Telegram:
@@ -121,12 +80,21 @@ go test -v ./tests/integration/... -timeout 30m
 1. Просмотр заклинаний
 2. Использование заклинания
 
+### TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM
+Стабильный “как пользователь в Telegram”, но без реального LLM/RAG:
+- `/newgame` (stubbed JSON world)
+- `/createcharacter`
+- player action → tool-first → one-tap ability check (callback)
+- `/map` + callback навигации
+- `/history` (проверка на утечки tool-текста)
+- `/endgame`
+
 ## Примечания
 
-- Тесты требуют реального подключения к GigaChat API
-- Тесты могут занимать значительное время из-за LLM запросов
-- Тесты автоматически очищают данные после выполнения
-- Если контейнеры не запущены, тесты будут пропущены с сообщением
+- `make test-telegram-stub` не требует реального LLM и не обращается к Qdrant (нужен Postgres).
+- `make test-telegram-real` требует реального подключения к GigaChat API и может занимать значительное время.
+- Реальные LLM вызовы в тестах ограничены rate limit’ом (по умолчанию 2500ms; `LLM_TEST_MIN_DELAY_MS`).
+- Если контейнеры не запущены, часть тестов будет пропущена с сообщением.
 
 ## Troubleshooting
 

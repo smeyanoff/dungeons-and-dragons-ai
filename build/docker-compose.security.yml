@@ -1,0 +1,10 @@
+services:
+  gosec:
+    image: securego/gosec:latest
+    working_dir: /app
+    volumes:
+      - ..:/app
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      gosec -fmt json -out /app/gosec-report.json ./... || true &&
+      gosec -fmt text ./... || true

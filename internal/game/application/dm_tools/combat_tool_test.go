@@ -14,7 +14,7 @@ import (
 // Mock Combat Repository
 type mockCombatRepo struct {
 	getActiveBySessionIDFunc func(ctx context.Context, sessionID uint) (*combat.Combat, error)
-	saveFunc                  func(ctx context.Context, c *combat.Combat) error
+	saveFunc                 func(ctx context.Context, c *combat.Combat) error
 }
 
 func (m *mockCombatRepo) GetActiveBySessionID(ctx context.Context, sessionID uint) (*combat.Combat, error) {
@@ -46,7 +46,7 @@ func (m *mockGameSessionRepo) GetByChatID(ctx context.Context, chatID int64) (*s
 // Mock Player Repository
 type mockPlayerRepo struct {
 	getByTgUserIDAndSessionIDFunc func(ctx context.Context, tgUserID int64, sessionID uint) (*player.Player, error)
-	saveFunc                       func(ctx context.Context, p *player.Player) error
+	saveFunc                      func(ctx context.Context, p *player.Player) error
 }
 
 func (m *mockPlayerRepo) GetByTgUserIDAndSessionID(ctx context.Context, tgUserID int64, sessionID uint) (*player.Player, error) {

@@ -24,10 +24,10 @@ const (
 type Rarity string
 
 const (
-	RarityCommon   Rarity = "common"   // Обычное
-	RarityUncommon Rarity = "uncommon" // Необычное
-	RarityRare     Rarity = "rare"     // Редкое
-	RarityEpic     Rarity = "epic"     // Эпическое
+	RarityCommon    Rarity = "common"    // Обычное
+	RarityUncommon  Rarity = "uncommon"  // Необычное
+	RarityRare      Rarity = "rare"      // Редкое
+	RarityEpic      Rarity = "epic"      // Эпическое
 	RarityLegendary Rarity = "legendary" // Легендарное
 )
 
@@ -39,39 +39,39 @@ type Achievement struct {
 	Description string          `gorm:"type:text"`
 	Type        AchievementType `gorm:"type:varchar(32);not null"`
 	Rarity      Rarity          `gorm:"type:varchar(16);default:'common'"`
-	
+
 	// Условия для получения достижения
 	RequirementValue int    // Значение для проверки (например, 10 для "победить 10 монстров")
 	RequirementKey   string // Ключ требования (например, "combat_wins", "quests_completed")
-	
+
 	// Награды за достижение
-	ExperienceReward int  // Опыт за получение достижения
-	GoldReward       int  // Золото за получение достижения
-	
+	ExperienceReward int // Опыт за получение достижения
+	GoldReward       int // Золото за получение достижения
+
 	// Метаданные
-	Icon        string // Эмодзи или иконка достижения
-	Category    string // Категория (для группировки)
-	IsHidden    bool   // Скрытое достижение (показывается только после получения)
-	IsRepeatable bool  // Повторяемое достижение (можно получить несколько раз)
-	
+	Icon         string // Эмодзи или иконка достижения
+	Category     string // Категория (для группировки)
+	IsHidden     bool   // Скрытое достижение (показывается только после получения)
+	IsRepeatable bool   // Повторяемое достижение (можно получить несколько раз)
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
 // PlayerAchievement представляет достижение, полученное игроком
 type PlayerAchievement struct {
-	ID            uint      `gorm:"primaryKey"`
-	PlayerID      uint      `gorm:"index;not null"` // Связь с Player
-	AchievementID uint      `gorm:"index;not null"` // Связь с Achievement
+	ID            uint        `gorm:"primaryKey"`
+	PlayerID      uint        `gorm:"index;not null"` // Связь с Player
+	AchievementID uint        `gorm:"index;not null"` // Связь с Achievement
 	Achievement   Achievement `gorm:"foreignKey:AchievementID"`
-	
+
 	// Прогресс к достижению (для достижений с прогрессом)
 	Progress int `gorm:"default:0"` // Текущий прогресс (например, 7 из 10)
-	
+
 	// Метаданные
 	EarnedAt    time.Time `gorm:"type:timestamp;not null"` // Время получения
 	EarnedCount int       `gorm:"default:1"`               // Количество получений (для повторяемых)
-	
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -81,13 +81,13 @@ type AchievementProgress struct {
 	ID            uint `gorm:"primaryKey"`
 	PlayerID      uint `gorm:"index;not null"`
 	AchievementID uint `gorm:"index;not null"`
-	
+
 	// Текущий прогресс
 	CurrentValue int `gorm:"default:0"`
-	
+
 	// Флаг получения
 	IsCompleted bool `gorm:"default:false"`
-	
+
 	UpdatedAt time.Time
 }
 

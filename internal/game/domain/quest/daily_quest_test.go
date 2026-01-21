@@ -84,9 +84,9 @@ func TestNewDailyQuest(t *testing.T) {
 func TestDailyQuestProgress_IsCompleted(t *testing.T) {
 	now := time.Now()
 	tests := []struct {
-		name        string
-		progress    *DailyQuestProgress
-		want        bool
+		name     string
+		progress *DailyQuestProgress
+		want     bool
 	}{
 		{
 			name: "not completed - current less than target",
@@ -148,12 +148,12 @@ func TestDailyQuestProgress_IsCompleted(t *testing.T) {
 
 func TestDailyQuestProgress_IncrementProgress(t *testing.T) {
 	tests := []struct {
-		name           string
-		initialValue   int
-		targetValue    int
-		increment      int
-		wantValue      int
-		wantCompleted  bool
+		name          string
+		initialValue  int
+		targetValue   int
+		increment     int
+		wantValue     int
+		wantCompleted bool
 	}{
 		{
 			name:          "increment by 1",
@@ -219,9 +219,9 @@ func TestDailyQuestProgress_IncrementProgress(t *testing.T) {
 
 func TestDailyQuestProgress_Complete(t *testing.T) {
 	tests := []struct {
-		name        string
-		progress    *DailyQuestProgress
-		wantCompleted bool
+		name               string
+		progress           *DailyQuestProgress
+		wantCompleted      bool
 		wantCompletedAtSet bool
 	}{
 		{
@@ -230,9 +230,9 @@ func TestDailyQuestProgress_Complete(t *testing.T) {
 				CurrentValue: 0,
 				TargetValue:  1,
 				Completed:    false,
-				CompletedAt: nil,
+				CompletedAt:  nil,
 			},
-			wantCompleted: true,
+			wantCompleted:      true,
 			wantCompletedAtSet: true,
 		},
 		{
@@ -241,9 +241,9 @@ func TestDailyQuestProgress_Complete(t *testing.T) {
 				CurrentValue: 1,
 				TargetValue:  1,
 				Completed:    true,
-				CompletedAt: func() *time.Time { t := time.Now(); return &t }(),
+				CompletedAt:  func() *time.Time { t := time.Now(); return &t }(),
 			},
-			wantCompleted: true,
+			wantCompleted:      true,
 			wantCompletedAtSet: true,
 		},
 	}
@@ -262,7 +262,7 @@ func TestDailyQuestProgress_Complete(t *testing.T) {
 					t.Error("DailyQuestProgress.Complete() CompletedAt should be set")
 				} else {
 					if tt.progress.CompletedAt.Before(beforeTime.Add(-10*time.Millisecond)) || tt.progress.CompletedAt.After(afterTime) {
-						t.Errorf("DailyQuestProgress.Complete() CompletedAt = %v, should be between %v and %v", 
+						t.Errorf("DailyQuestProgress.Complete() CompletedAt = %v, should be between %v and %v",
 							tt.progress.CompletedAt, beforeTime, afterTime)
 					}
 				}
@@ -273,7 +273,7 @@ func TestDailyQuestProgress_Complete(t *testing.T) {
 
 func TestGetDailyQuestTypes(t *testing.T) {
 	got := GetDailyQuestTypes()
-	
+
 	expectedTypes := []DailyQuestType{
 		DailyQuestTypeCompleteQuest,
 		DailyQuestTypeWinCombat,

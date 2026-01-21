@@ -13,8 +13,8 @@ import (
 type CheckLimitsUseCase struct {
 	subscriptionRepo *persistence.SubscriptionRepository
 	sessionRepo      session.Repository
-	sessionCountRepo SessionCountRepository // Для подсчета активных игр и сохранений
-	eventCountRepo   EventCountRepository   // Для подсчета сообщений
+	sessionCountRepo SessionCountRepository          // Для подсчета активных игр и сохранений
+	eventCountRepo   EventCountRepository            // Для подсчета сообщений
 	imageLimiter     imageapp.ImageGenerationLimiter // Для подсчета использования изображений
 }
 
@@ -207,7 +207,7 @@ func (uc *CheckLimitsUseCase) Execute(ctx context.Context, req CheckLimitRequest
 
 	allowed := remaining > 0
 	var message string
-	
+
 	if allowed {
 		message = fmt.Sprintf("Лимит: %d/%d использовано, осталось: %d", current, limit, remaining)
 	} else {

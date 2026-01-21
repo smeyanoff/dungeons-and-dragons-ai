@@ -33,6 +33,11 @@ spec:
       - name: bot
         image: dnd-bot:latest
         imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8081
+          name: monitoring
         env:
         - name: TELEGRAM_BOT_TOKEN
           valueFrom:
@@ -114,3 +119,6 @@ spec:
   - port: 8080
     targetPort: 8080
     name: http
+  - port: 8081
+    targetPort: 8081
+    name: monitoring

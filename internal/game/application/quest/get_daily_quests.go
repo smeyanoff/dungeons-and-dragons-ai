@@ -21,9 +21,9 @@ type DailyQuestRepository interface {
 }
 
 type GetDailyQuestsUseCase struct {
-	sessionRepo      session.Repository
-	dailyQuestRepo   DailyQuestRepository
-	playerRepo       PlayerRepository
+	sessionRepo    session.Repository
+	dailyQuestRepo DailyQuestRepository
+	playerRepo     PlayerRepository
 }
 
 type PlayerRepository interface {
@@ -38,7 +38,7 @@ func NewGetDailyQuestsUseCase(
 	return &GetDailyQuestsUseCase{
 		sessionRepo:    sessionRepo,
 		dailyQuestRepo: dailyQuestRepo,
-		playerRepo:      playerRepo,
+		playerRepo:     playerRepo,
 	}
 }
 

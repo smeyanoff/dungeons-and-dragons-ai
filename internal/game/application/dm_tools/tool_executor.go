@@ -30,33 +30,33 @@ func ExtractToolCalls(dmResponse string) ([]ToolCall, error) {
 	// Формат: <tool_call name="tool_name">{...json...}</tool_call>
 	toolCallPattern := regexp.MustCompile(`<tool_call\s+name=["']([^"']+)["']\s*>\s*(\{.*?\})\s*</tool_call>`)
 	matches := toolCallPattern.FindAllStringSubmatch(dmResponse, -1)
-	
+
 	if len(matches) == 0 {
 		return nil, nil
 	}
-	
+
 	toolCalls := make([]ToolCall, 0, len(matches))
 	for _, match := range matches {
 		if len(match) != 3 {
 			continue
 		}
-		
+
 		toolName := match[1]
 		argsJSON := match[2]
-		
+
 		// Парсим JSON аргументы
 		var args map[string]interface{}
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 			// Если не удалось распарсить JSON, пропускаем этот вызов
 			continue
 		}
-		
+
 		toolCalls = append(toolCalls, ToolCall{
 			Name:      toolName,
 			Arguments: args,
 		})
 	}
-	
+
 	return toolCalls, nil
 }
 
@@ -65,9 +65,9 @@ func (e *ToolExecutor) ExecuteToolCalls(ctx context.Context, calls []ToolCall) (
 	logger.Info("Executing tool calls",
 		logger.Int("count", len(calls)),
 	)
-	
+
 	results := make([]ToolResult, 0, len(calls))
-	
+
 	for i, call := range calls {
 		argsJSON, _ := json.Marshal(call.Arguments)
 		logger.Info("Executing tool call",
@@ -76,9 +76,9 @@ func (e *ToolExecutor) ExecuteToolCalls(ctx context.Context, calls []ToolCall) (
 			logger.String("tool_name", call.Name),
 			logger.String("arguments", string(argsJSON)),
 		)
-		
+
 		result := e.registry.ExecuteToolCall(ctx, call)
-		
+
 		if result.Success {
 			resultJSON, _ := json.Marshal(result.Result)
 			logger.Info("Tool call executed successfully",
@@ -91,16 +91,16 @@ func (e *ToolExecutor) ExecuteToolCalls(ctx context.Context, calls []ToolCall) (
 				logger.String("error", result.Error),
 			)
 		}
-		
+
 		results = append(results, result)
 	}
-	
+
 	logger.Info("All tool calls executed",
 		logger.Int("total", len(results)),
 		logger.Int("successful", countSuccessful(results)),
 		logger.Int("failed", countFailed(results)),
 	)
-	
+
 	return results, nil
 }
 
@@ -129,10 +129,10 @@ func FormatToolResults(results []ToolResult) string {
 	if len(results) == 0 {
 		return ""
 	}
-	
+
 	var parts []string
 	parts = append(parts, "\n--- Результаты вызова инструментов ---")
-	
+
 	for _, result := range results {
 		if result.Success {
 			// Для combat tools форматируем результаты более читаемо
@@ -143,7 +143,7 @@ func FormatToolResults(results []ToolResult) string {
 					continue
 				}
 			}
-			
+
 			// Для остальных tools - стандартное форматирование
 			resultJSON, _ := json.Marshal(result.Result)
 			parts = append(parts, fmt.Sprintf("Инструмент %s выполнен успешно: %s", result.ToolName, string(resultJSON)))
@@ -151,7 +151,7 @@ func FormatToolResults(results []ToolResult) string {
 			parts = append(parts, fmt.Sprintf("Инструмент %s выполнен с ошибкой: %s", result.ToolName, result.Error))
 		}
 	}
-	
+
 	return strings.Join(parts, "\n")
 }
 
@@ -180,9 +180,9 @@ func formatCombatToolResult(result ToolResult) string {
 	if !ok {
 		return ""
 	}
-	
+
 	var parts []string
-	
+
 	if result.ToolName == "perform_combat_attack" {
 		// Форматируем результат атаки
 		hit, _ := resultMap["hit"].(bool)
@@ -194,11 +194,11 @@ func formatCombatToolResult(result ToolResult) string {
 		damage := extractNumber(resultMap["damage"])
 		targetHP := extractNumber(resultMap["target_hp"])
 		targetMaxHP := extractNumber(resultMap["target_max_hp"])
-		
+
 		if criticalHit {
 			parts = append(parts, "🎯 КРИТИЧЕСКИЙ УДАР!")
 		}
-		
+
 		if hit {
 			parts = append(parts, fmt.Sprintf("✅ %s атакует %s и попадает! (бросок: %.0f против AC %.0f)", attackerName, targetName, attackRoll, ac))
 			parts = append(parts, fmt.Sprintf("💥 Урон: %.0f", damage))
@@ -206,7 +206,7 @@ func formatCombatToolResult(result ToolResult) string {
 		} else {
 			parts = append(parts, fmt.Sprintf("❌ %s атакует %s, но промахивается! (бросок: %.0f против AC %.0f)", attackerName, targetName, attackRoll, ac))
 		}
-		
+
 		if combatFinished, ok := resultMap["combat_finished"].(bool); ok && combatFinished {
 			if victory, ok := resultMap["victory"].(bool); ok {
 				if victory {
@@ -227,13 +227,13 @@ func formatCombatToolResult(result ToolResult) string {
 			newHP, _ := resultMap["new_hp"].(float64)
 			maxHP, _ := resultMap["max_hp"].(float64)
 			isDead, _ := resultMap["is_dead"].(bool)
-			
+
 			parts = append(parts, fmt.Sprintf("💥 %s получил(а) %.0f урона. HP: %.0f/%.0f", targetName, damage, newHP, maxHP))
 			if isDead {
 				parts = append(parts, fmt.Sprintf("💀 %s повержен(а)!", targetName))
 			}
 		}
-		
+
 		if combatFinished, ok := resultMap["combat_finished"].(bool); ok && combatFinished {
 			if victory, ok := resultMap["victory"].(bool); ok {
 				if victory {
@@ -244,7 +244,7 @@ func formatCombatToolResult(result ToolResult) string {
 			}
 		}
 	}
-	
+
 	if len(parts) > 0 {
 		return strings.Join(parts, "\n")
 	}
@@ -257,16 +257,16 @@ func BuildToolsPrompt(tools []Tool) string {
 	if len(tools) == 0 {
 		return ""
 	}
-	
+
 	var parts []string
 	parts = append(parts, "\n--- Доступные инструменты ---")
 	parts = append(parts, "Ты можешь вызывать следующие инструменты для работы с игровым состоянием:")
 	parts = append(parts, "")
-	
+
 	for _, tool := range tools {
 		parts = append(parts, fmt.Sprintf("### %s", tool.Name()))
 		parts = append(parts, tool.Description())
-		
+
 		// Парсим схему параметров
 		var schema map[string]interface{}
 		if err := json.Unmarshal(tool.Parameters(), &schema); err == nil {
@@ -289,12 +289,12 @@ func BuildToolsPrompt(tools []Tool) string {
 				}
 			}
 		}
-		
+
 		parts = append(parts, "")
 		parts = append(parts, fmt.Sprintf("Формат вызова: <tool_call name=\"%s\">{...json параметры...}</tool_call>", tool.Name()))
 		parts = append(parts, "")
 	}
-	
+
 	parts = append(parts, "Важно:")
 	parts = append(parts, "- Используй инструменты, когда нужно получить актуальную информацию об игровом состоянии")
 	parts = append(parts, "- После вызова инструмента дождись результата и используй его в своем ответе")
@@ -310,17 +310,17 @@ func BuildToolsPrompt(tools []Tool) string {
 	parts = append(parts, `<tool_call name="perform_combat_attack">{...}</tool_call>`)
 	parts = append(parts, "")
 	parts = append(parts, "- Если инструмент вернул ошибку, учти это в своем ответе")
-	
+
 	return strings.Join(parts, "\n")
 }
 
 // CleanToolCallTags удаляет теги tool_call из текста ответа и заменяет их на понятные сообщения
 func CleanToolCallTags(text string) string {
-	// Паттерн для поиска вызовов инструментов: 
+	// Паттерн для поиска вызовов инструментов:
 	// 1. Самозакрывающийся: <tool_call name="tool_name" param="value"/>
 	// 2. С закрывающим тегом: <tool_call name="tool_name">{json}</tool_call>
 	// Обрабатываем оба формата отдельно
-	
+
 	// Сначала обрабатываем самозакрывающиеся теги
 	selfClosingPattern := regexp.MustCompile(`<tool_call\s+name=["']([^"']+)["']([^/>]*?)/>`)
 	text = selfClosingPattern.ReplaceAllStringFunc(text, func(match string) string {
@@ -330,7 +330,7 @@ func CleanToolCallTags(text string) string {
 		}
 		return formatToolCallMessage(matches[1], matches[2], "")
 	})
-	
+
 	// Затем обрабатываем теги с закрывающим тегом
 	toolCallPattern := regexp.MustCompile(`(?s)<tool_call\s+name=["']([^"']+)["']([^>]*)>(.*?)</tool_call>`)
 	text = toolCallPattern.ReplaceAllStringFunc(text, func(match string) string {
@@ -344,11 +344,11 @@ func CleanToolCallTags(text string) string {
 		}
 		return formatToolCallMessage(matches[1], matches[2], jsonContent)
 	})
-	
+
 	// Удаляем оставшиеся теги tool_call (на случай, если формат не совпал)
 	re := regexp.MustCompile(`(?s)<tool_call[^>]*>.*?</tool_call>`)
 	text = re.ReplaceAllString(text, "")
-	
+
 	// Удаляем лишние пробелы и переносы строк
 	text = strings.TrimSpace(text)
 	return text
@@ -358,14 +358,14 @@ func CleanToolCallTags(text string) string {
 func formatToolCallMessage(toolName, attributes, jsonContent string) string {
 	// Пытаемся извлечь параметры из атрибутов или JSON
 	var params map[string]interface{}
-	
+
 	// Сначала пробуем распарсить JSON, если он есть
 	if strings.TrimSpace(jsonContent) != "" {
 		if err := json.Unmarshal([]byte(jsonContent), &params); err == nil {
 			// Успешно распарсили JSON
 		}
 	}
-	
+
 	// Если JSON не удалось распарсить, пробуем извлечь из атрибутов
 	if params == nil {
 		params = make(map[string]interface{})
@@ -385,7 +385,7 @@ func formatToolCallMessage(toolName, attributes, jsonContent string) string {
 			}
 		}
 	}
-	
+
 	// Формируем понятное сообщение в зависимости от инструмента
 	switch toolName {
 	case "request_ability_check":
@@ -398,7 +398,7 @@ func formatToolCallMessage(toolName, attributes, jsonContent string) string {
 			return fmt.Sprintf("Выполняется проверка %s", abilityName)
 		}
 		return "Выполняется проверка характеристики"
-		
+
 	case "request_saving_throw":
 		ability := getStringParam(params, "ability")
 		dc := getIntParam(params, "dc")
@@ -409,37 +409,37 @@ func formatToolCallMessage(toolName, attributes, jsonContent string) string {
 			return fmt.Sprintf("Выполняется спасбросок %s", abilityName)
 		}
 		return "Выполняется спасбросок"
-		
+
 	case "evaluate_check":
 		ability := getStringParam(params, "ability")
 		abilityName := getAbilityName(ability)
 		return fmt.Sprintf("Оценивается результат проверки %s", abilityName)
-		
+
 	case "perform_combat_attack":
 		return "Выполняется боевая атака"
-		
+
 	case "perform_enemy_attack":
 		target := getStringParam(params, "target_name")
 		if target != "" {
 			return fmt.Sprintf("Враг атакует %s", target)
 		}
 		return "Враг выполняет атаку"
-		
+
 	case "apply_damage":
 		return "Применяется урон"
-		
+
 	case "get_character_stats":
 		return "Получаются характеристики персонажа"
-		
+
 	case "get_inventory":
 		return "Проверяется инвентарь"
-		
+
 	case "get_battlefield_status":
 		return "Проверяется статус поля боя"
-		
+
 	case "get_character_abilities":
 		return "Проверяются способности персонажа"
-		
+
 	default:
 		// Для неизвестных инструментов просто удаляем
 		return ""

@@ -17,10 +17,10 @@ const (
 	WorldEventTypeMarket          WorldEventType = "market"           // Рынок/ярмарка
 	WorldEventTypeQuest           WorldEventType = "quest"            // Специальный квест
 	// События локаций (автоматическая генерация)
-	WorldEventTypeLocationNPC      WorldEventType = "location_npc"      // Встреча с NPC в локации
-	WorldEventTypeLocationItem     WorldEventType = "location_item"     // Находка предмета в локации
-	WorldEventTypeLocationTrap     WorldEventType = "location_trap"     // Ловушка в локации
-	WorldEventTypeLocationPuzzle   WorldEventType = "location_puzzle"   // Загадка в локации
+	WorldEventTypeLocationNPC       WorldEventType = "location_npc"       // Встреча с NPC в локации
+	WorldEventTypeLocationItem      WorldEventType = "location_item"      // Находка предмета в локации
+	WorldEventTypeLocationTrap      WorldEventType = "location_trap"      // Ловушка в локации
+	WorldEventTypeLocationPuzzle    WorldEventType = "location_puzzle"    // Загадка в локации
 	WorldEventTypeLocationEncounter WorldEventType = "location_encounter" // Случайная встреча в локации
 )
 
@@ -52,22 +52,22 @@ type WorldEvent struct {
 	Name        string           `gorm:"type:varchar(255);not null"`
 	Description string           `gorm:"type:text"`
 	Metadata    datatypes.JSON   `gorm:"type:jsonb"`
-	
+
 	// Условия активации
-	RequiredDayOfWeek *int    // День недели (0-6, где 0 = воскресенье) или nil если не важно
-	RequiredTimeOfDay string  // Время суток (morning, noon, evening, night и т.д.) или "" если не важно
-	RequiredWeather   string  // Погода (clear, rainy, stormy и т.д.) или "" если не важно
+	RequiredDayOfWeek  *int   // День недели (0-6, где 0 = воскресенье) или nil если не важно
+	RequiredTimeOfDay  string // Время суток (morning, noon, evening, night и т.д.) или "" если не важно
+	RequiredWeather    string // Погода (clear, rainy, stormy и т.д.) или "" если не важно
 	RequiredLocationID *uint  // ID локации или nil если не важно
-	
+
 	// Время
 	ScheduledFor *time.Time // Запланированное время активации
 	ActivatedAt  *time.Time // Время активации
 	CompletedAt  *time.Time // Время завершения
-	
+
 	// Повторяемость
-	IsRecurring bool       // Повторяющееся ли событие
+	IsRecurring        bool // Повторяющееся ли событие
 	RecurrenceInterval *int // Интервал повторения в днях (nil если не повторяющееся)
-	
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -83,34 +83,34 @@ func (e *WorldEvent) CanActivate(
 	if e.Status != WorldEventStatusScheduled {
 		return false
 	}
-	
+
 	// Проверяем запланированное время
 	if e.ScheduledFor != nil && time.Now().Before(*e.ScheduledFor) {
 		return false
 	}
-	
+
 	// Проверяем день недели
 	if e.RequiredDayOfWeek != nil && *e.RequiredDayOfWeek != dayOfWeek {
 		return false
 	}
-	
+
 	// Проверяем время суток
 	if e.RequiredTimeOfDay != "" && e.RequiredTimeOfDay != timeOfDay {
 		return false
 	}
-	
+
 	// Проверяем погоду
 	if e.RequiredWeather != "" && e.RequiredWeather != weather {
 		return false
 	}
-	
+
 	// Проверяем локацию
 	if e.RequiredLocationID != nil {
 		if currentLocationID == nil || *e.RequiredLocationID != *currentLocationID {
 			return false
 		}
 	}
-	
+
 	return true
 }
 
@@ -138,7 +138,7 @@ func (e *WorldEvent) Reschedule(days int) {
 	if !e.IsRecurring || e.RecurrenceInterval == nil {
 		return
 	}
-	
+
 	// Устанавливаем следующее запланированное время
 	nextTime := time.Now().AddDate(0, 0, days)
 	e.ScheduledFor = &nextTime

@@ -24,7 +24,7 @@ func NewClient(cfg Config) *Client {
 		IdleConnTimeout:     90 * time.Second,
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
-	
+
 	// Если нужно пропустить проверку TLS (только для тестов)
 	// #nosec G402 - преднамеренно отключаем проверку TLS для работы с GigaChat API,
 	// который использует корневые сертификаты Сбербанка, устанавливаемые отдельно в образе
@@ -33,7 +33,7 @@ func NewClient(cfg Config) *Client {
 			InsecureSkipVerify: true,
 		}
 	}
-	
+
 	return &Client{
 		auth: newAuthClient(cfg),
 		cfg:  cfg,
@@ -138,14 +138,14 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			// Читаем тело ответа для диагностики
 			data, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			
+
 			log.Printf("GigaChat: Permission denied (403), attempt %d/%d. Response: %s", attempt+1, maxRetries+1, string(data))
-			
+
 			// Если это не последняя попытка, пробуем обновить токен и повторить
 			if attempt < maxRetries {
 				// Инвалидируем старый токен
 				c.auth.invalidateToken()
-				
+
 				// Получаем новый токен
 				newToken, err := c.auth.getToken(ctx)
 				if err != nil {
@@ -159,16 +159,16 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 					}
 					continue
 				}
-				
+
 				log.Printf("GigaChat: Token refreshed after 403, retrying request")
-				
+
 				// Добавляем небольшую задержку перед повторным запросом (может быть временная проблема)
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				case <-time.After(1 * time.Second):
 				}
-				
+
 				// Повторяем запрос с новым токеном
 				req, err = http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 				if err != nil {
@@ -177,13 +177,13 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 				req.Header.Set("Authorization", "Bearer "+newToken)
 				req.Header.Set("Accept", "application/json")
 				req.Header.Set("Content-Type", "application/json")
-				
+
 				resp, err = c.client.Do(req)
 				if err != nil {
 					lastErr = err
 					continue
 				}
-				
+
 				// Если после обновления токена все еще 403, продолжаем retry цикл
 				if resp.StatusCode == 403 {
 					lastErr = fmt.Errorf("gigachat error status 403: Permission denied")

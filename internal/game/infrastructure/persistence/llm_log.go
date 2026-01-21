@@ -14,6 +14,13 @@ type LLMLogRepository struct {
 	db *gorm.DB
 }
 
+// LLMLogFilters фильтры для выборки логов
+type LLMLogFilters struct {
+	ChatID    *int64
+	TgUserID  *int64
+	SessionID *uint
+}
+
 func NewLLMLogRepository(db *gorm.DB) *LLMLogRepository {
 	return &LLMLogRepository{db: db}
 }
@@ -91,6 +98,26 @@ func (r *LLMLogRepository) GetByDateRange(ctx context.Context, from, to time.Tim
 	return logs, nil
 }
 
+// GetByFilters получает логи по набору фильтров
+func (r *LLMLogRepository) GetByFilters(ctx context.Context, filters LLMLogFilters, limit int) ([]*llm_log.LLMLog, error) {
+	var logs []*llm_log.LLMLog
+	query := r.db.WithContext(ctx).Model(&llm_log.LLMLog{})
+	if filters.ChatID != nil {
+		query = query.Where("chat_id = ?", *filters.ChatID)
+	}
+	if filters.TgUserID != nil {
+		query = query.Where("tg_user_id = ?", *filters.TgUserID)
+	}
+	if filters.SessionID != nil {
+		query = query.Where("session_id = ?", *filters.SessionID)
+	}
+	err := query.Order("created_at DESC").Limit(limit).Find(&logs).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get logs by filters: %w", err)
+	}
+	return logs, nil
+}
+
 // CountByChatID подсчитывает количество логов для Chat ID
 func (r *LLMLogRepository) CountByChatID(ctx context.Context, chatID int64) (int64, error) {
 	var count int64
@@ -121,7 +148,7 @@ func (r *LLMLogRepository) GetWithErrors(ctx context.Context, limit int) ([]*llm
 // GetStats получает статистику использования LLM
 func (r *LLMLogRepository) GetStats(ctx context.Context, from, to time.Time) (*LLMStats, error) {
 	var stats LLMStats
-	
+
 	// Общее количество запросов
 	err := r.db.WithContext(ctx).
 		Model(&llm_log.LLMLog{}).
@@ -130,7 +157,7 @@ func (r *LLMLogRepository) GetStats(ctx context.Context, from, to time.Time) (*L
 	if err != nil {
 		return nil, fmt.Errorf("failed to count total requests: %w", err)
 	}
-	
+
 	// Количество ошибок
 	err = r.db.WithContext(ctx).
 		Model(&llm_log.LLMLog{}).
@@ -139,7 +166,7 @@ func (r *LLMLogRepository) GetStats(ctx context.Context, from, to time.Time) (*L
 	if err != nil {
 		return nil, fmt.Errorf("failed to count errors: %w", err)
 	}
-	
+
 	// Среднее время выполнения
 	var avgDuration float64
 	err = r.db.WithContext(ctx).
@@ -151,19 +178,33 @@ func (r *LLMLogRepository) GetStats(ctx context.Context, from, to time.Time) (*L
 		return nil, fmt.Errorf("failed to get average duration: %w", err)
 	}
 	stats.AverageDurationMs = int64(avgDuration)
-	
+
 	// Общее количество использованных токенов
 	var totalTokens int64
 	err = r.db.WithContext(ctx).
 		Model(&llm_log.LLMLog{}).
 		Where("created_at >= ? AND created_at <= ? AND tokens_used IS NOT NULL", from, to).
-		Select("SUM(tokens_used)").
+		Select("COALESCE(SUM(tokens_used), 0)").
 		Scan(&totalTokens).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get total tokens: %w", err)
 	}
 	stats.TotalTokens = totalTokens
-	
+
+	// Общее количество вызовов инструментов
+	var totalToolCalls int64
+	err = r.db.WithContext(ctx).
+		Model(&llm_log.LLMLog{}).
+		Where("created_at >= ? AND created_at <= ? AND tools_calls_count IS NOT NULL", from, to).
+		Select("COALESCE(SUM(tools_calls_count), 0)").
+		Scan(&totalToolCalls).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get total tool calls: %w", err)
+	}
+	stats.TotalToolCalls = totalToolCalls
+
+	stats.TotalProblems = stats.TotalErrors
+
 	return &stats, nil
 }
 
@@ -173,4 +214,6 @@ type LLMStats struct {
 	TotalErrors       int64 `json:"total_errors"`
 	AverageDurationMs int64 `json:"average_duration_ms"`
 	TotalTokens       int64 `json:"total_tokens"`
+	TotalToolCalls    int64 `json:"total_tool_calls"`
+	TotalProblems     int64 `json:"total_problems"`
 }

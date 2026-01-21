@@ -745,7 +745,7 @@ func TestHandleCombatUseCase_DailyQuestProgressOnVictory(t *testing.T) {
 			return testPlayer, nil
 		},
 	}
-	
+
 	// Создаем CompleteDailyQuestUseCase с моками
 	mockCompleteUC := questapp.NewCompleteDailyQuestUseCase(
 		mockSessionRepoForDaily,
@@ -753,7 +753,7 @@ func TestHandleCombatUseCase_DailyQuestProgressOnVictory(t *testing.T) {
 		mockPlayerRepoForDaily,
 		nil, // addExperienceUC не нужен для этого теста
 	)
-	
+
 	// Создаем реальный CheckDailyQuestProgressUseCase
 	checkDailyProgressUC := questapp.NewCheckDailyQuestProgressUseCase(
 		mockSessionRepoForDaily,

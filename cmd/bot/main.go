@@ -3,22 +3,25 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"syscall"
 	"time"
 
-	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
+	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
-	dm_analyzer "dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/dice"
-	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
+	dm_analyzer "dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/history"
+	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
@@ -27,27 +30,27 @@ import (
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
-	mapapp 	"dungeons-and-dragons-ai/internal/game/application/worldmap"
-	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
+	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/domain/achievement"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
-	"dungeons-and-dragons-ai/internal/game/domain/spell"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/feedback"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/item"
+	llmlogdomain "dungeons-and-dragons-ai/internal/game/domain/llm_log"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
 	"dungeons-and-dragons-ai/internal/game/domain/rating"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/spell"
 	"dungeons-and-dragons-ai/internal/game/domain/subscription"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
+	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
 	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	llminfrastructure "dungeons-and-dragons-ai/internal/llm/infrastructure"
 	"dungeons-and-dragons-ai/internal/monitoring"
-	llmlogdomain "dungeons-and-dragons-ai/internal/game/domain/llm_log"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragembeddings "dungeons-and-dragons-ai/internal/rag/infrastructure/embeddings"
 	ragvectorstore "dungeons-and-dragons-ai/internal/rag/infrastructure/vectorstore"
@@ -98,6 +101,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer logger.Sync()
+
+	// Важно: некоторые зависимости (включая go-telegram-bot-api) используют stdlib `log`
+	// и могут выводить URL вида https://api.telegram.org/bot<TOKEN>/...
+	// Редактируем такие строки глобально, чтобы секреты не попадали в stdout/stderr и агрегаторы логов.
+	log.SetOutput(newRedactingWriter(os.Stderr))
 
 	logger.Info("Starting application",
 		logger.String("version", version.Version),
@@ -203,15 +211,15 @@ func main() {
 
 	// Инициализация LLM
 	baseLLM := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
-	
+
 	// Инициализация мониторинга LLM
 	llmLogRepo := persistence.NewLLMLogRepository(db)
 	llm := llminfrastructure.NewMonitoredLLM(baseLLM, llmLogRepo)
 	logger.Info("LLM monitoring initialized")
-	
+
 	// Инициализация ImageGenerator для генерации изображений
 	imageGenerator := llminfrastructure.NewGigachatImageGenerator(gigachatClient, gigachatModel)
-	
+
 	// Инициализация ImageStorage для локального хранения изображений
 	imageStoragePath := getEnv("IMAGE_STORAGE_PATH", "./images")
 	imageStorage, err := imageapp.NewLocalImageStorage(imageStoragePath)
@@ -224,10 +232,10 @@ func main() {
 	logger.Info("Image storage initialized",
 		logger.String("path", imageStoragePath),
 	)
-	
+
 	// Создаем ImageGenerationUseCase
 	generateImageUC := imageapp.NewImageGenerationUseCase(imageGenerator, imageStorage)
-	
+
 	// Настраиваем лимитер для генерации изображений (5/день для Free по умолчанию)
 	// Будет обновлен после создания subscriptionRepo для интеграции с подписками
 	dailyLimit := 5
@@ -250,6 +258,8 @@ func main() {
 	qdrantClient, err := qdrant.NewClient(&qdrant.Config{
 		Host: qdrantHost,
 		Port: qdrantPort,
+		// Qdrant сервер может быть старее клиента; пропускаем проверку совместимости осознанно.
+		SkipCompatibilityCheck: true,
 	})
 	if err != nil {
 		logger.Fatal("Failed to initialize Qdrant client",
@@ -315,13 +325,13 @@ func main() {
 	ragContextBuilder := contextbuilder.NewRAGContextBuilder(simpleContextBuilder, retrieveContextUC, eventRepo, inventoryRepo, combatRepo)
 	addExperienceUC := characterapp.NewAddExperienceUseCase(playerRepo, sessionRepo)
 	checkAchievementsUC := achievementapp.NewCheckAchievementsUseCase(achievementRepo, playerRepo)
-	
+
 	// Создаем notification service для отправки уведомлений о достижениях через Telegram
 	// Нужно создать bot API для notification service, но bot еще не создан
 	// Поэтому создадим его позже или передадим через callback
 	// Временно создадим NoOpNotificationService и заменим позже
 	notificationService := &achievementapp.NoOpNotificationService{}
-	
+
 	// Настраиваем проверку достижений в AddExperienceUseCase
 	addExperienceUC.SetCheckAchievementsUseCase(checkAchievementsUC)
 	addExperienceUC.SetNotificationService(notificationService)
@@ -331,14 +341,14 @@ func main() {
 	getDailyQuestsUC := questapp.NewGetDailyQuestsUseCase(sessionRepo, dailyQuestRepo, playerRepo)
 	completeDailyQuestUC := questapp.NewCompleteDailyQuestUseCase(sessionRepo, dailyQuestRepo, playerRepo, addExperienceUC)
 	checkDailyProgressUC := questapp.NewCheckDailyQuestProgressUseCase(sessionRepo, dailyQuestRepo, playerRepo, completeDailyQuestUC)
-	
+
 	// Создаем use cases для рейтингов и лидербордов
 	ratingRepo := persistence.NewRatingRepository(db)
 	getLeaderboardUC := ratingapp.NewGetLeaderboardUseCase(ratingRepo)
 	// Создаем адаптер для AchievementRepository для использования в rating пакете
 	achievementRepoAdapter := &ratingAchievementRepoAdapter{repo: achievementRepo}
 	updateRatingUC := ratingapp.NewUpdateRatingUseCase(ratingRepo, sessionRepo, playerRepo, achievementRepoAdapter)
-	
+
 	// Создаем адаптер для преобразования типов запросов между player_action и quest
 	dailyQuestProgressAdapter := &dailyQuestProgressAdapterForPlayerAction{
 		uc: checkDailyProgressUC,
@@ -347,11 +357,11 @@ func main() {
 	ratingUpdaterAdapterAction := &ratingUpdaterAdapterAction{uc: updateRatingUC}
 	// Создаем анализатор действий игрока для определения необходимости проверок
 	analyzePlayerActionUC := dm_analyzer.NewAnalyzePlayerActionUseCase(llm, eventRepo)
-	
+
 	// Создаем генератор событий локаций
 	locationEventRepo := &locationEventRepoAdapter{repo: worldEventRepo}
 	generateLocationEventUC := locationeventapp.NewLocationEventGenerator(locationEventRepo)
-	
+
 	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator, dailyQuestProgressAdapter, getSubscriptionUC, ratingUpdaterAdapterAction, analyzePlayerActionUC, generateLocationEventUC)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
@@ -365,7 +375,7 @@ func main() {
 	rollDiceUC := dice.NewRollDiceUseCase()
 	getQuestsUC := questapp.NewGetQuestsUseCase(sessionRepo, questRepo)
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(sessionRepo)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(sessionRepo, worldEventRepo, eventRepo, indexDocUC)
 	getAchievementsUC := achievementapp.NewGetAchievementsUseCase(achievementRepo, sessionRepo)
 	getSpellsUC := spellapp.NewGetSpellsUseCase(spellRepo, sessionRepo)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(sessionRepo, eventRepo, indexDocUC)
@@ -402,13 +412,13 @@ func main() {
 			logger.ErrorField(err),
 		)
 	}
-	
+
 	// После создания бота, настраиваем TelegramNotificationService в use cases
 	// Используем API из bot для отправки уведомлений о достижениях
 	telegramNotificationService := achievementapp.NewTelegramNotificationServiceFromBot(bot)
 	addExperienceUC.SetNotificationService(telegramNotificationService)
 	handleCombatUC.SetNotificationService(telegramNotificationService)
-	
+
 	// Настраиваем обновление рейтингов в use cases
 	// Создаем адаптеры для RatingUpdater из updateRatingUC
 	ratingUpdaterAdapterExp := &ratingUpdaterAdapter{uc: updateRatingUC}
@@ -416,7 +426,7 @@ func main() {
 	addExperienceUC.SetRatingUpdater(ratingUpdaterAdapterExp)
 	handleCombatUC.SetRatingUpdater(ratingUpdaterAdapterCombat)
 	logger.Info("Rating updater configured for use cases")
-	
+
 	logger.Info("Telegram notification service configured for achievements")
 	logger.Info("Telegram bot initialized")
 
@@ -460,7 +470,7 @@ func main() {
 	monitoringPort := getEnv("MONITORING_PORT", "8081")
 	monitoringAddr := fmt.Sprintf(":%s", monitoringPort)
 	monitoringServer := monitoring.NewServer(monitoringAddr, llmLogRepo)
-	
+
 	go func() {
 		if err := monitoringServer.Start(); err != nil && err != http.ErrServerClosed {
 			logger.Error("Monitoring server failed",
@@ -473,7 +483,7 @@ func main() {
 		logger.String("addr", monitoringAddr),
 		logger.String("url", fmt.Sprintf("http://localhost:%s", monitoringPort)),
 	)
-	
+
 	http.HandleFunc("/version", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -553,9 +563,9 @@ func (a *ratingAchievementRepoAdapter) GetAchievementProgress(ctx context.Contex
 		return nil, nil
 	}
 	return &ratingapp.AchievementProgress{
-		PlayerID:     progress.PlayerID,
+		PlayerID:      progress.PlayerID,
 		AchievementID: progress.AchievementID,
-		CurrentValue: progress.CurrentValue,
+		CurrentValue:  progress.CurrentValue,
 	}, nil
 }
 
@@ -649,6 +659,35 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+type redactingWriter struct {
+	w       io.Writer
+	reToken *regexp.Regexp
+}
+
+func newRedactingWriter(w io.Writer) *redactingWriter {
+	// Telegram bot token формат обычно: <digits>:<base64url-ish>
+	// Пример из ошибок http: api.telegram.org/bot8553...:AA.../getUpdates
+	reToken := regexp.MustCompile(`bot[0-9]{6,}:[A-Za-z0-9_-]{10,}`)
+	return &redactingWriter{
+		w:       w,
+		reToken: reToken,
+	}
+}
+
+func (rw *redactingWriter) Write(p []byte) (n int, err error) {
+	if rw == nil || rw.w == nil {
+		return 0, nil
+	}
+	s := string(p)
+	s = rw.reToken.ReplaceAllString(s, "bot***")
+	_, err = rw.w.Write([]byte(s))
+	if err != nil {
+		return 0, err
+	}
+	// Возвращаем len(p) (а не len(s)), чтобы вызывающие не считали это ошибкой записи.
+	return len(p), nil
 }
 
 // maskDSN маскирует чувствительные данные в DSN для логирования

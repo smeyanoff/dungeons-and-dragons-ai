@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -32,6 +33,17 @@ func NewInitCampaignUseCase(llm domain.LLM, worldRepo WorldRepository) *InitCamp
 		worldRepo: worldRepo,
 	}
 }
+
+const (
+	// Важно: в GigaChat без явного max_tokens сервер может применять небольшой дефолт,
+	// из-за чего JSON часто "обрезается" (особенно locations/connections).
+	// Эти лимиты задают ВЕРХНЮЮ границу ответа; модель может остановиться раньше.
+	maxTokensMainQuest   = 2500
+	maxTokensLocations   = 2500
+	maxTokensNPCs        = 1600
+	maxTokensChecks      = 1800
+	maxTokensConnections = 3200
+)
 
 func (uc *InitCampaignUseCase) Execute(
 	ctx context.Context,
@@ -106,7 +118,10 @@ func (uc *InitCampaignUseCase) generateMainQuest(ctx context.Context, worldTheme
 func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, worldTheme string, attempt int) (*QuestDTO, error) {
 	const maxRetries = 2
 	if attempt > maxRetries {
-		return nil, fmt.Errorf("failed to generate valid main quest after %d attempts", maxRetries)
+		logger.Warn("Failed to generate valid main quest, using fallback",
+			logger.Int("attempts", maxRetries+1),
+		)
+		return fallbackMainQuest(worldTheme), nil
 	}
 
 	prompt := GenerateMainQuestPrompt(worldTheme)
@@ -114,12 +129,16 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 		// Более строгий промпт для retry
 		prompt = GenerateMainQuestPromptStrict(worldTheme)
 	}
-	
+
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
-	
-	// Убрано ограничение на токены для генерации главного квеста
-	raw, err := uc.llm.Generate(llmCtx, prompt)
+
+	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	logger.Debug("Generating main quest",
+		logger.Int("prompt_length", len(prompt)),
+		logger.Int("max_tokens", maxTokensMainQuest),
+	)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensMainQuest)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -137,7 +156,7 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 			}
 			logger.Debug("JSON preview", logger.String("preview", preview))
 		}
-		
+
 		cleaned = tryRepairTruncatedJSON(cleaned)
 		if !json.Valid([]byte(cleaned)) {
 			logger.Warn("Failed to repair JSON, retrying",
@@ -153,7 +172,7 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 	}
 
 	var quest QuestDTO
-	if err := json.Unmarshal([]byte(cleaned), &quest); err != nil {
+	if err := decodeStrictJSON(cleaned, &quest); err != nil {
 		logger.Warn("Failed to parse main quest JSON",
 			logger.Int("attempt", attempt),
 			logger.ErrorField(err),
@@ -169,6 +188,12 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 			logger.String("title", quest.Title),
 			logger.String("description", quest.Description),
 		)
+		if attempt >= maxRetries {
+			logger.Warn("Main quest validation failed after max retries, using fallback",
+				logger.Int("attempts", maxRetries+1),
+			)
+			return fallbackMainQuest(worldTheme), nil
+		}
 		return uc.generateMainQuestWithRetry(ctx, worldTheme, attempt+1)
 	}
 
@@ -184,7 +209,10 @@ func (uc *InitCampaignUseCase) generateLocations(ctx context.Context, worldTheme
 func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, worldTheme, mainQuestTitle string, attempt int) ([]LocationDTO, error) {
 	const maxRetries = 2
 	if attempt > maxRetries {
-		return nil, fmt.Errorf("failed to generate valid locations after %d attempts", maxRetries)
+		logger.Warn("Failed to generate valid locations, using fallback",
+			logger.Int("attempts", maxRetries+1),
+		)
+		return fallbackLocations(worldTheme), nil
 	}
 
 	prompt := GenerateLocationsPrompt(worldTheme, mainQuestTitle)
@@ -192,12 +220,16 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 		// Более строгий промпт для retry
 		prompt = GenerateLocationsPromptStrict(worldTheme, mainQuestTitle)
 	}
-	
+
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
-	
-	// Убрано ограничение на токены для генерации локаций
-	raw, err := uc.llm.Generate(llmCtx, prompt)
+
+	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	logger.Debug("Generating locations",
+		logger.Int("prompt_length", len(prompt)),
+		logger.Int("max_tokens", maxTokensLocations),
+	)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensLocations)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -215,7 +247,7 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 				logger.String("last_200_chars", cleaned[len(cleaned)-200:]),
 			)
 		}
-		
+
 		cleaned = tryRepairTruncatedJSON(cleaned)
 		if !json.Valid([]byte(cleaned)) {
 			logger.Warn("Failed to repair JSON for locations, retrying",
@@ -233,7 +265,7 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 	var response struct {
 		Locations []LocationDTO `json:"locations"`
 	}
-	if err := json.Unmarshal([]byte(cleaned), &response); err != nil {
+	if err := decodeStrictJSON(cleaned, &response); err != nil {
 		logger.Warn("Failed to parse locations JSON",
 			logger.Int("attempt", attempt),
 			logger.ErrorField(err),
@@ -247,6 +279,12 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 		logger.Warn("No locations generated, retrying",
 			logger.Int("attempt", attempt),
 		)
+		if attempt >= maxRetries {
+			logger.Warn("No locations generated after max retries, using fallback",
+				logger.Int("attempts", maxRetries+1),
+			)
+			return fallbackLocations(worldTheme), nil
+		}
 		return uc.generateLocationsWithRetry(ctx, worldTheme, mainQuestTitle, attempt+1)
 	}
 
@@ -262,16 +300,25 @@ func (uc *InitCampaignUseCase) generateLocationNPCs(ctx context.Context, locatio
 func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context, locationName, locationDescription string, attempt int) ([]NPCDTO, error) {
 	const maxRetries = 2
 	if attempt > maxRetries {
-		return nil, fmt.Errorf("failed to generate valid NPCs after %d attempts", maxRetries)
+		logger.Warn("Failed to generate valid NPCs, using empty fallback",
+			logger.Int("attempts", maxRetries+1),
+			logger.String("location", locationName),
+		)
+		return []NPCDTO{}, nil
 	}
 
 	prompt := GenerateLocationNPCsPrompt(locationName, locationDescription)
-	
+
 	llmCtx, llmCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer llmCancel()
-	
-	// Убрано ограничение на токены для генерации NPC
-	raw, err := uc.llm.Generate(llmCtx, prompt)
+
+	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	logger.Debug("Generating NPCs for location",
+		logger.String("location_name", locationName),
+		logger.Int("prompt_length", len(prompt)),
+		logger.Int("max_tokens", maxTokensNPCs),
+	)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensNPCs)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -298,7 +345,7 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 	var response struct {
 		NPCs []NPCDTO `json:"npcs"`
 	}
-	if err := json.Unmarshal([]byte(cleaned), &response); err != nil {
+	if err := decodeStrictJSON(cleaned, &response); err != nil {
 		logger.Warn("Failed to parse NPCs JSON",
 			logger.Int("attempt", attempt),
 			logger.ErrorField(err),
@@ -318,15 +365,25 @@ func (uc *InitCampaignUseCase) generateLocationPredefinedChecks(ctx context.Cont
 func (uc *InitCampaignUseCase) generateLocationPredefinedChecksWithRetry(ctx context.Context, locationName, locationDescription string, attempt int) ([]PredefinedCheckDTO, error) {
 	const maxRetries = 2
 	if attempt > maxRetries {
-		return nil, fmt.Errorf("failed to generate valid predefined checks after %d attempts", maxRetries)
+		logger.Warn("Failed to generate valid predefined checks, using empty fallback",
+			logger.Int("attempts", maxRetries+1),
+			logger.String("location", locationName),
+		)
+		return []PredefinedCheckDTO{}, nil
 	}
 
 	prompt := GenerateLocationPredefinedChecksPrompt(locationName, locationDescription)
-	
+
 	llmCtx, llmCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer llmCancel()
-	
-	raw, err := uc.llm.Generate(llmCtx, prompt)
+
+	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	logger.Debug("Generating predefined checks",
+		logger.String("location_name", locationName),
+		logger.Int("prompt_length", len(prompt)),
+		logger.Int("max_tokens", maxTokensChecks),
+	)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensChecks)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -353,7 +410,7 @@ func (uc *InitCampaignUseCase) generateLocationPredefinedChecksWithRetry(ctx con
 	var response struct {
 		PredefinedChecks []PredefinedCheckDTO `json:"predefined_checks"`
 	}
-	if err := json.Unmarshal([]byte(cleaned), &response); err != nil {
+	if err := decodeStrictJSON(cleaned, &response); err != nil {
 		logger.Warn("Failed to parse predefined checks JSON",
 			logger.Int("attempt", attempt),
 			logger.ErrorField(err),
@@ -373,16 +430,23 @@ func (uc *InitCampaignUseCase) generateConnections(ctx context.Context, location
 func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context, locations []LocationDTO, attempt int) (map[string][]ConnectionDTO, error) {
 	const maxRetries = 2
 	if attempt > maxRetries {
-		return nil, fmt.Errorf("failed to generate valid connections after %d attempts", maxRetries)
+		logger.Warn("Failed to generate valid connections, using fallback",
+			logger.Int("attempts", maxRetries+1),
+		)
+		return fallbackConnections(locations), nil
 	}
 
 	prompt := GenerateConnectionsPrompt(locations)
-	
+
 	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
-	
-	// Убрано ограничение на токены для генерации связей между локациями
-	raw, err := uc.llm.Generate(llmCtx, prompt)
+
+	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
+	logger.Debug("Generating location connections",
+		logger.Int("prompt_length", len(prompt)),
+		logger.Int("max_tokens", maxTokensConnections),
+	)
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokensConnections)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -400,7 +464,7 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 				logger.String("last_200_chars", cleaned[len(cleaned)-200:]),
 			)
 		}
-		
+
 		cleaned = tryRepairTruncatedJSON(cleaned)
 		if !json.Valid([]byte(cleaned)) {
 			logger.Warn("Failed to repair JSON for connections, retrying",
@@ -418,11 +482,17 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 	var response struct {
 		Connections map[string][]ConnectionDTO `json:"connections"`
 	}
-	if err := json.Unmarshal([]byte(cleaned), &response); err != nil {
+	if err := decodeStrictJSON(cleaned, &response); err != nil {
 		logger.Warn("Failed to parse connections JSON",
 			logger.Int("attempt", attempt),
 			logger.ErrorField(err),
 		)
+		if attempt >= maxRetries {
+			logger.Warn("Failed to parse connections after max retries, using fallback",
+				logger.Int("attempts", maxRetries+1),
+			)
+			return fallbackConnections(locations), nil
+		}
 		return uc.generateConnectionsWithRetry(ctx, locations, attempt+1)
 	}
 
@@ -451,7 +521,7 @@ func (uc *InitCampaignUseCase) buildWorld(
 		for _, npcDTO := range locDTO.NPCs {
 			loc.AddNPC(npc.New(npcDTO.Name, npcDTO.Role))
 		}
-		
+
 		// Конвертируем предопределенные проверки из DTO в world.PredefinedCheck
 		var predefinedChecks []world.PredefinedCheck
 		for _, checkDTO := range locDTO.PredefinedChecks {
@@ -462,7 +532,7 @@ func (uc *InitCampaignUseCase) buildWorld(
 				LocationHint: checkDTO.LocationHint,
 			})
 		}
-		
+
 		// Конвертируем NPCs из location.NPC в world.NPC
 		var worldNPCs []world.NPC
 		for _, npc := range loc.NPCs {
@@ -472,7 +542,7 @@ func (uc *InitCampaignUseCase) buildWorld(
 				Personality: "",
 			})
 		}
-		
+
 		// Используем новый метод AddLocationWithChecks для добавления локации с проверками
 		w.AddLocationWithChecks(locDTO.Name, locDTO.Description, worldNPCs, predefinedChecks)
 	}
@@ -525,6 +595,68 @@ func cleanJSONResponse(raw string) string {
 	return jsonrepair.Clean(raw)
 }
 
+func decodeStrictJSON(input string, target interface{}) error {
+	dec := json.NewDecoder(strings.NewReader(input))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("extra data after JSON")
+	}
+	return nil
+}
+
+func fallbackMainQuest(worldTheme string) *QuestDTO {
+	title := fmt.Sprintf("Тайна мира: %s", strings.TrimSpace(worldTheme))
+	if strings.TrimSpace(worldTheme) == "" {
+		title = "Тайна мира"
+	}
+	return &QuestDTO{
+		Title:       title,
+		Description: "В мире появилась угроза, которую нужно остановить. Найдите ключи, раскройте древнюю тайну и восстановите равновесие.",
+		Items: []ItemDTO{
+			{Name: "Древний ключ", Purpose: "Открывает доступ к забытому святилищу"},
+			{Name: "Карта путей", Purpose: "Указывает путь к важным локациям"},
+		},
+	}
+}
+
+func fallbackLocations(worldTheme string) []LocationDTO {
+	theme := strings.TrimSpace(worldTheme)
+	if theme == "" {
+		theme = "фэнтезийный мир"
+	}
+	return []LocationDTO{
+		{Name: "Городские ворота", Description: fmt.Sprintf("Вход в %s и отправная точка приключения.", theme)},
+		{Name: "Древний лес", Description: "Таинственный лес с шепчущими деревьями и скрытыми тропами."},
+		{Name: "Забытые руины", Description: "Разрушенные руины, где хранятся ответы на главный квест."},
+	}
+}
+
+func fallbackConnections(locations []LocationDTO) map[string][]ConnectionDTO {
+	connections := make(map[string][]ConnectionDTO)
+	if len(locations) == 0 {
+		return connections
+	}
+
+	for i := 0; i < len(locations)-1; i++ {
+		from := locations[i].Name
+		to := locations[i+1].Name
+		connections[from] = append(connections[from], ConnectionDTO{
+			ToLocation:  to,
+			Direction:   "path",
+			Description: "Тропа между локациями",
+		})
+		connections[to] = append(connections[to], ConnectionDTO{
+			ToLocation:  from,
+			Direction:   "path",
+			Description: "Тропа обратно",
+		})
+	}
+	return connections
+}
+
 // tryRepairTruncatedJSON пытается восстановить обрезанный JSON
 func tryRepairTruncatedJSON(jsonStr string) string {
 	jsonStr = strings.TrimSpace(jsonStr)
@@ -547,11 +679,11 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 			// Обрезаем до последнего валидного объекта и закрываем структуры
 			truncated := jsonStr[:lastObjectEnd]
 			truncated = strings.TrimRight(truncated, " \n\r\t,")
-			
+
 			// Подсчитываем незакрытые структуры
 			openBraces := strings.Count(truncated, "{") - strings.Count(truncated, "}")
 			openBrackets := strings.Count(truncated, "[") - strings.Count(truncated, "]")
-			
+
 			// Закрываем структуры
 			for i := 0; i < openBrackets; i++ {
 				truncated += "]"
@@ -559,24 +691,24 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 			for i := 0; i < openBraces; i++ {
 				truncated += "}"
 			}
-			
+
 			if json.Valid([]byte(truncated)) {
 				return truncated
 			}
 		}
 	}
-	
+
 	// Для connections (map структура) ищем последний валидный ключ-значение
 	if strings.Contains(jsonStr, `"connections"`) {
 		lastConnectionEnd := findLastCompleteConnection(jsonStr)
 		if lastConnectionEnd > 0 {
 			truncated := jsonStr[:lastConnectionEnd]
 			truncated = strings.TrimRight(truncated, " \n\r\t,")
-			
+
 			// Подсчитываем незакрытые структуры
 			openBraces := strings.Count(truncated, "{") - strings.Count(truncated, "}")
 			openBrackets := strings.Count(truncated, "[") - strings.Count(truncated, "]")
-			
+
 			// Закрываем структуры
 			for i := 0; i < openBrackets; i++ {
 				truncated += "]"
@@ -584,7 +716,7 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 			for i := 0; i < openBraces; i++ {
 				truncated += "}"
 			}
-			
+
 			if json.Valid([]byte(truncated)) {
 				return truncated
 			}
@@ -646,7 +778,7 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 	}
 
 	result := jsonStr
-	
+
 	// Если JSON обрезан в середине строки
 	if inString {
 		if lastValidObjectEnd > 0 {
@@ -667,7 +799,7 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 	// Подсчитываем незакрытые структуры
 	openBraces = strings.Count(result, "{") - strings.Count(result, "}")
 	openBrackets = strings.Count(result, "[") - strings.Count(result, "]")
-	
+
 	// Если все еще в строке, закрываем её
 	if inString && !strings.HasSuffix(result, "\"") {
 		result += "\""
@@ -691,7 +823,7 @@ func findLastCompleteObject(jsonStr string) int {
 	// Ищем последний закрытый объект в массиве
 	// Паттерн: }, или }\n или }\n\n или }, \n
 	patterns := []string{`},\n`, `},\r\n`, `}\n`, `}\r`, `}, `, `}\n\n`, `}\r\n\r\n`}
-	
+
 	maxPos := -1
 	bestPattern := ""
 	for _, pattern := range patterns {
@@ -701,7 +833,7 @@ func findLastCompleteObject(jsonStr string) int {
 			bestPattern = pattern
 		}
 	}
-	
+
 	// Если нашли, возвращаем позицию после закрывающей скобки объекта
 	if maxPos > 0 && bestPattern != "" {
 		// Находим закрывающую скобку объекта
@@ -712,7 +844,7 @@ func findLastCompleteObject(jsonStr string) int {
 				break
 			}
 		}
-		
+
 		// Проверяем, что это действительно конец объекта (не в строке)
 		// Простая проверка: перед } должна быть " или число или }
 		if bracePos > 0 {
@@ -720,7 +852,7 @@ func findLastCompleteObject(jsonStr string) int {
 			return bracePos + 1
 		}
 	}
-	
+
 	return -1
 }
 
@@ -729,7 +861,7 @@ func findLastCompleteConnection(jsonStr string) int {
 	// Для connections структура: "connections": { "location_name": [ {...}, {...} ] }
 	// Ищем последний закрытый массив в map: ], или ]\n
 	patterns := []string{`],\n`, `],\r\n`, `]\n`, `]\r`, `], `}
-	
+
 	maxPos := -1
 	bestPattern := ""
 	for _, pattern := range patterns {
@@ -739,7 +871,7 @@ func findLastCompleteConnection(jsonStr string) int {
 			bestPattern = pattern
 		}
 	}
-	
+
 	// Если нашли, возвращаем позицию после закрывающей скобки массива
 	if maxPos > 0 && bestPattern != "" {
 		// Находим закрывающую скобку массива
@@ -750,12 +882,12 @@ func findLastCompleteConnection(jsonStr string) int {
 				break
 			}
 		}
-		
+
 		if bracketPos > 0 {
 			return bracketPos + 1
 		}
 	}
-	
+
 	return -1
 }
 

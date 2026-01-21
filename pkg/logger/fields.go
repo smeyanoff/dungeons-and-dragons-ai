@@ -1,10 +1,14 @@
 package logger
 
 import (
+	"errors"
+	"regexp"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+var telegramTokenRegex = regexp.MustCompile(`api\.telegram\.org/bot[^/]+`)
 
 // Helper функции для создания часто используемых полей
 
@@ -45,7 +49,19 @@ func Bool(key string, value bool) zap.Field {
 
 // Error создает поле типа error
 func ErrorField(err error) zap.Field {
-	return zap.Error(err)
+	return zap.Error(sanitizeError(err))
+}
+
+func sanitizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	sanitized := telegramTokenRegex.ReplaceAllString(msg, "api.telegram.org/bot***")
+	if sanitized == msg {
+		return err
+	}
+	return errors.New(sanitized)
 }
 
 // Duration создает поле типа time.Duration
