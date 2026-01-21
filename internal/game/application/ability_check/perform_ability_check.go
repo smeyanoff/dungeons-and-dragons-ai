@@ -55,6 +55,19 @@ func NewPerformAbilityCheckUseCase(
 }
 
 func (uc *PerformAbilityCheckUseCase) Execute(ctx context.Context, chatID int64) (*PerformAbilityCheckResult, error) {
+	return uc.execute(ctx, chatID, nil)
+}
+
+// ExecuteWithBaseRoll выполняет проверку с ручным значением d20.
+// baseRoll должен быть в диапазоне 1..20.
+func (uc *PerformAbilityCheckUseCase) ExecuteWithBaseRoll(ctx context.Context, chatID int64, baseRoll int) (*PerformAbilityCheckResult, error) {
+	if baseRoll < 1 || baseRoll > 20 {
+		return nil, fmt.Errorf("base roll must be between 1 and 20")
+	}
+	return uc.execute(ctx, chatID, &baseRoll)
+}
+
+func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64, baseRollOverride *int) (*PerformAbilityCheckResult, error) {
 	gs, err := uc.sessionRepo.GetByChatID(ctx, chatID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)
@@ -77,16 +90,21 @@ func (uc *PerformAbilityCheckUseCase) Execute(ctx context.Context, chatID int64)
 	abilityName, abilityValue := resolveAbility(player.Character.Stats, ability)
 	modifier := dice.CalculateModifier(abilityValue)
 
-	rollResult, err := dice.RollWithModifier("d20", modifier)
-	if err != nil {
-		return nil, fmt.Errorf("failed to roll dice: %w", err)
-	}
-
 	baseRoll := 0
-	if len(rollResult.Rolls) > 0 {
-		baseRoll = rollResult.Rolls[0]
+	total := 0
+	if baseRollOverride != nil {
+		baseRoll = *baseRollOverride
+		total = baseRoll + modifier
+	} else {
+		rollResult, err := dice.RollWithModifier("d20", modifier)
+		if err != nil {
+			return nil, fmt.Errorf("failed to roll dice: %w", err)
+		}
+		if len(rollResult.Rolls) > 0 {
+			baseRoll = rollResult.Rolls[0]
+		}
+		total = rollResult.Total
 	}
-	total := rollResult.Total
 	success := total >= dc
 
 	outcome := "Провал"

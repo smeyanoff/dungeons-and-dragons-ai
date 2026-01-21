@@ -597,6 +597,12 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 		return err
 	}
 
+	// Проверяем ручной ввод результата проверки навыка (офлайн-кубики)
+	handled, err := b.tryHandleManualAbilityCheck(ctx, chatID, text)
+	if handled {
+		return err
+	}
+
 	// Обычные сообщения - действия игрока
 	logger.Debug("Handling player action",
 		logger.Int64("chat_id", chatID),
@@ -1164,11 +1170,8 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 	)
 
 	// Парсим callback data
-	// Формат: ability_roll_<check_id> | race_<race> | class_<race>_<class> | create_<name>_<race>_<class> | map_to_<location_id>
-	if strings.HasPrefix(data, "ability_roll_") {
-		checkID := strings.TrimPrefix(data, "ability_roll_")
-		return b.handleAbilityCheckRoll(ctx, chatID, query, checkID)
-	} else if strings.HasPrefix(data, "race_") {
+	// Формат: race_<race> | class_<race>_<class> | create_<name>_<race>_<class> | map_to_<location_id>
+	if strings.HasPrefix(data, "race_") {
 		// Выбор расы
 		race := strings.TrimPrefix(data, "race_")
 		return b.handleRaceSelection(ctx, chatID, query, race)
@@ -1435,38 +1438,6 @@ func (b *Bot) handleCreateCharacterFromCallback(ctx context.Context, chatID int6
 	return b.editMessage(resultMsg, chatID, charText)
 }
 
-func (b *Bot) handleAbilityCheckRoll(ctx context.Context, chatID int64, query *tgbotapi.CallbackQuery, checkID string) error {
-	if b.performAbilityCheckUC == nil {
-		callback := tgbotapi.NewCallback(query.ID, "Проверки временно недоступны")
-		_, _ = b.api.Request(callback)
-		return nil
-	}
-
-	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
-	if err != nil || gs == nil || !gs.HasPendingAbilityCheck() || gs.PendingAbilityCheckID != checkID {
-		callback := tgbotapi.NewCallback(query.ID, "Эта проверка больше не актуальна")
-		_, _ = b.api.Request(callback)
-		return nil
-	}
-
-	callback := tgbotapi.NewCallback(query.ID, "Бросок выполнен")
-	_, _ = b.api.Request(callback)
-
-	result, err := b.performAbilityCheckUC.Execute(ctx, chatID)
-	if err != nil {
-		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
-		return b.sendMessage(errorMsg)
-	}
-
-	edit := tgbotapi.NewEditMessageText(chatID, query.Message.MessageID, result.Message)
-	edit.ReplyMarkup = nil
-	if _, err := b.api.Send(edit); err != nil {
-		return b.sendLongMessage(chatID, result.Message)
-	}
-
-	return nil
-}
-
 func (b *Bot) maybeSendPendingAbilityCheckPrompt(ctx context.Context, chatID int64) error {
 	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
 	if err != nil || gs == nil || !gs.HasPendingAbilityCheck() || gs.PendingAbilityCheckNotified {
@@ -1474,11 +1445,9 @@ func (b *Bot) maybeSendPendingAbilityCheckPrompt(ctx context.Context, chatID int
 	}
 
 	abilityName := formatAbilityName(gs.PendingAbilityCheckAbility)
-	text := fmt.Sprintf("🎲 Проверка %s (DC %d). Нажмите кнопку, чтобы бросить d20.", abilityName, gs.PendingAbilityCheckDC)
+	text := fmt.Sprintf("🎲 Проверка %s (DC %d). Напишите /roll d20, чтобы бросить кубик. Можно отправить результат числом (например: 17).", abilityName, gs.PendingAbilityCheckDC)
 
-	button := tgbotapi.NewInlineKeyboardButtonData("🎲 Бросить d20", fmt.Sprintf("ability_roll_%s", gs.PendingAbilityCheckID))
 	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup([][]tgbotapi.InlineKeyboardButton{{button}}...)
 
 	if err := b.sendMessage(msg); err != nil {
 		return err
@@ -1493,6 +1462,58 @@ func (b *Bot) maybeSendPendingAbilityCheckPrompt(ctx context.Context, chatID int
 	}
 
 	return nil
+}
+
+func (b *Bot) tryHandleManualAbilityCheck(ctx context.Context, chatID int64, text string) (bool, error) {
+	if b.performAbilityCheckUC == nil {
+		return false, nil
+	}
+
+	manualRoll, ok := parseManualAbilityCheckInput(text)
+	if !ok {
+		return false, nil
+	}
+
+	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil || gs == nil || !gs.HasPendingAbilityCheck() {
+		return false, err
+	}
+
+	result, err := b.performAbilityCheckUC.ExecuteWithBaseRoll(ctx, chatID, manualRoll)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
+		return true, b.sendMessage(errorMsg)
+	}
+
+	return true, b.sendLongMessage(chatID, result.Message)
+}
+
+func parseManualAbilityCheckInput(text string) (int, bool) {
+	normalized := strings.TrimSpace(strings.ToLower(text))
+	if normalized == "" {
+		return 0, false
+	}
+
+	if regexp.MustCompile(`^\d{1,2}$`).MatchString(normalized) {
+		value, err := strconv.Atoi(normalized)
+		if err == nil && value >= 1 && value <= 20 {
+			return value, true
+		}
+		return 0, false
+	}
+
+	if strings.HasPrefix(normalized, "результат") || strings.HasPrefix(normalized, "result") {
+		re := regexp.MustCompile(`\b(\d{1,2})\b`)
+		match := re.FindStringSubmatch(normalized)
+		if len(match) >= 2 {
+			value, err := strconv.Atoi(match[1])
+			if err == nil && value >= 1 && value <= 20 {
+				return value, true
+			}
+		}
+	}
+
+	return 0, false
 }
 
 func formatAbilityName(ability string) string {
@@ -1660,6 +1681,35 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 	// Очищаем аргументы от лишних символов (обратные апострофы, кавычки и т.д.)
 	cleanedArgs := strings.TrimSpace(args)
 	cleanedArgs = strings.Trim(cleanedArgs, "`\"'")
+
+	// Если есть pending ability check, /roll (или /roll d20) резолвит его
+	if b.performAbilityCheckUC != nil {
+		gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+		if err == nil && gs != nil && gs.HasPendingAbilityCheck() {
+			if cleanedArgs == "" || strings.EqualFold(cleanedArgs, "d20") {
+				result, err := b.performAbilityCheckUC.Execute(ctx, chatID)
+				if err != nil {
+					errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
+					return b.sendMessage(errorMsg)
+				}
+				return b.sendLongMessage(chatID, result.Message)
+			}
+
+			if manualRoll, ok := parseManualAbilityCheckInput(cleanedArgs); ok {
+				result, err := b.performAbilityCheckUC.ExecuteWithBaseRoll(ctx, chatID, manualRoll)
+				if err != nil {
+					errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
+					return b.sendMessage(errorMsg)
+				}
+				return b.sendLongMessage(chatID, result.Message)
+			}
+		}
+	}
+
+	if cleanedArgs == "" {
+		msg := tgbotapi.NewMessage(chatID, "Укажите выражение для броска, например: /roll d20 или /roll 2d6+3.")
+		return b.sendMessage(msg)
+	}
 
 	result, err := b.rollDiceUC.Execute(ctx, cleanedArgs)
 	if err != nil {

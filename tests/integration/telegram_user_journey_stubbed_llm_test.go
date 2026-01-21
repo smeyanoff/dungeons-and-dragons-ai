@@ -246,26 +246,24 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 		problems = append(problems, fmt.Sprintf("/createcharacter: %v", err))
 	}
 
-	// 3) player action -> tool-first ability check prompt + callback
+	// 3) player action -> tool-first ability check prompt + /roll d20
 	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "Пытаюсь вскрыть замок на сундуке")); err != nil {
 		problems = append(problems, fmt.Sprintf("player action: %v", err))
 	}
 
 	calls := fakeAPI.snapshotCalls()
-	promptMsgID := 0
-	promptMarkup := ""
+	promptFound := false
 	for _, c := range calls {
-		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") && strings.TrimSpace(c.ReplyMarkup) != "" {
-			promptMsgID = c.MessageID
-			promptMarkup = c.ReplyMarkup
+		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") {
+			promptFound = true
+			break
 		}
 	}
-	cbData, ok := extractFirstCallbackData(promptMarkup)
-	if promptMsgID == 0 || !ok || !strings.HasPrefix(cbData, "ability_roll_") {
-		t.Fatalf("Не удалось найти prompt с inline кнопкой ability_roll_* (msg_id=%d, cb=%q)", promptMsgID, cbData)
+	if !promptFound {
+		t.Fatalf("Не удалось найти prompt с текстовой подсказкой ability check")
 	}
-	if err := bot.HandleUpdate(ctx, makeCallbackUpdate(chatID, tgUserID, promptMsgID, cbData)); err != nil {
-		t.Fatalf("ability_roll callback: %v", err)
+	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/roll d20")); err != nil {
+		t.Fatalf("/roll d20: %v", err)
 	}
 
 	// 4) /map + navigate first button (if present)

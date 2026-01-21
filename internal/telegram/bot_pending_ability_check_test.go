@@ -211,8 +211,11 @@ func TestMaybeSendPendingAbilityCheckPrompt_SendsOnceAndMarksNotified(t *testing
 	found := false
 	for _, call := range calls {
 		if call.Method == "sendMessage" && call.ChatID == chatID && strings.Contains(call.Text, "🎲 Проверка") {
-			if !strings.Contains(call.ReplyMarkup, "ability_roll_"+checkID) {
-				t.Fatalf("reply_markup does not include ability_roll_%s: %s", checkID, call.ReplyMarkup)
+			if call.ReplyMarkup != "" {
+				t.Fatalf("expected no reply_markup for pending ability check prompt, got: %s", call.ReplyMarkup)
+			}
+			if !strings.Contains(call.Text, "/roll d20") {
+				t.Fatalf("expected prompt to include /roll d20, got: %s", call.Text)
 			}
 			found = true
 			break

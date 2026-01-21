@@ -17,7 +17,7 @@ import (
 )
 
 // TestTelegramGameplay_BotSimulation_AbilityCheckOneTap проверяет основной UX:
-// pending ability check -> callback "🎲 Бросить d20" -> результат -> pending cleared -> событие в истории.
+// pending ability check -> /roll d20 -> результат -> pending cleared -> событие в истории.
 func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 	cfg := setupInfraOnlyIntegrationTest(t)
 	if cfg == nil {
@@ -99,23 +99,6 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)
 	}
 
-	// Send any message to have a message_id to edit later.
-	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/help")); err != nil {
-		t.Fatalf("/help: %v", err)
-	}
-
-	calls := fakeAPI.snapshotCalls()
-	lastMsgID := 0
-	for i := len(calls) - 1; i >= 0; i-- {
-		if calls[i].Method == "sendMessage" && calls[i].ChatID == chatID {
-			lastMsgID = calls[i].MessageID
-			break
-		}
-	}
-	if lastMsgID == 0 {
-		t.Fatalf("Не удалось получить message_id для callback теста")
-	}
-
 	// Create pending check in session
 	gs, err = cfg.sessionRepo.GetByChatID(ctx, chatID)
 	if err != nil || gs == nil {
@@ -127,10 +110,9 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 		t.Fatalf("Не удалось сохранить pending check: %v", err)
 	}
 
-	// Simulate inline button press: ability_roll_<check_id>
-	cb := makeCallbackUpdate(chatID, tgUserID, lastMsgID, "ability_roll_"+checkID)
-	if err := bot.HandleUpdate(context.Background(), cb); err != nil {
-		t.Fatalf("ability_roll callback: %v", err)
+	// Simulate /roll d20
+	if err := bot.HandleUpdate(context.Background(), makeMessageUpdate(chatID, tgUserID, "/roll d20")); err != nil {
+		t.Fatalf("/roll d20: %v", err)
 	}
 
 	// Verify pending cleared
@@ -139,7 +121,7 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 		t.Fatalf("Не удалось получить сессию после callback: %v", err)
 	}
 	if gs.HasPendingAbilityCheck() {
-		t.Fatalf("Pending ability check не очищен после callback (id=%s, ability=%s, dc=%d)", gs.PendingAbilityCheckID, gs.PendingAbilityCheckAbility, gs.PendingAbilityCheckDC)
+		t.Fatalf("Pending ability check не очищен после /roll (id=%s, ability=%s, dc=%d)", gs.PendingAbilityCheckID, gs.PendingAbilityCheckAbility, gs.PendingAbilityCheckDC)
 	}
 
 	// Verify event persisted to history
@@ -158,16 +140,16 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 		t.Fatalf("Не найдено событие проверки в истории (ожидали текст вида '🎲 Проверка ... (DC ...)')")
 	}
 
-	// Verify Telegram edit performed
-	calls = fakeAPI.snapshotCalls()
-	edited := false
+	// Verify Telegram message sent with result
+	calls := fakeAPI.snapshotCalls()
+	found := false
 	for _, c := range calls {
-		if c.Method == "editMessageText" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") {
-			edited = true
+		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") {
+			found = true
 			break
 		}
 	}
-	if !edited {
-		t.Fatalf("Бот не отредактировал сообщение результатом ability check (editMessageText с '🎲 Проверка')")
+	if !found {
+		t.Fatalf("Бот не отправил сообщение результатом ability check (sendMessage с '🎲 Проверка')")
 	}
 }
