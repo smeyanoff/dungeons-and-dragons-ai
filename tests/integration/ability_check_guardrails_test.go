@@ -178,8 +178,11 @@ func TestAbilityCheck_Guardrails_BudgetExceeded(t *testing.T) {
 		evt := &event.StoryEvent{
 			GameSessionID: gs.ID,
 			AuthorType:    event.AuthorTypeDM,
-			Content:       "🎲 Проверка Ловкость (DC 12): d20=10 +2 = 12. Успех.",
-			CreatedAt:     time.Now().Add(time.Duration(-i) * time.Minute),
+			// Важно: события должны считаться "ability check events" для бюджета,
+			// но не должны триггерить early-return already_checked для запрашиваемой характеристики.
+			// Поэтому используем другую характеристику (Сила), а ниже просим dexterity.
+			Content:   "🎲 Проверка Сила (DC 12): d20=10 +2 = 12. Успех.",
+			CreatedAt: time.Now().Add(time.Duration(-i) * time.Minute),
 		}
 		if err := cfg.eventRepo.Save(ctx, evt); err != nil {
 			t.Fatalf("Не удалось сохранить тестовое событие: %v", err)

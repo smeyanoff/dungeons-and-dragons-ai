@@ -20,6 +20,16 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Prefer docker compose (v2); fallback to docker-compose (v1).
+if docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE="docker compose"
+else
+    DOCKER_COMPOSE="docker-compose"
+fi
+
+# Production compose file lives under build/
+COMPOSE_FILE="build/docker-compose.prod.yml"
+
 # Проверка аргументов
 if [ $# -lt 2 ]; then
     log_error "Использование: $0 <postgres_backup_file> <qdrant_backup_file>"
@@ -58,14 +68,14 @@ log_info "Начинаем восстановление из бэкапов..."
 
 # Остановка бота для безопасности
 log_info "Остановка бота..."
-docker-compose -f docker-compose.prod.yml stop bot || true
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" stop bot || true
 
 # Восстановление PostgreSQL
 log_info "Восстановление PostgreSQL..."
 if [[ "$POSTGRES_BACKUP" == *.gz ]]; then
-    gunzip -c "$POSTGRES_BACKUP" | docker-compose -f docker-compose.prod.yml exec -T postgres psql -U ${POSTGRES_USER:-dnd_user} -d ${POSTGRES_DB:-dnd}
+    gunzip -c "$POSTGRES_BACKUP" | $DOCKER_COMPOSE -f "$COMPOSE_FILE" exec -T postgres psql -U ${POSTGRES_USER:-dnd_user} -d ${POSTGRES_DB:-dnd}
 else
-    cat "$POSTGRES_BACKUP" | docker-compose -f docker-compose.prod.yml exec -T postgres psql -U ${POSTGRES_USER:-dnd_user} -d ${POSTGRES_DB:-dnd}
+    cat "$POSTGRES_BACKUP" | $DOCKER_COMPOSE -f "$COMPOSE_FILE" exec -T postgres psql -U ${POSTGRES_USER:-dnd_user} -d ${POSTGRES_DB:-dnd}
 fi
 
 if [ $? -eq 0 ]; then
@@ -77,14 +87,14 @@ fi
 
 # Восстановление Qdrant
 log_info "Восстановление Qdrant..."
-docker-compose -f docker-compose.prod.yml stop qdrant
-docker-compose -f docker-compose.prod.yml rm -f qdrant || true
-docker-compose -f docker-compose.prod.yml up -d qdrant
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" stop qdrant
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" rm -f qdrant || true
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d qdrant
 
 # Ждем запуска Qdrant
 sleep 10
 
-cat "$QDRANT_BACKUP" | docker-compose -f docker-compose.prod.yml exec -T qdrant tar xzf - -C /
+cat "$QDRANT_BACKUP" | $DOCKER_COMPOSE -f "$COMPOSE_FILE" exec -T qdrant tar xzf - -C /
 
 if [ $? -eq 0 ]; then
     log_info "Qdrant восстановлен успешно"
@@ -95,6 +105,6 @@ fi
 
 # Перезапуск бота
 log_info "Перезапуск бота..."
-docker-compose -f docker-compose.prod.yml restart bot
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" restart bot
 
 log_info "Восстановление завершено успешно!"

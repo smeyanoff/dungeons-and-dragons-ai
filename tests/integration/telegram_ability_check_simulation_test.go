@@ -142,14 +142,14 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 
 	// Verify Telegram message sent with result
 	calls := fakeAPI.snapshotCalls()
-	found := false
+	foundMsg := false
 	for _, c := range calls {
 		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Проверка") {
-			found = true
+			foundMsg = true
 			break
 		}
 	}
-	if !found {
+	if !foundMsg {
 		t.Fatalf("Бот не отправил сообщение результатом ability check (sendMessage с '🎲 Проверка')")
 	}
 }

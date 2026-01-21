@@ -8,3 +8,17 @@ services:
     command: >
       gosec -fmt json -out /app/gosec-report.json ./... || true &&
       gosec -fmt text ./... || true
+  trivy:
+    image: aquasec/trivy:0.54.1
+    working_dir: /app
+    volumes:
+      - ..:/app
+      - trivy-cache:/root/.cache/
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      trivy fs --scanners vuln,config,secret --skip-dirs /app/data
+      --format json --output /app/trivy-report.json /app || true &&
+      trivy fs --scanners vuln,config,secret --skip-dirs /app/data /app || true
+
+volumes:
+  trivy-cache:

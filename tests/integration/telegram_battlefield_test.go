@@ -7,17 +7,23 @@ import (
 	"testing"
 
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
+	combatapp "dungeons-and-dragons-ai/internal/game/application/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	combatdomain "dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	questdomain "dungeons-and-dragons-ai/internal/game/domain/quest"
+	worlddomain "dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
 // TestTelegramBattlefieldCommand проверяет команду /battlefield в активном бою.
 func TestTelegramBattlefieldCommand(t *testing.T) {
-	cfg := setupTelegramGameplayTest(t)
-	defer cleanupTest(t, cfg.testConfig)
+	cfg := setupInfraOnlyIntegrationTest(t)
+	if cfg == nil {
+		return
+	}
+	defer cleanupTest(t, &testConfig{db: cfg.db, chatID: cfg.chatID, tgUserID: cfg.tgUserID})
 
 	ctx := cfg.ctx
 	chatID := cfg.chatID
@@ -31,25 +37,48 @@ func TestTelegramBattlefieldCommand(t *testing.T) {
 	combatRepo := persistence.NewCombatRepository(cfg.db)
 	feedbackRepo := persistence.NewFeedbackRepository(cfg.db)
 
+	// Deterministic world+session (no real LLM).
+	q := &questdomain.Quest{Title: "Test Quest (Battlefield)", Description: "Deterministic quest for /battlefield"}
+	w := worlddomain.New("Test World (Battlefield)")
+	w.Description = "Deterministic test world for /battlefield"
+	w.SetMainQuest(q)
+	w.Locations = []worlddomain.Location{{Name: "Start", Description: "Start location"}}
+	if err := cfg.worldRepo.Save(ctx, w); err != nil {
+		t.Fatalf("Не удалось сохранить тестовый мир: %v", err)
+	}
+	gs := &session.GameSession{ChatID: chatID, State: session.StateActive, World: *w, WorldID: w.ID}
+	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
+		t.Fatalf("Не удалось сохранить сессию: %v", err)
+	}
+
+	// Character (no real LLM).
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	player, err := createCharacterUC.Execute(ctx, newCharacterRequest(chatID))
+	if err != nil {
+		t.Fatalf("Не удалось создать персонажа: %v", err)
+	}
+
+	handleCombatUC := combatapp.NewHandleCombatUseCase(combatRepo, cfg.sessionRepo)
+
 	bot, err := telegrambot.NewBotWithAPIEndpoint(
 		"TEST_TOKEN",
 		apiEndpointFmt,
-		cfg.initCampaignUC,
-		cfg.handleActionUC,
-		cfg.createCharacterUC,
-		cfg.getHistoryUC,
-		cfg.getInventoryUC,
-		cfg.addItemUC,
-		cfg.handleCombatUC,
-		cfg.rollDiceUC,
-		cfg.getQuestsUC,
-		cfg.getDailyQuestsUC,
-		cfg.checkDailyProgressUC,
-		cfg.getMapUC,
+		nil, // initCampaignUC
+		nil, // handleActionUC
+		nil, // createCharacterUC
+		nil, // getHistoryUC
+		nil, // getInventoryUC
+		nil, // addItemUC
+		handleCombatUC,
+		nil, // rollDiceUC
+		nil, // getQuestsUC
+		nil, // getDailyQuestsUC
+		nil, // checkDailyProgressUC
+		nil, // getMapUC
 		nil, // moveToLocationUC
-		cfg.getAchievementsUC,
-		cfg.getSpellsUC,
-		cfg.useSpellUC,
+		nil, // getAchievementsUC
+		nil, // getSpellsUC
+		nil, // useSpellUC
 		nil, // generateImageUC
 		nil, // getSubscriptionUC
 		nil, // checkLimitsUC
@@ -64,21 +93,6 @@ func TestTelegramBattlefieldCommand(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)
-	}
-
-	world, err := cfg.initCampaignUC.Execute(ctx, "классическое фэнтези")
-	if err != nil {
-		t.Fatalf("Не удалось создать мир: %v", err)
-	}
-
-	gs := &session.GameSession{ChatID: chatID, State: session.StateActive, World: *world, WorldID: world.ID}
-	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
-		t.Fatalf("Не удалось сохранить сессию: %v", err)
-	}
-
-	player, err := cfg.createCharacterUC.Execute(ctx, newCharacterRequest(chatID))
-	if err != nil {
-		t.Fatalf("Не удалось создать персонажа: %v", err)
 	}
 
 	// Создаем активный бой

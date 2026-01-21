@@ -16,6 +16,16 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Prefer docker compose (v2); fallback to docker-compose (v1).
+if docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE="docker compose"
+else
+    DOCKER_COMPOSE="docker-compose"
+fi
+
+# Production compose file lives under build/
+COMPOSE_FILE="build/docker-compose.prod.yml"
+
 # Загрузка переменных окружения
 if [ -f .env ]; then
     export $(cat .env | grep -v '^#' | xargs)
@@ -33,7 +43,7 @@ log_info "Начинаем создание бэкапов..."
 
 # Бэкап PostgreSQL
 log_info "Создание бэкапа PostgreSQL..."
-docker-compose -f docker-compose.prod.yml exec -T postgres pg_dump -U ${POSTGRES_USER:-dnd_user} ${POSTGRES_DB:-dnd} > ${POSTGRES_BACKUP_FILE}
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" exec -T postgres pg_dump -U ${POSTGRES_USER:-dnd_user} ${POSTGRES_DB:-dnd} > ${POSTGRES_BACKUP_FILE}
 if [ $? -eq 0 ]; then
     log_info "Бэкап PostgreSQL создан: ${POSTGRES_BACKUP_FILE}"
     # Сжатие бэкапа
@@ -46,7 +56,7 @@ fi
 
 # Бэкап Qdrant (копирование данных)
 log_info "Создание бэкапа Qdrant..."
-docker-compose -f docker-compose.prod.yml exec -T qdrant tar czf - /qdrant/storage > ${QDRANT_BACKUP_DIR}.tar.gz
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" exec -T qdrant tar czf - /qdrant/storage > ${QDRANT_BACKUP_DIR}.tar.gz
 if [ $? -eq 0 ]; then
     log_info "Бэкап Qdrant создан: ${QDRANT_BACKUP_DIR}.tar.gz"
 else

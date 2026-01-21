@@ -79,7 +79,7 @@ services:
     networks:
       - dnd-network
     ports:
-      - "${MONITORING_PORT:-8081}:8081"  # LLM Monitoring UI
+      - "${MONITORING_PORT:-8081}:${MONITORING_PORT:-8081}"  # LLM Monitoring UI
     # Логирование
     logging:
       driver: "json-file"

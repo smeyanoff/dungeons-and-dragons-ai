@@ -428,3 +428,28 @@ func TestGetMapUseCase_TranslateWeather(t *testing.T) {
 		})
 	}
 }
+
+func TestGetMapUseCase_CacheBehavior(t *testing.T) {
+	uc := NewGetMapUseCase(nil)
+
+	worldID := uint(42)
+	signature := "sig-1"
+	text := "cached map text"
+
+	uc.setCachedMap(worldID, signature, text)
+	if got, ok := uc.getCachedMap(worldID, signature); !ok || got != text {
+		t.Fatalf("expected cached map %q, got ok=%v text=%q", text, ok, got)
+	}
+
+	if got, ok := uc.getCachedMap(worldID, "sig-miss"); ok || got != "" {
+		t.Fatalf("expected cache miss for different signature, got ok=%v text=%q", ok, got)
+	}
+
+	uc.setCachedMap(worldID, "sig-2", "new text")
+	if got, ok := uc.getCachedMap(worldID, signature); ok || got != "" {
+		t.Fatalf("expected cache invalidated for old signature, got ok=%v text=%q", ok, got)
+	}
+	if got, ok := uc.getCachedMap(worldID, "sig-2"); !ok || got != "new text" {
+		t.Fatalf("expected cached map for new signature, got ok=%v text=%q", ok, got)
+	}
+}

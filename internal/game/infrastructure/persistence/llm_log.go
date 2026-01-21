@@ -118,6 +118,39 @@ func (r *LLMLogRepository) GetByFilters(ctx context.Context, filters LLMLogFilte
 	return logs, nil
 }
 
+// GetBranches получает агрегаты по веткам запросов (сессиям)
+func (r *LLMLogRepository) GetBranches(ctx context.Context, filters LLMLogFilters, limit int) ([]*LLMLogBranch, error) {
+	var branches []*LLMLogBranch
+	query := r.db.WithContext(ctx).Model(&llm_log.LLMLog{}).
+		Where("session_id IS NOT NULL")
+	if filters.ChatID != nil {
+		query = query.Where("chat_id = ?", *filters.ChatID)
+	}
+	if filters.TgUserID != nil {
+		query = query.Where("tg_user_id = ?", *filters.TgUserID)
+	}
+
+	err := query.Select(`
+			session_id,
+			chat_id,
+			tg_user_id,
+			COUNT(*) AS total_requests,
+			SUM(CASE WHEN error IS NOT NULL OR (status_code IS NOT NULL AND status_code >= 400) THEN 1 ELSE 0 END) AS total_errors,
+			COALESCE(SUM(COALESCE(tokens_used, 0)), 0) AS total_tokens,
+			COALESCE(SUM(COALESCE(tools_calls_count, 0)), 0) AS total_tool_calls,
+			MIN(created_at) AS first_seen,
+			MAX(created_at) AS last_seen
+		`).
+		Group("session_id, chat_id, tg_user_id").
+		Order("last_seen DESC").
+		Limit(limit).
+		Scan(&branches).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get branches: %w", err)
+	}
+	return branches, nil
+}
+
 // CountByChatID подсчитывает количество логов для Chat ID
 func (r *LLMLogRepository) CountByChatID(ctx context.Context, chatID int64) (int64, error) {
 	var count int64
@@ -183,8 +216,8 @@ func (r *LLMLogRepository) GetStats(ctx context.Context, from, to time.Time) (*L
 	var totalTokens int64
 	err = r.db.WithContext(ctx).
 		Model(&llm_log.LLMLog{}).
-		Where("created_at >= ? AND created_at <= ? AND tokens_used IS NOT NULL", from, to).
-		Select("COALESCE(SUM(tokens_used), 0)").
+		Where("created_at >= ? AND created_at <= ?", from, to).
+		Select("COALESCE(SUM(COALESCE(tokens_used, 0)), 0)").
 		Scan(&totalTokens).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get total tokens: %w", err)
@@ -195,15 +228,28 @@ func (r *LLMLogRepository) GetStats(ctx context.Context, from, to time.Time) (*L
 	var totalToolCalls int64
 	err = r.db.WithContext(ctx).
 		Model(&llm_log.LLMLog{}).
-		Where("created_at >= ? AND created_at <= ? AND tools_calls_count IS NOT NULL", from, to).
-		Select("COALESCE(SUM(tools_calls_count), 0)").
+		Where("created_at >= ? AND created_at <= ?", from, to).
+		Select("COALESCE(SUM(COALESCE(tools_calls_count, 0)), 0)").
 		Scan(&totalToolCalls).Error
 	if err != nil {
 		return nil, fmt.Errorf("failed to get total tool calls: %w", err)
 	}
 	stats.TotalToolCalls = totalToolCalls
 
-	stats.TotalProblems = stats.TotalErrors
+	// Проблемы считаем как ошибки или HTTP статусы >= 400 (если были сохранены)
+	var totalProblems int64
+	err = r.db.WithContext(ctx).
+		Model(&llm_log.LLMLog{}).
+		Where(
+			"created_at >= ? AND created_at <= ? AND (error IS NOT NULL OR (status_code IS NOT NULL AND status_code >= 400))",
+			from,
+			to,
+		).
+		Count(&totalProblems).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to count problems: %w", err)
+	}
+	stats.TotalProblems = totalProblems
 
 	return &stats, nil
 }
@@ -216,4 +262,17 @@ type LLMStats struct {
 	TotalTokens       int64 `json:"total_tokens"`
 	TotalToolCalls    int64 `json:"total_tool_calls"`
 	TotalProblems     int64 `json:"total_problems"`
+}
+
+// LLMLogBranch агрегированные метрики по ветке (сессии)
+type LLMLogBranch struct {
+	SessionID      uint      `json:"session_id"`
+	ChatID         int64     `json:"chat_id"`
+	TgUserID       int64     `json:"tg_user_id"`
+	TotalRequests  int64     `json:"total_requests"`
+	TotalErrors    int64     `json:"total_errors"`
+	TotalTokens    int64     `json:"total_tokens"`
+	TotalToolCalls int64     `json:"total_tool_calls"`
+	FirstSeen      time.Time `json:"first_seen"`
+	LastSeen       time.Time `json:"last_seen"`
 }

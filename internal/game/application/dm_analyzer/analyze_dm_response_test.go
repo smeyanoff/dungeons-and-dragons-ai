@@ -870,6 +870,86 @@ func TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC(t *testing.T) {
 	}
 }
 
+func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenUsesNonEmpty(t *testing.T) {
+	llm := &mockLLM{}
+	combatRepo := &mockCombatRepo{}
+	questRepo := &mockQuestRepo{}
+	inventoryRepo := &mockInventoryRepo{}
+
+	callCount := 0
+	llm.generateFunc = func(ctx context.Context, prompt string) (string, error) {
+		callCount++
+		if callCount == 1 {
+			return "{}", nil
+		}
+		analysis := DMResponseAnalysis{
+			ExperienceGained: 5,
+			ExperienceReason: "test",
+		}
+		data, _ := json.Marshal(analysis)
+		return string(data), nil
+	}
+
+	uc := NewAnalyzeDMResponseUseCase(
+		llm,
+		combatRepo,
+		questRepo,
+		inventoryRepo,
+		1,   // sessionID
+		123, // chatID
+		1,   // worldID
+		1,   // characterID
+		1,   // playerID
+	)
+
+	analysis, err := uc.Execute(context.Background(), "DM response")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if callCount < 2 {
+		t.Fatalf("expected at least 2 LLM calls due to retry, got %d", callCount)
+	}
+	if analysis.ExperienceGained != 5 {
+		t.Fatalf("expected non-empty analysis after retry, got %+v", analysis)
+	}
+}
+
+func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenFallback(t *testing.T) {
+	llm := &mockLLM{}
+	combatRepo := &mockCombatRepo{}
+	questRepo := &mockQuestRepo{}
+	inventoryRepo := &mockInventoryRepo{}
+
+	callCount := 0
+	llm.generateFunc = func(ctx context.Context, prompt string) (string, error) {
+		callCount++
+		return "{}", nil
+	}
+
+	uc := NewAnalyzeDMResponseUseCase(
+		llm,
+		combatRepo,
+		questRepo,
+		inventoryRepo,
+		1,   // sessionID
+		123, // chatID
+		1,   // worldID
+		1,   // characterID
+		1,   // playerID
+	)
+
+	analysis, err := uc.Execute(context.Background(), "Начался бой с орком")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if callCount != 3 {
+		t.Fatalf("expected 3 LLM calls (2 retries), got %d", callCount)
+	}
+	if !analysis.CombatDetected || len(analysis.Enemies) == 0 {
+		t.Fatalf("expected fallback combat analysis, got %+v", analysis)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
 		(len(s) > len(substr) && (s[:len(substr)] == substr ||

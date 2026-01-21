@@ -63,8 +63,9 @@ RUN update-ca-certificates
 # Устанавливаем переменные окружения
 ENV TZ=Europe/Moscow
 
-# Expose порт для health check
+# Expose ports for health check and monitoring UI
 EXPOSE 8080
+EXPOSE 8081
 
 # Запускаем приложение
 CMD ["./bot"]

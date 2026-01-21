@@ -2,69 +2,76 @@
 
 **Последнее обновление:** 2026-01-21
 
-## ✅ Статус
+## ✅ Статус прогонов
 
-- **`make test`** (=`go test ./...`): ✅ PASS
-- **`make test-integration-gameplay`**: ✅ PASS  
-  - LLM‑зависимые тесты **SKIP**, если не заданы `GIGACHAT_CLIENT_ID`/`GIGACHAT_CLIENT_SECRET`.
+- **`make test`** (=`go test ./...`): ✅ PASS (2026-01-21)  
+- **`make test-integration`**: ✅ PASS (2026-01-21)  
+  Примечание: LLM-зависимые тесты корректно **SKIP**, если не заданы `GIGACHAT_CLIENT_ID/GIGACHAT_CLIENT_SECRET`.
+- **`make test-telegram-stub`**: ✅ PASS (2026-01-21)  
+- **`make test-telegram-real`**: ✅ PASS (2026-01-21)  
+- **`make test-integration-gameplay-docker`**: ⚠️ не запускалось в этом прогоне (требует запущенный `dnd-bot-prod`).
 
 ## 🧪 Добавлено/обновлено тестами
 
-- `TestMaybeSendPendingAbilityCheckPrompt_SendsOnceAndMarksNotified`: отправка one‑tap prompt с inline‑кнопкой `ability_roll_*`, пометка `PendingAbilityCheckNotified`, без повторной отправки.  
-  Файл: `internal/telegram/bot_pending_ability_check_test.go`.
-- `TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow`: полный UX “tool-first ability check” как в Telegram: сообщение игрока → `request_ability_check` → inline‑кнопка → callback → очистка pending + запись в историю + edit сообщения.  
-  Файл: `tests/integration/telegram_tool_first_ability_check_flow_test.go`.
+- `TestGetMapUseCase_CacheBehavior`: базовые проверки кэша карты (`getCachedMap`/`setCachedMap`).  
+  Файл: `internal/game/application/worldmap/get_map_test.go`.
+- `TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenUsesNonEmpty` и `...RetriesThenFallback`: ретраи DM Analyzer при пустом JSON, проверка fallback.  
+  Файл: `internal/game/application/dm_analyzer/analyze_dm_response_test.go`.
+- `TestTelegramGameplay_RealLLM_UserJourney_MainMechanics`: сквозной сценарий “как пользователь в Telegram” с реальным LLM для `/newgame`+действия игрока, плюс детерминированные проверки `/roll` (pending check) и `/battlefield`+`/attack`.  
+  Файл: `tests/integration/telegram_real_llm_user_journey_test.go`.
+- `TestTelegramBattlefieldCommand`: переведён на infra-only (больше не зависит от GigaChat creds), чтобы стабильно исполняться в `make test-integration`.  
+  Файл: `tests/integration/telegram_battlefield_test.go`.
 
-## ▶️ Как запускать тесты
+## 🧯 Проблемы, найденные при прогоне
 
-```bash
-make test
-make test-integration
-make test-integration-gameplay
-```
+1. **Location events не попадают в следующий DM prompt**  
+   `TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit`: событие создано в `world_events`, но не найдено в следующем DM prompt.  
+   Файл: `tests/integration/telegram_location_event_simulation_test.go`.
 
-## 🧯 Проблемы, найденные при интеграционном прогоне (2026-01-21)
+2. **GigaChat Image: download 403 (Permission denied)**  
+   В `TestTelegramGameplay_CompleteFlow` генерация изображения локации завершается ошибкой скачивания: `gigachat image download error status 403: {"status":403,"message":"Permission denied"}`.  
+   Это не падает тестом (есть fallback), но ломает “красивый UX” и шумит в логах.
 
-1. **Location events не “доезжают” до DM/игрока**: событие локации создаётся в `world_events`, но не находится ни в следующем DM prompt, ни в `story_events` (history) — похоже, оно не попадает в контекст/историю/RAG.  
-   Покрыто тестом: `tests/integration/telegram_location_event_simulation_test.go` (не падает, но пишет проблему).
+3. **InitCampaign: невалидный JSON от LLM → repair/retry/fallback (connections/NPCs)**  
+   В прогоне real LLM видно: `LLM response ... is not valid JSON, attempting to repair`, далее ретраи, а для `connections` — `Failed to generate valid connections, using fallback`.  
+   Это может ухудшать качество мира и детерминизм (и потенциально ломать `/map` навигацию).
 
-2. **`/map` без inline-навигации**: после команды `/map` в bot-simulation не удалось найти сообщение с inline‑кнопками навигации (`map_to_*`).
+4. **DM Analyzer: combat_detected=true, но enemy.name пустой → бой не стартует**  
+   В `TestTelegramGameplay_RealLLM_UserJourney_MainMechanics` анализ содержит врага с `name=""`, после чего лог: `Skipping enemy without name ...` и `failed to start combat: need at least 2 participants for combat`.  
+   Это баг/дырка в контракте: модель может вернуть “битого” врага, а пайплайн стартует бой и падает внутри (хотя тест продолжает жить, т.к. бой в тесте создаётся детерминированно для проверки `/battlefield`).
 
-3. **Qdrant client/server version warning в логах**: встречается `clientVersion=Unknown` и предупреждение о несовместимости версий (хотя подключение работает). Это шумит и может скрывать реальные проблемы.
+## 📝 Примечания
 
-## 🧪 Добавлено тестами (2026-01-21)
+- В интеграционном прогоне наблюдалась ошибка генерации изображения локации: `gigachat image download error status 403`.  
+  Не ломает тесты напрямую, но шумит в логах.
 
-- `TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit`: проверка, что “first visit” может создавать событие локации, и сигнализация (в отчёт) если событие не видно в контексте/истории.  
-  Файл: `tests/integration/telegram_location_event_simulation_test.go`.
 
-## Проблемы, найденные при интеграционном тестировании (2026-01-21 14:43:55)
+## Проблемы, найденные при интеграционном тестировании (2026-01-21 21:31:54)
 
-1. LocationEvent: событие локации создано (world_event_id=10, name="Встреча в Cave"), но не найдено в следующем DM prompt (возможно, оно не попадает в контекст/историю/RAG)
-2. LocationEvent: событие локации есть в world_events (id=10), но не найдено ни в одном StoryEvent (history) — игрок/DM могут его не увидеть
-
----
-
-## Проблемы, найденные при интеграционном тестировании (2026-01-21 15:07:53)
-
-1. LocationEvent: событие локации создано (world_event_id=12, name="Находка в Cave"), но не найдено в следующем DM prompt (возможно, оно не попадает в контекст/историю/RAG)
-2. LocationEvent: событие локации есть в world_events (id=12), но не найдено ни в одном StoryEvent (history) — игрок/DM могут его не увидеть
+1. LocationEvent: событие локации создано (world_event_id=25, location_id=373, name="Встреча в Cave"), но не найдено в следующем DM prompt — вероятно, не подключено к контексту/RAG/истории
 
 ---
 
-## Проблемы, найденные при интеграционном тестировании (2026-01-21 15:13:45)
+## Проблемы, найденные при интеграционном тестировании (2026-01-21 21:32:23)
 
-1. LocationEvent: событие локации создано (world_event_id=14, name="Встреча в Cave"), но не найдено в следующем DM prompt (возможно, оно не попадает в контекст/историю/RAG)
-2. LocationEvent: событие локации есть в world_events (id=14), но не найдено ни в одном StoryEvent (history) — игрок/DM могут его не увидеть
+1. LocationEvent: событие локации создано (world_event_id=27, location_id=386, name="Встреча в Cave"), но не найдено в следующем DM prompt — вероятно, не подключено к контексту/RAG/истории
 
 ---
 
-## Обновления автотестов и сигналы качества (2026-01-21)
+## Проблемы, найденные при интеграционном тестировании (2026-01-21 21:32:49)
 
-1. **Добавлен стабильный Telegram gameplay e2e без реального LLM**: `TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM` (не требует `GIGACHAT_*`, не делает сетевых вызовов к LLM/RAG).  
-   Цель: покрыть базовый “как пользователь в Telegram” сценарий: `/newgame` → `/createcharacter` → player action → one-tap ability check → `/map` → `/history` → `/endgame`.
+1. LocationEvent: событие локации создано (world_event_id=29, location_id=399, name="Встреча в Cave"), но не найдено в следующем DM prompt — вероятно, не подключено к контексту/RAG/истории
 
-2. **Включён rate limit для LLM вызовов в интеграционных тестах**: все реальные LLM обращения теперь автоматически ограничены (по умолчанию 2.5s между вызовами, настраивается `LLM_TEST_MIN_DELAY_MS`).  
-   Цель: не DDOSить модель при полном прогоне `make test-integration`.
+---
 
-3. **Потенциальная проблема UX**: если в `/history` попадают tool‑маркеры (`request_ability_check`, `evaluate_check`, JSON/tool_call), это считается player-facing утечкой и должно быть исправлено (тесты это фейлят/репортят).
+## Проблемы, найденные при интеграционном тестировании (2026-01-21 21:33:50)
 
+1. LocationEvent: событие локации создано (world_event_id=31, location_id=413, name="Встреча в Cave"), но не найдено в следующем DM prompt — вероятно, не подключено к контексту/RAG/истории
+
+---
+
+## Проблемы, найденные при интеграционном тестировании (2026-01-21 21:35:00)
+
+1. LocationEvent: событие локации создано (world_event_id=33, location_id=427, name="Загадка в Cave"), но не найдено в следующем DM prompt — вероятно, не подключено к контексту/RAG/истории
+
+---

@@ -1003,7 +1003,7 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 
 // buildAnalysisPrompt создает промпт для анализа ответа DM
 func buildAnalysisPrompt(dmResponse string, strict bool) string {
-	skeleton := ` + "`" + `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}` + "`" + `
+	skeleton := `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
 	criticalFooter := ""
 	if strict {
 		criticalFooter = "\n\nСТРОГОЕ ПРАВИЛО ДЛЯ РЕТРАЯ:\n- НЕ возвращай пустой JSON {} или пустой ответ\n- Если нет событий, верни этот скелет без изменений: " + skeleton

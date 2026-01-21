@@ -30,10 +30,14 @@ type LLMLogRepository interface {
 	GetWithErrors(ctx context.Context, limit int) ([]*llm_log.LLMLog, error)
 	GetStats(ctx context.Context, from, to time.Time) (*LLMStats, error)
 	GetByFilters(ctx context.Context, filters persistence.LLMLogFilters, limit int) ([]*llm_log.LLMLog, error)
+	GetBranches(ctx context.Context, filters persistence.LLMLogFilters, limit int) ([]*LLMLogBranch, error)
 }
 
 // LLMStats статистика использования LLM (использует тип из persistence)
 type LLMStats = persistence.LLMStats
+
+// LLMLogBranch агрегаты по "веткам" запросов (сессиям)
+type LLMLogBranch = persistence.LLMLogBranch
 
 // NewServer создает новый сервер мониторинга
 func NewServer(addr string, logRepo LLMLogRepository) *Server {
@@ -49,11 +53,13 @@ func NewServer(addr string, logRepo LLMLogRepository) *Server {
 	mux.HandleFunc("/log/", s.handleLogDetail)
 	mux.HandleFunc("/errors", s.handleErrors)
 	mux.HandleFunc("/stats", s.handleStats)
+	mux.HandleFunc("/branches", s.handleBranches)
 
 	// API endpoints
 	mux.HandleFunc("/api/logs", s.handleAPILogs)
 	mux.HandleFunc("/api/log/", s.handleAPILogDetail)
 	mux.HandleFunc("/api/stats", s.handleAPIStats)
+	mux.HandleFunc("/api/branches", s.handleAPIBranches)
 
 	s.httpServer = &http.Server{
 		Addr:    addr,
@@ -108,6 +114,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			<a href="/">Dashboard</a>
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
+			<a href="/branches">Branches</a>
 			<a href="/stats">Statistics</a>
 		</div>
 		<div class="stats" id="stats">
@@ -326,6 +333,54 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	renderStatsPage(w, stats, from, to)
 }
 
+// handleBranches обрабатывает страницу веток запросов (сессий)
+func (s *Server) handleBranches(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 100
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+			limit = l
+		}
+	}
+
+	chatIDStr := r.URL.Query().Get("chat_id")
+	tgUserIDStr := r.URL.Query().Get("tg_user_id")
+	filters := persistence.LLMLogFilters{}
+	hasFilters := false
+	if chatIDStr != "" {
+		if chatID, parseErr := strconv.ParseInt(chatIDStr, 10, 64); parseErr == nil {
+			filters.ChatID = &chatID
+			hasFilters = true
+		}
+	}
+	if tgUserIDStr != "" {
+		if tgUserID, parseErr := strconv.ParseInt(tgUserIDStr, 10, 64); parseErr == nil {
+			filters.TgUserID = &tgUserID
+			hasFilters = true
+		}
+	}
+
+	var branches []*LLMLogBranch
+	var err error
+	if hasFilters {
+		branches, err = s.logRepo.GetBranches(ctx, filters, limit)
+	} else {
+		branches, err = s.logRepo.GetBranches(ctx, persistence.LLMLogFilters{}, limit)
+	}
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get branches: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	renderBranchesPage(w, branches, branchPageFilters{
+		ChatID:   chatIDStr,
+		TgUserID: tgUserIDStr,
+		Limit:    limit,
+	})
+}
+
 // handleAPILogs обрабатывает API запрос для получения логов
 func (s *Server) handleAPILogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -376,6 +431,50 @@ func (s *Server) handleAPILogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, logs)
+}
+
+// handleAPIBranches обрабатывает API запрос для получения веток
+func (s *Server) handleAPIBranches(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 100
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+			limit = l
+		}
+	}
+
+	chatIDStr := r.URL.Query().Get("chat_id")
+	tgUserIDStr := r.URL.Query().Get("tg_user_id")
+	filters := persistence.LLMLogFilters{}
+	hasFilters := false
+	if chatIDStr != "" {
+		if chatID, parseErr := strconv.ParseInt(chatIDStr, 10, 64); parseErr == nil {
+			filters.ChatID = &chatID
+			hasFilters = true
+		}
+	}
+	if tgUserIDStr != "" {
+		if tgUserID, parseErr := strconv.ParseInt(tgUserIDStr, 10, 64); parseErr == nil {
+			filters.TgUserID = &tgUserID
+			hasFilters = true
+		}
+	}
+
+	var branches []*LLMLogBranch
+	var err error
+	if hasFilters {
+		branches, err = s.logRepo.GetBranches(ctx, filters, limit)
+	} else {
+		branches, err = s.logRepo.GetBranches(ctx, persistence.LLMLogFilters{}, limit)
+	}
+	if err != nil {
+		respondJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get branches: %v", err))
+		return
+	}
+
+	respondJSON(w, http.StatusOK, branches)
 }
 
 // handleAPILogDetail обрабатывает API запрос для получения деталей лога
@@ -475,6 +574,12 @@ type logsPageFilters struct {
 	TgUserID  string
 	SessionID string
 	Limit     int
+}
+
+type branchPageFilters struct {
+	ChatID   string
+	TgUserID string
+	Limit    int
 }
 
 func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filters logsPageFilters) {
@@ -593,6 +698,7 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filters logsP
 			<a href="/">Dashboard</a>
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
+			<a href="/branches">Branches</a>
 			<a href="/stats">Statistics</a>
 		</div>
 		<form method="get" action="/logs" style="margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
@@ -756,6 +862,7 @@ func renderLogDetailPage(w http.ResponseWriter, logEntry *llm_log.LLMLog) {
 			<a href="/">Dashboard</a>
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
+			<a href="/branches">Branches</a>
 			<a href="/stats">Statistics</a>
 		</div>
 		<div class="meta-info">
@@ -857,6 +964,87 @@ func renderLogDetailPage(w http.ResponseWriter, logEntry *llm_log.LLMLog) {
 	tmpl.Execute(w, logEntry)
 }
 
+func renderBranchesPage(w http.ResponseWriter, branches []*LLMLogBranch, filters branchPageFilters) {
+	tmpl := template.Must(template.New("branches").Parse(`
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="UTF-8">
+	<title>LLM Branches</title>
+	<style>
+		body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+		.container { max-width: 1400px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+		table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+		th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; vertical-align: top; }
+		th { background: #007bff; color: white; position: sticky; top: 0; }
+		tr:hover { background: #f5f5f5; }
+		.nav { margin: 20px 0; }
+		.nav a { display: inline-block; margin-right: 20px; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 4px; }
+		.nav a:hover { background: #0056b3; }
+		.time { font-size: 0.9em; color: #666; }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h1>LLM Branches</h1>
+		<div class="nav">
+			<a href="/">Dashboard</a>
+			<a href="/logs">Recent Logs</a>
+			<a href="/errors">Errors</a>
+			<a href="/branches">Branches</a>
+			<a href="/stats">Statistics</a>
+		</div>
+		<form method="get" action="/branches" style="margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+			<input type="text" name="chat_id" placeholder="Chat ID" value="{{.Filters.ChatID}}">
+			<input type="text" name="tg_user_id" placeholder="TG User ID" value="{{.Filters.TgUserID}}">
+			<input type="number" name="limit" placeholder="Limit" min="1" max="1000" value="{{.Filters.Limit}}">
+			<button type="submit" style="padding: 8px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Filter</button>
+		</form>
+		<table>
+			<thead>
+				<tr>
+					<th style="width: 120px;">Branch ID</th>
+					<th style="width: 120px;">Chat ID</th>
+					<th style="width: 120px;">User ID</th>
+					<th style="width: 140px;">First Seen</th>
+					<th style="width: 140px;">Last Seen</th>
+					<th style="width: 120px;">Requests</th>
+					<th style="width: 120px;">Errors</th>
+					<th style="width: 120px;">Tokens</th>
+					<th style="width: 120px;">Tool Calls</th>
+					<th style="width: 120px;">Open Logs</th>
+				</tr>
+			</thead>
+			<tbody>
+				{{range .Branches}}
+				<tr>
+					<td>{{.SessionID}}</td>
+					<td>{{.ChatID}}</td>
+					<td>{{.TgUserID}}</td>
+					<td class="time">{{.FirstSeen.Format "2006-01-02 15:04:05"}}</td>
+					<td class="time">{{.LastSeen.Format "2006-01-02 15:04:05"}}</td>
+					<td>{{.TotalRequests}}</td>
+					<td>{{.TotalErrors}}</td>
+					<td>{{.TotalTokens}}</td>
+					<td>{{.TotalToolCalls}}</td>
+					<td><a href="/logs?chat_id={{.ChatID}}&session_id={{.SessionID}}">View</a></td>
+				</tr>
+				{{end}}
+			</tbody>
+		</table>
+	</div>
+</body>
+</html>
+	`))
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	tmpl.Execute(w, map[string]interface{}{
+		"Branches": branches,
+		"Filters":  filters,
+	})
+}
+
 func renderStatsPage(w http.ResponseWriter, stats *LLMStats, from, to time.Time) {
 	// Защита от nil stats
 	if stats == nil {
@@ -897,6 +1085,7 @@ func renderStatsPage(w http.ResponseWriter, stats *LLMStats, from, to time.Time)
 			<a href="/">Dashboard</a>
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
+			<a href="/branches">Branches</a>
 			<a href="/stats">Statistics</a>
 		</div>
 		<div class="period">
