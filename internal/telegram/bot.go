@@ -739,6 +739,8 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleBattlefield(ctx, chatID, args)
 	case "abilities":
 		return b.handleAbilities(ctx, chatID, args)
+	case "wait_until", "time":
+		return b.handleWaitUntil(ctx, chatID, args)
 	default:
 		msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Используйте /help для списка команд")
 		return b.sendMessage(msg)
@@ -776,6 +778,7 @@ func (b *Bot) handleHelp(ctx context.Context, chatID int64) error {
 /history - посмотреть историю игры
 /quests - посмотреть активные квесты
 /map - посмотреть карту мира
+/wait_until <время> - изменить время суток (morning/noon/afternoon/evening/night/midnight)
 /flee - попытаться выйти из боя (во время боя)
 /abilities [filter] - показать способности персонажа (filter: all/spells/feats/class)
 /spells - показать заклинания персонажа
@@ -3765,4 +3768,83 @@ func (b *Bot) editMessage(edit tgbotapi.EditMessageTextConfig, chatID int64, fal
 		return b.sendLongMessage(chatID, fallbackText)
 	}
 	return nil
+}
+
+func (b *Bot) handleWaitUntil(ctx context.Context, chatID int64, args string) error {
+	// Получаем сессию
+	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при получении сессии: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+	if gs == nil {
+		msg := tgbotapi.NewMessage(chatID, "Игра не начата. Используйте /newgame для начала новой игры.")
+		return b.sendMessage(msg)
+	}
+
+	// Парсим аргумент времени
+	args = strings.TrimSpace(args)
+	var newTimeOfDay string
+
+	switch strings.ToLower(args) {
+	case "утро", "утра", "morning":
+		newTimeOfDay = "morning"
+	case "день", "полдень", "noon":
+		newTimeOfDay = "noon"
+	case "вечер", "evening":
+		newTimeOfDay = "evening"
+	case "ночь", "night":
+		newTimeOfDay = "night"
+	case "полночь", "midnight":
+		newTimeOfDay = "midnight"
+	case "":
+		// Показываем текущее время и доступные варианты
+		currentTime := gs.World.TimeOfDay
+		timeDescriptions := map[string]string{
+			"morning":   "🌅 Утро",
+			"noon":      "☀️ Полдень",
+			"afternoon": "🌇 День",
+			"evening":   "🌆 Вечер",
+			"night":     "🌙 Ночь",
+			"midnight":  "🕛 Полночь",
+		}
+
+		text := fmt.Sprintf("🕐 Текущее время: %s\n\nДоступные варианты:\n", timeDescriptions[currentTime])
+		for timeKey, desc := range timeDescriptions {
+			text += fmt.Sprintf("%s - /wait_until %s\n", desc, timeKey)
+		}
+		text += "\nТакже можно использовать русские названия: утро, день, вечер, ночь, полночь"
+
+		msg := tgbotapi.NewMessage(chatID, text)
+		return b.sendMessage(msg)
+	default:
+		msg := tgbotapi.NewMessage(chatID, "Неверное время суток. Используйте: morning/noon/afternoon/evening/night/midnight или русские названия: утро/день/вечер/ночь/полночь")
+		return b.sendMessage(msg)
+	}
+
+	// Изменяем время суток
+	oldTime := gs.World.TimeOfDay
+	gs.World.SetTimeOfDay(newTimeOfDay)
+
+	// Сохраняем изменения
+	if err := b.sessionRepo.Save(ctx, gs); err != nil {
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при сохранении времени: %v", err))
+		return b.sendMessage(errorMsg)
+	}
+
+	// Описания времени для красивого вывода
+	timeDescriptions := map[string]string{
+		"morning":   "🌅 Утро",
+		"noon":      "☀️ Полдень",
+		"afternoon": "🌇 День",
+		"evening":   "🌆 Вечер",
+		"night":     "🌙 Ночь",
+		"midnight":  "🕛 Полночь",
+	}
+
+	text := fmt.Sprintf("🕐 Время суток изменено!\n%s → %s\n\nВ мире наступил %s.",
+		timeDescriptions[oldTime], timeDescriptions[newTimeOfDay], strings.ToLower(timeDescriptions[newTimeOfDay]))
+
+	msg := tgbotapi.NewMessage(chatID, text)
+	return b.sendMessage(msg)
 }

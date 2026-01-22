@@ -422,6 +422,15 @@ func (uc *HandleActionUseCase) Execute(
 		logger.Int("context_length", len(gameContext)),
 	)
 
+	// Проверяем на команды изменения времени суток в естественном языке
+	if timeChange := uc.parseTimeChangeCommand(playerMessage); timeChange != "" {
+		logger.Info("Time change command detected",
+			logger.String("command", timeChange),
+			logger.Uint("session_id", gs.ID),
+		)
+		return uc.handleTimeChange(ctx, gs, timeChange)
+	}
+
 	// Анализируем действие игрока для определения необходимости проверок
 	var actionAnalysis *dm_analyzer.PlayerActionAnalysis
 	if uc.analyzePlayerActionUC != nil {
@@ -2434,4 +2443,82 @@ func (a *subscriptionCheckerAdapter) IsPremium(ctx context.Context, tgUserID int
 	return resp.Subscription.IsActive() &&
 		(resp.Subscription.Plan == subscription.PlanPremium ||
 			resp.Subscription.Plan == subscription.PlanPro), nil
+}
+
+// parseTimeChangeCommand анализирует сообщение игрока на предмет команд изменения времени
+func (uc *HandleActionUseCase) parseTimeChangeCommand(message string) string {
+	message = strings.ToLower(strings.TrimSpace(message))
+
+	// Паттерны для распознавания команд времени
+	timePatterns := map[string]string{
+		// Русские паттерны
+		"подождать до утра":     "morning",
+		"дождаться утра":        "morning",
+		"подождать до вечера":   "evening",
+		"дождаться вечера":      "evening",
+		"подождать до ночи":     "night",
+		"дождаться ночи":        "night",
+		"подождать до полудня":  "noon",
+		"дождаться полудня":     "noon",
+		"подождать до дня":      "noon",
+		"дождаться дня":         "noon",
+		"подождать до полночь":  "midnight",
+		"дождаться полночь":     "midnight",
+
+		// Английские паттерны
+		"wait until morning":    "morning",
+		"wait until evening":    "evening",
+		"wait until night":      "night",
+		"wait until noon":       "noon",
+		"wait until midnight":   "midnight",
+	}
+
+	for pattern, timeOfDay := range timePatterns {
+		if strings.Contains(message, pattern) {
+			return timeOfDay
+		}
+	}
+
+	return ""
+}
+
+// handleTimeChange обрабатывает изменение времени суток
+func (uc *HandleActionUseCase) handleTimeChange(ctx context.Context, gs *session.GameSession, newTimeOfDay string) (string, error) {
+	oldTime := gs.World.TimeOfDay
+
+	// Изменяем время суток
+	gs.World.SetTimeOfDay(newTimeOfDay)
+
+	// Сохраняем изменения в БД
+	dbCtx, dbCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer dbCancel()
+
+	if err := uc.sessionRepo.Save(dbCtx, gs); err != nil {
+		logger.Error("Failed to save time change",
+			logger.ErrorField(err),
+			logger.Uint("session_id", gs.ID),
+		)
+		return "", fmt.Errorf("failed to save time change: %w", err)
+	}
+
+	// Описания времени для красивого вывода
+	timeDescriptions := map[string]string{
+		"morning":   "🌅 Утро",
+		"noon":      "☀️ Полдень",
+		"afternoon": "🌇 День",
+		"evening":   "🌆 Вечер",
+		"night":     "🌙 Ночь",
+		"midnight":  "🕛 Полночь",
+	}
+
+	response := fmt.Sprintf("⏰ Вы ждете подходящего момента...\n\n%s → %s\n\nВремя в мире изменилось. %s наступил.",
+		timeDescriptions[oldTime], timeDescriptions[newTimeOfDay], strings.ToLower(timeDescriptions[newTimeOfDay]))
+
+	logger.Info("Time changed via natural language",
+		logger.String("old_time", oldTime),
+		logger.String("new_time", newTimeOfDay),
+		logger.Uint("session_id", gs.ID),
+	)
+
+	return response, nil
 }
