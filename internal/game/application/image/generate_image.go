@@ -47,9 +47,10 @@ type GenerateImageRequest struct {
 
 // GenerateImageResponse ответ на запрос генерации изображения
 type GenerateImageResponse struct {
-	ImagePath string // Путь к сохраненному изображению
-	FileID    string // File ID из GigaChat API (для кэширования в API)
-	FromCache bool   // Было ли изображение взято из кэша
+	ImagePath  string // Путь к сохраненному изображению (пустой если не удалось скачать)
+	FileID     string // File ID из GigaChat API (всегда возвращается)
+	FromCache  bool   // Было ли изображение взято из кэша
+	Downloaded bool   // Удалось ли скачать и сохранить файл
 }
 
 // Execute генерирует изображение, скачивает его и сохраняет локально
@@ -88,8 +89,10 @@ func (uc *ImageGenerationUseCase) Execute(ctx context.Context, req GenerateImage
 					logger.String("type", req.Type),
 				)
 				return &GenerateImageResponse{
-					ImagePath: imagePath,
-					FromCache: true,
+					ImagePath:  imagePath,
+					FileID:     "", // Кэшированные изображения не имеют file_id
+					FromCache:  true,
+					Downloaded: true,
 				}, nil
 			}
 		}
@@ -111,10 +114,26 @@ func (uc *ImageGenerationUseCase) Execute(ctx context.Context, req GenerateImage
 		logger.String("type", req.Type),
 	)
 
-	// Скачиваем изображение
-	imageData, err := uc.imageGenerator.DownloadImage(ctx, fileID)
+	// Скачиваем изображение с отдельным таймаутом (изображения могут быть большими)
+	downloadCtx, downloadCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer downloadCancel()
+
+	logger.Info("Downloading image file",
+		logger.String("file_id", fileID))
+
+	imageData, err := uc.imageGenerator.DownloadImage(downloadCtx, fileID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download image: %w", err)
+		logger.Warn("Failed to download image, but file_id is valid",
+			logger.String("file_id", fileID),
+			logger.ErrorField(err))
+		// Возвращаем результат с file_id, но без данных файла
+		// Это позволит использовать file_id для повторных попыток скачивания
+		return &GenerateImageResponse{
+			ImagePath:  "",
+			FileID:     fileID,
+			FromCache:  false,
+			Downloaded: false,
+		}, nil
 	}
 
 	logger.Info("Image downloaded, saving",
@@ -144,9 +163,10 @@ func (uc *ImageGenerationUseCase) Execute(ctx context.Context, req GenerateImage
 	}
 
 	return &GenerateImageResponse{
-		ImagePath: imagePath,
-		FileID:    fileID,
-		FromCache: false,
+		ImagePath:  imagePath,
+		FileID:     fileID,
+		FromCache:  false,
+		Downloaded: true,
 	}, nil
 }
 

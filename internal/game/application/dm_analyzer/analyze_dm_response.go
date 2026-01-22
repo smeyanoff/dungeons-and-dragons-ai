@@ -56,8 +56,10 @@ var emptyAnalyzerJSONCount uint64
 // GeneratedImage представляет автоматически сгенерированное изображение
 type GeneratedImage struct {
 	Type       string `json:"type"`        // Тип: "item", "location", "npc"
-	ImagePath  string `json:"image_path"`  // Путь к изображению
+	ImagePath  string `json:"image_path"`  // Путь к изображению (может быть пустым если не скачано)
+	FileID     string `json:"file_id"`     // File ID для повторных попыток скачивания
 	EntityName string `json:"entity_name"` // Название сущности (предмет, локация, NPC)
+	Downloaded bool   `json:"downloaded"` // Удалось ли скачать изображение
 }
 
 // Enemy представляет врага в бою
@@ -131,6 +133,8 @@ type AnalyzeDMResponseUseCase struct {
 	sessionRepo             SessionRepository         // Репозиторий сессий для поиска локаций
 	eventRepo               StoryEventRepository      // Репозиторий для записи событий истории
 	indexDocUC              RAGIndexer                // Индексатор RAG для событий
+	imagesGeneratedInSession int                      // Счетчик изображений, сгенерированных в этой сессии
+	maxImagesPerSession     int                      // Максимальное количество изображений за сессию
 }
 
 // SessionRepository интерфейс для доступа к сессии (для поиска локаций)
@@ -236,9 +240,10 @@ type GenerateImageRequest struct {
 
 // GenerateImageResponse ответ на запрос генерации изображения
 type GenerateImageResponse struct {
-	ImagePath string
-	FileID    string
-	FromCache bool
+	ImagePath  string
+	FileID     string
+	FromCache  bool
+	Downloaded bool
 }
 
 func NewAnalyzeDMResponseUseCase(
@@ -253,15 +258,17 @@ func NewAnalyzeDMResponseUseCase(
 	playerID uint, // Добавлен playerID для проверки достижений
 ) *AnalyzeDMResponseUseCase {
 	return &AnalyzeDMResponseUseCase{
-		llm:           llm,
-		combatRepo:    combatRepo,
-		questRepo:     questRepo,
-		inventoryRepo: inventoryRepo,
-		sessionID:     sessionID,
-		chatID:        chatID,
-		worldID:       worldID,
-		characterID:   characterID,
-		playerID:      playerID,
+		llm:                      llm,
+		combatRepo:               combatRepo,
+		questRepo:                questRepo,
+		inventoryRepo:            inventoryRepo,
+		sessionID:                sessionID,
+		chatID:                   chatID,
+		worldID:                  worldID,
+		characterID:              characterID,
+		playerID:                 playerID,
+		imagesGeneratedInSession: 0,     // Начинаем с 0 изображений
+		maxImagesPerSession:      3,     // Максимум 3 изображения за сессию
 	}
 }
 
@@ -520,26 +527,36 @@ func validateEnemiesStrict(enemies []Enemy) ([]Enemy, bool) {
 
 // validateJSONSchema проверяет JSON на соответствие ожидаемой схеме анализа DM
 func validateJSONSchema(jsonStr string) error {
-	// Проверяем наличие обязательных полей верхнего уровня
-	requiredFields := []string{
+	// Пустой JSON объект - это валидный случай, но он будет обработан отдельно
+	// как пустой анализ
+	if strings.TrimSpace(jsonStr) == "{}" {
+		return nil
+	}
+
+	// Проверяем наличие хотя бы одного ключевого поля (менее строгие проверки)
+	keyFields := []string{
 		"combat_detected",
 		"enemies",
 		"quest_completed",
 		"quest_failed",
-		"quest_title",
 		"experience_gained",
-		"experience_reason",
 		"items_received",
 	}
 
-	for _, field := range requiredFields {
+	hasAtLeastOneField := false
+	for _, field := range keyFields {
 		fieldPattern := fmt.Sprintf(`"%s":`, field)
-		if !strings.Contains(jsonStr, fieldPattern) {
-			return fmt.Errorf("missing required field: %s", field)
+		if strings.Contains(jsonStr, fieldPattern) {
+			hasAtLeastOneField = true
+			break
 		}
 	}
 
-	// Проверяем структуру enemies массива
+	if !hasAtLeastOneField {
+		return fmt.Errorf("missing any required fields")
+	}
+
+	// Проверяем структуру enemies массива только если поле присутствует
 	if strings.Contains(jsonStr, `"enemies":`) {
 		enemiesStart := strings.Index(jsonStr, `"enemies":`)
 		if enemiesStart >= 0 {
@@ -556,7 +573,7 @@ func validateJSONSchema(jsonStr string) error {
 		}
 	}
 
-	// Проверяем структуру items_received массива
+	// Проверяем структуру items_received массива только если поле присутствует
 	if strings.Contains(jsonStr, `"items_received":`) {
 		itemsStart := strings.Index(jsonStr, `"items_received":`)
 		if itemsStart >= 0 {
@@ -606,12 +623,18 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 
 	prompt := buildAnalysisPrompt(dmResponse, attempt > 0)
 
+	// Pre-validation JSON структуры перед отправкой в LLM
+	if err := validateAnalysisPromptStructure(prompt); err != nil {
+		log.Printf("[DM Analyzer] Prompt validation failed: %v", err)
+		return fallbackAnalysisFromResponse(dmResponse), nil
+	}
+
 	// Увеличен таймаут для анализа DM ответов
 	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second) // Увеличиваем таймаут до 90 секунд
 	defer llmCancel()
 
-	// Устанавливаем большой лимит токенов для предотвращения усечения JSON
-	maxTokens := 8192 // Увеличиваем лимит токенов для полных ответов
+	// Устанавливаем лимит токенов для предотвращения усечения JSON
+	maxTokens := 4096 // Уменьшенный лимит токенов для стабильности
 	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
@@ -627,13 +650,13 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 	isTruncated := looksLikeTruncatedJSON(cleaned)
 	if isTruncated {
 		log.Printf("[DM Analyzer] Detected truncated JSON response (attempt: %d), attempting repair...", attempt+1)
-		cleaned = tryRepairTruncatedJSON(cleaned)
+		cleaned = tryRepairTruncatedJSONForDMAnalysis(cleaned, true)
 	}
 
 	// Пытаемся восстановить JSON если он невалиден
 	if !json.Valid([]byte(cleaned)) {
 		log.Printf("[DM Analyzer] Invalid JSON after initial cleaning, attempting repair (attempt: %d)...", attempt+1)
-		cleaned = tryRepairTruncatedJSON(cleaned)
+		cleaned = tryRepairTruncatedJSONForDMAnalysis(cleaned, true)
 
 		if !json.Valid([]byte(cleaned)) {
 			// Пробуем более агрессивную очистку
@@ -692,9 +715,20 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 	}
 
 	if isEmptyAnalysis(analysis) {
-		// Пустой анализ не всегда является ошибкой - некоторые ответы DM просто не содержат событий
-		// Если JSON валидный и структурированный, считаем это успешным результатом
-		log.Printf("[DM Analyzer] Empty but valid analysis returned (no events detected in DM response)")
+		// Пустой анализ считаем невалидным и делаем retry до maxRetries раз
+		if attempt < maxRetries {
+			log.Printf("[DM Analyzer] Empty analysis (attempt: %d), retrying...", attempt+1)
+			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
+		}
+
+		// После всех retry используем fallback если есть маркеры боя
+		if detectsCombatMarker(dmResponse) {
+			log.Printf("[DM Analyzer] Empty analysis after all retries but combat markers detected, using fallback analysis")
+			return fallbackAnalysisFromResponse(dmResponse), nil
+		}
+
+		// Если нет маркеров боя, возвращаем пустой анализ
+		log.Printf("[DM Analyzer] Empty analysis after all retries, no combat markers detected")
 		return analysis, nil
 	}
 
@@ -725,6 +759,48 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 		log.Printf("[DM Analyzer] Empty analysis, skipping state changes")
 		return nil
 	}
+	// Проверяем достижения и ежедневные квесты по участию в бою (combat_participated)
+	if analysis.CombatDetected && len(analysis.Enemies) > 0 {
+		if uc.checkAchievementsUC != nil && uc.playerID > 0 {
+			achievementReq := CheckAchievementsRequest{
+				PlayerID:       uc.playerID,
+				RequirementKey: "combat_participated",
+				CurrentValue:   1, // Увеличиваем на 1 участие в бою
+			}
+
+			unlocked, err := uc.checkAchievementsUC.Execute(ctx, achievementReq)
+			if err != nil {
+				log.Printf("[DM Analyzer] Failed to check achievements after combat participation: %v", err)
+			} else if len(unlocked) > 0 {
+				// Логируем и отправляем уведомления о разблокированных достижениях
+				for _, achievement := range unlocked {
+					log.Printf("[DM Analyzer] Achievement unlocked after combat participation: %s (%s)",
+						achievement.Achievement.Code, achievement.Achievement.Title)
+
+					// Отправляем уведомление пользователю, если есть notification service
+					if uc.notificationService != nil {
+						if err := uc.notificationService.SendAchievementNotification(ctx, uc.chatID, achievement.Message); err != nil {
+							log.Printf("[DM Analyzer] Failed to send achievement notification: %v", err)
+						}
+					}
+				}
+			}
+		}
+
+		// Отслеживаем прогресс ежедневных заданий по участию в бою
+		if uc.checkDailyProgressUC != nil && uc.tgUserID > 0 {
+			dailyReq := DailyQuestProgressRequest{
+				ChatID:    uc.chatID,
+				TgUserID:  uc.tgUserID,
+				QuestType: "win_combat", // Увеличиваем прогресс по победам в бою
+				Increment: 0,            // Пока не победили, просто отмечаем участие
+			}
+			if err := uc.checkDailyProgressUC.Execute(ctx, dailyReq); err != nil {
+				log.Printf("[DM Analyzer] Failed to check daily quest progress after combat participation: %v", err)
+			}
+		}
+	}
+
 	// Обрабатываем боевую ситуацию
 	// ВАЖНО: Проверяем, нет ли уже активного боя перед обработкой врагов
 	// Это предотвращает повторную генерацию врагов при каждом анализе ответа DM
@@ -762,6 +838,33 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 			return fmt.Errorf("failed to add items to inventory: %w", err)
 		}
 
+		// Проверяем достижения по коллекционированию предметов
+		if uc.checkAchievementsUC != nil && uc.playerID > 0 {
+			achievementReq := CheckAchievementsRequest{
+				PlayerID:       uc.playerID,
+				RequirementKey: "items_collected",
+				CurrentValue:   len(analysis.ItemsReceived), // Увеличиваем на количество полученных предметов
+			}
+
+			unlocked, err := uc.checkAchievementsUC.Execute(ctx, achievementReq)
+			if err != nil {
+				log.Printf("[DM Analyzer] Failed to check achievements after item collection: %v", err)
+			} else if len(unlocked) > 0 {
+				// Логируем и отправляем уведомления о разблокированных достижениях
+				for _, achievement := range unlocked {
+					log.Printf("[DM Analyzer] Achievement unlocked after item collection: %s (%s)",
+						achievement.Achievement.Code, achievement.Achievement.Title)
+
+					// Отправляем уведомление пользователю, если есть notification service
+					if uc.notificationService != nil {
+						if err := uc.notificationService.SendAchievementNotification(ctx, uc.chatID, achievement.Message); err != nil {
+							log.Printf("[DM Analyzer] Failed to send achievement notification: %v", err)
+						}
+					}
+				}
+			}
+		}
+
 		// Автоматически генерируем изображения для полученных предметов
 		if uc.imageGenerationService != nil && uc.userID > 0 {
 			generatedImages := uc.generateImagesForItems(ctx, analysis.ItemsReceived)
@@ -772,6 +875,33 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 
 	// Обрабатываем посещение новой локации
 	if analysis.LocationVisited != nil && analysis.LocationVisited.IsFirstVisit {
+		// Проверяем достижения по исследованию локаций
+		if uc.checkAchievementsUC != nil && uc.playerID > 0 {
+			achievementReq := CheckAchievementsRequest{
+				PlayerID:       uc.playerID,
+				RequirementKey: "locations_visited",
+				CurrentValue:   1, // Увеличиваем на 1 посещенную локацию
+			}
+
+			unlocked, err := uc.checkAchievementsUC.Execute(ctx, achievementReq)
+			if err != nil {
+				log.Printf("[DM Analyzer] Failed to check achievements after location visit: %v", err)
+			} else if len(unlocked) > 0 {
+				// Логируем и отправляем уведомления о разблокированных достижениях
+				for _, achievement := range unlocked {
+					log.Printf("[DM Analyzer] Achievement unlocked after location visit: %s (%s)",
+						achievement.Achievement.Code, achievement.Achievement.Title)
+
+					// Отправляем уведомление пользователю, если есть notification service
+					if uc.notificationService != nil {
+						if err := uc.notificationService.SendAchievementNotification(ctx, uc.chatID, achievement.Message); err != nil {
+							log.Printf("[DM Analyzer] Failed to send achievement notification: %v", err)
+						}
+					}
+				}
+			}
+		}
+
 		// Автоматически генерируем событие локации при первом посещении
 		if uc.generateLocationEventUC != nil && uc.sessionRepo != nil {
 			// Ищем локацию по имени в мире
@@ -842,6 +972,12 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 		return nil
 	}
 
+	// Проверяем лимит изображений за сессию
+	if uc.imagesGeneratedInSession >= uc.maxImagesPerSession {
+		log.Printf("[DM Analyzer] Session image limit reached (%d/%d), skipping item image generation", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		return nil
+	}
+
 	// Создаем контекст с таймаутом для генерации изображений (увеличено до 180 секунд для обработки rate limiting)
 	imgCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
@@ -876,7 +1012,9 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 			generatedImages = append(generatedImages, GeneratedImage{
 				Type:       "item",
 				ImagePath:  "", // Пустой путь означает текстовое описание
+				FileID:     "",
 				EntityName: item.Name,
+				Downloaded: false,
 			})
 			// Продолжаем генерацию для остальных предметов
 			continue
@@ -884,11 +1022,16 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 
 		log.Printf("Auto-generated image for item: %s (path: %s)", item.Name, resp.ImagePath)
 
+		// Увеличиваем счетчик изображений в сессии
+		uc.imagesGeneratedInSession++
+
 		// Добавляем путь к изображению в список
 		generatedImages = append(generatedImages, GeneratedImage{
 			Type:       "item",
 			ImagePath:  resp.ImagePath,
+			FileID:     resp.FileID,
 			EntityName: item.Name,
+			Downloaded: resp.Downloaded,
 		})
 	}
 
@@ -901,6 +1044,12 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 	location Location,
 ) *GeneratedImage {
 	if uc.imageGenerationService == nil || uc.userID == 0 {
+		return nil
+	}
+
+	// Проверяем лимит изображений за сессию
+	if uc.imagesGeneratedInSession >= uc.maxImagesPerSession {
+		log.Printf("[DM Analyzer] Session image limit reached (%d/%d), skipping location image generation", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
 		return nil
 	}
 
@@ -941,10 +1090,15 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 
 	log.Printf("Auto-generated image for location: %s (path: %s)", location.Name, resp.ImagePath)
 
+	// Увеличиваем счетчик изображений в сессии
+	uc.imagesGeneratedInSession++
+
 	return &GeneratedImage{
 		Type:       "location",
 		ImagePath:  resp.ImagePath,
+		FileID:     resp.FileID,
 		EntityName: location.Name,
+		Downloaded: resp.Downloaded,
 	}
 }
 
@@ -954,6 +1108,12 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 	npc NPC,
 ) *GeneratedImage {
 	if uc.imageGenerationService == nil || uc.userID == 0 {
+		return nil
+	}
+
+	// Проверяем лимит изображений за сессию
+	if uc.imagesGeneratedInSession >= uc.maxImagesPerSession {
+		log.Printf("[DM Analyzer] Session image limit reached (%d/%d), skipping NPC image generation", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
 		return nil
 	}
 
@@ -994,10 +1154,15 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 
 	log.Printf("Auto-generated image for NPC: %s (path: %s)", npc.Name, resp.ImagePath)
 
+	// Увеличиваем счетчик изображений в сессии
+	uc.imagesGeneratedInSession++
+
 	return &GeneratedImage{
 		Type:       "npc",
 		ImagePath:  resp.ImagePath,
+		FileID:     resp.FileID,
 		EntityName: npc.Name,
+		Downloaded: resp.Downloaded,
 	}
 }
 
@@ -1034,6 +1199,9 @@ func (uc *AnalyzeDMResponseUseCase) handleCombatStart(
 		CreatedAt:   time.Now(),
 	}
 	newCombat.Participants = append(newCombat.Participants, playerParticipant)
+
+	// TODO: Добавить активных компаньонов игрока в бой
+	// (нужен доступ к полной GameSession вместо SessionSnapshot)
 
 	// Добавляем врагов
 	for _, enemy := range enemies {
@@ -1353,7 +1521,14 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
 
 БОЙ И ВРАГИ (combat_detected):
 - Устанавливай combat_detected=true ТОЛЬКО если в ответе DM явно описан НАЧАВШИЙСЯ бой с врагами
-- Ключевые признаки боя: "нападает", "атакует", "бросается", "бьет", "стреляет", "заклинание", "удар", "рана", "ранение", "инициатива", "ход боя"
+- Ключевые признаки боя: "нападает", "атакует", "бросается", "бьет", "стреляет", "заклинание", "удар", "рана", "ранение", "инициатива", "ход боя", "инициатива", "ранение", "рана"
+- ДОПОЛНИТЕЛЬНЫЕ ПРИЗНАКИ БОЯ: "бросок атаки", "бросок на инициативу", "выстрел", "заклинание", "магия", "волшебство", "драка", "потасовка", "схватка", "побоище"
+- ПРИМЕРЫ, КОГДА combat_detected=true:
+  * "Внезапно на вас нападает орк с топором!"
+  * "Гоблин бросается на вас с кинжалом, инициатива!"
+  * "Вы получаете ранение от стрелы!"
+  * "Раздаётся боевой клич, начинается бой!"
+  * "Враг наносит удар мечом, бросайте спасбросок!"
 - НЕ устанавливай true если: только упоминание о потенциальной угрозе, планирование боя, воспоминания о прошлом бое
 - Если combat_detected=true, ОБЯЗАТЕЛЬНО укажи хотя бы одного врага в массиве enemies
 - Для каждого врага ОБЯЗАТЕЛЬНО укажи hp, ac и attack_bonus (только числа!)
@@ -1421,20 +1596,166 @@ func decodeStrictAnalysis(input string) (*DMResponseAnalysis, error) {
 func fallbackAnalysisFromResponse(dmResponse string) *DMResponseAnalysis {
 	analysis := &DMResponseAnalysis{}
 	if detectsCombatMarker(dmResponse) {
+		// Расширенный fallback анализ: пытаемся извлечь информацию о врагах из текста
+		enemies := extractEnemiesFromText(dmResponse)
+		if len(enemies) == 0 {
+			// Если не удалось извлечь врагов из текста, создаем базового врага
+			defaultHP := 15
+			defaultAC := 13
+			defaultAttackBonus := 3
+			enemies = []Enemy{
+				{
+					Name:        "Неизвестный противник",
+					HP:          &defaultHP,
+					AC:          &defaultAC,
+					AttackBonus: &defaultAttackBonus,
+				},
+			}
+		}
+		analysis.CombatDetected = true
+		analysis.Enemies = enemies
+	}
+	return analysis
+}
+
+// extractEnemiesFromText пытается извлечь информацию о врагах из текста DM ответа
+func extractEnemiesFromText(dmResponse string) []Enemy {
+	lower := strings.ToLower(dmResponse)
+	var enemies []Enemy
+
+	// Список известных врагов для поиска
+	enemyTypes := map[string]struct{ hp, ac, attackBonus int }{
+		"гоблин":     {hp: 10, ac: 15, attackBonus: 4},
+		"орк":        {hp: 20, ac: 13, attackBonus: 5},
+		"тролль":     {hp: 40, ac: 15, attackBonus: 7},
+		"дракон":     {hp: 80, ac: 18, attackBonus: 8},
+		"скелет":     {hp: 13, ac: 15, attackBonus: 4},
+		"зомби":      {hp: 22, ac: 12, attackBonus: 3},
+		"волк":       {hp: 11, ac: 13, attackBonus: 4},
+		"медведь":    {hp: 34, ac: 13, attackBonus: 6},
+		"паук":       {hp: 16, ac: 13, attackBonus: 4},
+		"призрак":    {hp: 25, ac: 13, attackBonus: 5},
+		"вампир":     {hp: 60, ac: 16, attackBonus: 7},
+		"ведьма":     {hp: 30, ac: 13, attackBonus: 5},
+		"маг":        {hp: 25, ac: 13, attackBonus: 5},
+		"воин":       {hp: 35, ac: 16, attackBonus: 5},
+		"рыцарь":     {hp: 45, ac: 18, attackBonus: 6},
+		"варвар":     {hp: 50, ac: 14, attackBonus: 6},
+		"лучник":     {hp: 25, ac: 14, attackBonus: 5},
+		"разбойник":  {hp: 28, ac: 14, attackBonus: 5},
+		"страж":      {hp: 30, ac: 16, attackBonus: 4},
+		"охранник":   {hp: 25, ac: 15, attackBonus: 4},
+	}
+
+	// Ищем упоминания врагов в тексте
+	for enemyName, stats := range enemyTypes {
+		if strings.Contains(lower, enemyName) {
+			hp := stats.hp
+			ac := stats.ac
+			attackBonus := stats.attackBonus
+
+			// Проверяем на множественное число или другие формы
+			count := countEnemyMentions(dmResponse, enemyName)
+			if count > 1 {
+				// Если упоминается несколько раз, создаем несколько экземпляров
+				for i := 0; i < count && i < 5; i++ { // Максимум 5 экземпляров одного типа
+					enemies = append(enemies, Enemy{
+						Name:        capitalizeFirst(enemyName),
+						HP:          &hp,
+						AC:          &ac,
+						AttackBonus: &attackBonus,
+					})
+				}
+			} else {
+				enemies = append(enemies, Enemy{
+					Name:        capitalizeFirst(enemyName),
+					HP:          &hp,
+					AC:          &ac,
+					AttackBonus: &attackBonus,
+				})
+			}
+		}
+	}
+
+	// Если не нашли известных врагов, но есть общие маркеры боя, создаем базового врага
+	if len(enemies) == 0 && detectsCombatMarker(dmResponse) {
 		defaultHP := 15
 		defaultAC := 13
 		defaultAttackBonus := 3
-		analysis.CombatDetected = true
-		analysis.Enemies = []Enemy{
-			{
-				Name:        "Неизвестный противник",
-				HP:          &defaultHP,
-				AC:          &defaultAC,
-				AttackBonus: &defaultAttackBonus,
-			},
+		enemies = append(enemies, Enemy{
+			Name:        "Неизвестный противник",
+			HP:          &defaultHP,
+			AC:          &defaultAC,
+			AttackBonus: &defaultAttackBonus,
+		})
+	}
+
+	return enemies
+}
+
+// countEnemyMentions подсчитывает количество упоминаний врага в тексте
+func countEnemyMentions(text, enemyName string) int {
+	lower := strings.ToLower(text)
+	enemyLower := strings.ToLower(enemyName)
+	count := strings.Count(lower, enemyLower)
+
+	// Проверяем множественное число для некоторых врагов
+	switch enemyLower {
+	case "гоблин":
+		count += strings.Count(lower, "гоблины")
+		count += strings.Count(lower, "гоблина")
+	case "орк":
+		count += strings.Count(lower, "орки")
+		count += strings.Count(lower, "орка")
+	case "скелет":
+		count += strings.Count(lower, "скелеты")
+		count += strings.Count(lower, "скелетов")
+	case "зомби":
+		count += strings.Count(lower, "зомби")
+	case "волк":
+		count += strings.Count(lower, "волки")
+		count += strings.Count(lower, "волков")
+	}
+
+	return count
+}
+
+// capitalizeFirst делает первую букву заглавной
+func capitalizeFirst(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// validateAnalysisPromptStructure проверяет структуру промпта перед отправкой в LLM
+func validateAnalysisPromptStructure(prompt string) error {
+	requiredElements := []string{
+		"combat_detected",
+		"enemies",
+		"quest_completed",
+		"quest_failed",
+		"quest_title",
+		"experience_gained",
+		"experience_reason",
+		"items_received",
+		"location_visited",
+		"npc_met",
+		"generated_images",
+	}
+
+	for _, element := range requiredElements {
+		if !strings.Contains(prompt, element) {
+			return fmt.Errorf("missing required element in prompt: %s", element)
 		}
 	}
-	return analysis
+
+	// Проверяем, что промпт содержит пример правильного ответа
+	if !strings.Contains(prompt, `"combat_detected":false`) {
+		return fmt.Errorf("prompt missing example JSON structure")
+	}
+
+	return nil
 }
 
 func detectsCombatMarker(dmResponse string) bool {
@@ -1442,6 +1763,7 @@ func detectsCombatMarker(dmResponse string) bool {
 	markers := []string{
 		"бой", "сражен", "битва", "атака", "атакует", "нападает",
 		"враг", "противник", "монстр", "инициатив", "удар",
+		"ранение", "рана", "инициатива",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
@@ -1538,6 +1860,101 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 		return "{}"
 	}
 
+	// Пробуем jsonrepair.Repair
+	repaired := jsonrepair.Repair(jsonStr)
+	if json.Valid([]byte(repaired)) {
+		log.Printf("[DM Analyzer] jsonrepair.Repair succeeded")
+		return repaired
+	}
+
+	// Если jsonrepair не справился, применяем базовую логику
+	jsonStr = repaired
+
+	// Базовая логика закрытия незавершенных структур
+	if !strings.HasPrefix(jsonStr, "{") {
+		firstBrace := strings.Index(jsonStr, "{")
+		if firstBrace > 0 {
+			jsonStr = jsonStr[firstBrace:]
+		} else {
+			return "{}"
+		}
+	}
+
+	openBraces := 0
+	openBrackets := 0
+	inString := false
+	escapeNext := false
+
+	for i := 0; i < len(jsonStr); i++ {
+		char := jsonStr[i]
+
+		if escapeNext {
+			escapeNext = false
+			continue
+		}
+
+		if char == '\\' {
+			escapeNext = true
+			continue
+		}
+
+		if char == '"' && !escapeNext {
+			inString = !inString
+			continue
+		}
+
+		if inString {
+			continue
+		}
+
+		switch char {
+		case '{':
+			openBraces++
+		case '}':
+			openBraces--
+			if openBraces < 0 {
+				jsonStr = jsonStr[:i]
+				break
+			}
+		case '[':
+			openBrackets++
+		case ']':
+			openBrackets--
+			if openBrackets < 0 {
+				jsonStr = jsonStr[:i]
+				break
+			}
+		}
+	}
+
+	result := strings.TrimRight(jsonStr, " \n\r\t,")
+
+	// Закрываем незакрытые строки
+	if inString {
+		result += "\""
+	}
+
+	// Закрываем незакрытые массивы и объекты
+	if openBraces > 0 || openBrackets > 0 {
+		result = strings.TrimSuffix(result, ",")
+		for i := 0; i < openBrackets; i++ {
+			result += "]"
+		}
+		for i := 0; i < openBraces; i++ {
+			result += "}"
+		}
+	}
+
+	return result
+}
+
+// tryRepairTruncatedJSONForDMAnalysis пытается восстановить обрезанный JSON для DM анализа
+func tryRepairTruncatedJSONForDMAnalysis(jsonStr string, isDMAnalysis bool) string {
+	jsonStr = strings.TrimSpace(jsonStr)
+	if jsonStr == "" {
+		return "{}"
+	}
+
 
 	repaired := jsonrepair.Repair(jsonStr)
 	if json.Valid([]byte(repaired)) {
@@ -1546,30 +1963,58 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 	}
 	jsonStr = repaired
 
-	// Специальная логика для распространенных случаев усечения
-	// Если JSON обрывается в середине поля, пытаемся завершить его правильно
-	if strings.Contains(jsonStr, `"npc_met":`) && !strings.Contains(jsonStr, `"generated_images"`) {
-		log.Printf("[DM Analyzer] Detected truncation at npc_met field")
-		// JSON обрывается на npc_met, добавляем завершение
-		if strings.HasSuffix(jsonStr, `"npc_met":`) {
-			jsonStr += `null,"generated_images":[]}`
-		} else if strings.HasSuffix(jsonStr, `"npc_met":n`) {
+	// Специальная логика для распространенных случаев усечения (только для DM анализа)
+	if isDMAnalysis {
+		// Проверяем на усечение в середине значений
+		if strings.HasSuffix(jsonStr, `"npc_met":n`) {
+			log.Printf("[DM Analyzer] Detected truncation at 'npc_met':n, completing to null")
 			jsonStr += `ull,"generated_images":[]}`
-		} else if strings.HasSuffix(jsonStr, `"npc_met":{`) {
-			jsonStr += `"name":"","description":"","is_first_meeting":false},"generated_images":[]}`
-		}
-	} else if strings.Contains(jsonStr, `"location_visited":`) && !strings.Contains(jsonStr, `"npc_met"`) {
-		// JSON обрывается на location_visited
-		if strings.HasSuffix(jsonStr, `"location_visited":`) {
-			jsonStr += `null,"npc_met":null,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"npc_met":nu`) {
+			jsonStr += `ll,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"npc_met":nul`) {
+			jsonStr += `l,"generated_images":[]}`
 		} else if strings.HasSuffix(jsonStr, `"location_visited":n`) {
+			log.Printf("[DM Analyzer] Detected truncation at 'location_visited':n, completing to null")
 			jsonStr += `ull,"npc_met":null,"generated_images":[]}`
-		} else if strings.HasSuffix(jsonStr, `"location_visited":{`) {
-			jsonStr += `"name":"","description":"","is_first_visit":false},"npc_met":null,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"location_visited":nu`) {
+			jsonStr += `ll,"npc_met":null,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"location_visited":nul`) {
+			jsonStr += `l,"npc_met":null,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"combat_detected":f`) {
+			log.Printf("[DM Analyzer] Detected truncation at 'combat_detected':f, completing to false")
+			jsonStr += `alse,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"combat_detected":t`) {
+			log.Printf("[DM Analyzer] Detected truncation at 'combat_detected':t, completing to true")
+			jsonStr += `rue,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+		} else if strings.Contains(jsonStr, `"enemies":[`) && !strings.Contains(jsonStr, `"quest_completed"`) {
+			// JSON обрывается в массиве врагов
+			if strings.HasSuffix(jsonStr, `"enemies":[`) {
+				log.Printf("[DM Analyzer] Detected truncation at enemies array start")
+				jsonStr += `],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"enemies":[`) && strings.HasSuffix(jsonStr, `{"name":`) {
+				// Обрывается в начале объекта врага
+				log.Printf("[DM Analyzer] Detected truncation in enemy object")
+				jsonStr += `"Unknown","hp":15,"ac":13,"attack_bonus":3}],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			}
+		} else if strings.Contains(jsonStr, `"npc_met":`) && !strings.Contains(jsonStr, `"generated_images"`) {
+			log.Printf("[DM Analyzer] Detected truncation at npc_met field")
+			// JSON обрывается на npc_met, добавляем завершение
+			if strings.HasSuffix(jsonStr, `"npc_met":`) {
+				jsonStr += `null,"generated_images":[]}`
+			} else if strings.HasSuffix(jsonStr, `"npc_met":{`) {
+				jsonStr += `"name":"","description":"","is_first_meeting":false},"generated_images":[]}`
+			}
+		} else if strings.Contains(jsonStr, `"location_visited":`) && !strings.Contains(jsonStr, `"npc_met"`) {
+			// JSON обрывается на location_visited
+			if strings.HasSuffix(jsonStr, `"location_visited":`) {
+				jsonStr += `null,"npc_met":null,"generated_images":[]}`
+			} else if strings.HasSuffix(jsonStr, `"location_visited":{`) {
+				jsonStr += `"name":"","description":"","is_first_visit":false},"npc_met":null,"generated_images":[]}`
+			}
+		} else if !strings.Contains(jsonStr, `"generated_images"`) {
+			// JSON не содержит generated_images, добавляем завершение
+			jsonStr += `,"generated_images":[]}`
 		}
-	} else if !strings.Contains(jsonStr, `"generated_images"`) {
-		// JSON не содержит generated_images, добавляем завершение
-		jsonStr += `,"generated_images":[]}`
 	}
 
 	// Проверяем валидность после ручного восстановления
@@ -1710,7 +2155,7 @@ func validateDMResponseInput(dmResponse string) error {
 func tryRepairDMResponseJSON(jsonStr string) string {
 	jsonStr = strings.TrimSpace(jsonStr)
 
-	// Проверяем на незавершенные ключи и значения, характерные для DMResponseAnalysis
+	// Расширенные правила восстановления для обрезанных значений
 	repairRules := map[string]string{
 		`"combat_detected":`:          `"combat_detected":false`,
 		`"enemies":`:                  `"enemies":[]`,
@@ -1725,6 +2170,86 @@ func tryRepairDMResponseJSON(jsonStr string) string {
 		`"generated_images":`:         `"generated_images":[]`,
 	}
 
+	// Специальные правила для восстановления обрезанных значений (типа "npc_met":n → "npc_met":null)
+	truncationPatterns := map[string]map[string]string{
+		`"npc_met":`: {
+			"n":    "null",      // "npc_met":n → "npc_met":null
+			"nu":   "null",      // "npc_met":nu → "npc_met":null
+			"nul":  "null",      // "npc_met":nul → "npc_met":null
+			"{":    `{"name":"","description":"","is_first_meeting":false}`, // "npc_met":{ → "npc_met":{...}
+			`{"n`:  `{"name":"","description":"","is_first_meeting":false}`, // "npc_met":{"n → "npc_met":{...}
+		},
+		`"location_visited":`: {
+			"n":    "null",      // "location_visited":n → "location_visited":null
+			"nu":   "null",      // "location_visited":nu → "location_visited":null
+			"nul":  "null",      // "location_visited":nul → "location_visited":null
+			"{":    `{"name":"","description":"","is_first_visit":false}`, // "location_visited":{ → "location_visited":{...}
+			`{"n`:  `{"name":"","description":"","is_first_visit":false}`, // "location_visited":{"n → "location_visited":{...}
+		},
+		`"combat_detected":`: {
+			"f":    "false",     // "combat_detected":f → "combat_detected":false
+			"fa":   "false",     // "combat_detected":fa → "combat_detected":false
+			"fal":  "false",     // "combat_detected":fal → "combat_detected":false
+			"fals": "false",     // "combat_detected":fals → "combat_detected":false
+			"t":    "true",      // "combat_detected":t → "combat_detected":true
+			"tr":   "true",      // "combat_detected":tr → "combat_detected":true
+			"tru":  "true",      // "combat_detected":tru → "combat_detected":true
+		},
+		`"quest_completed":`: {
+			"f":    "false",
+			"fa":   "false",
+			"fal":  "false",
+			"fals": "false",
+			"t":    "true",
+			"tr":   "true",
+			"tru":  "true",
+		},
+		`"quest_failed":`: {
+			"f":    "false",
+			"fa":   "false",
+			"fal":  "false",
+			"fals": "false",
+			"t":    "true",
+			"tr":   "true",
+			"tru":  "true",
+		},
+		`"experience_gained":`: {
+			"0": "0",           // "experience_gained":0 → "experience_gained":0
+			"1": "10",          // "experience_gained":1 → "experience_gained":10 (предполагаем продолжение)
+			"2": "20",
+			"3": "30",
+			"4": "40",
+			"5": "50",
+		},
+		`"quest_title":`: {
+			`"`:    `""`,       // "quest_title":" → "quest_title":""
+			`""`:   `""`,       // "quest_title":"" → "quest_title":""
+		},
+		`"experience_reason":`: {
+			`"`:    `""`,       // "experience_reason":" → "experience_reason":""
+			`""`:   `""`,       // "experience_reason":"" → "experience_reason":""
+		},
+	}
+
+	// Сначала проверяем специальные паттерны усечения
+	for key, patterns := range truncationPatterns {
+		if strings.Contains(jsonStr, key) {
+			keyPos := strings.LastIndex(jsonStr, key)
+			if keyPos >= 0 {
+				afterKey := jsonStr[keyPos+len(key):]
+				afterKey = strings.TrimSpace(afterKey)
+
+				for prefix, completion := range patterns {
+					if strings.HasPrefix(afterKey, prefix) && !strings.Contains(afterKey, completion) {
+						beforeValue := jsonStr[:keyPos+len(key)]
+						log.Printf("[DM Analyzer] Detected truncated value for '%s', prefix '%s', completing with '%s'", key, prefix, completion)
+						return beforeValue + completion + "}"
+					}
+				}
+			}
+		}
+	}
+
 	// Проверяем каждый ключ на незавершенность
 	for partialKey, fullReplacement := range repairRules {
 		if strings.HasSuffix(jsonStr, partialKey) {
@@ -1732,48 +2257,57 @@ func tryRepairDMResponseJSON(jsonStr string) string {
 			return jsonStr + fullReplacement + "}"
 		}
 
-		// Проверяем на незавершенные значения (например, "combat_detected":fal или "experience_gained":)
+		// Проверяем на незавершенные значения
 		if strings.Contains(jsonStr, partialKey) {
-			// Ищем позицию ключа
 			keyPos := strings.LastIndex(jsonStr, partialKey)
 			if keyPos >= 0 {
-				// Берем часть после ключа
 				afterKey := jsonStr[keyPos+len(partialKey):]
 				afterKey = strings.TrimSpace(afterKey)
 
 				// Проверяем на незавершенные значения
 				if afterKey == "" {
-					// Ключ без значения, добавляем полное значение
 					beforeKey := jsonStr[:keyPos+len(partialKey)]
 					log.Printf("[DM Analyzer] Key '%s' has no value, completing with default", partialKey)
 					return beforeKey + fullReplacement + "}"
 				}
 
 				// Проверяем на незавершенные булевы значения
-				if partialKey == `"combat_detected":` && strings.HasPrefix(afterKey, "fal") {
-					beforeValue := jsonStr[:keyPos+len(partialKey)]
-					log.Printf("[DM Analyzer] Boolean value 'fal' incomplete, completing to 'false'")
-					return beforeValue + "false}"
-				}
-				if partialKey == `"combat_detected":` && strings.HasPrefix(afterKey, "tru") {
-					beforeValue := jsonStr[:keyPos+len(partialKey)]
-					log.Printf("[DM Analyzer] Boolean value 'tru' incomplete, completing to 'true'")
-					return beforeValue + "true}"
+				if (partialKey == `"combat_detected":` || partialKey == `"quest_completed":` || partialKey == `"quest_failed":`) {
+					if strings.HasPrefix(afterKey, "fal") && !strings.Contains(afterKey, "false") {
+						beforeValue := jsonStr[:keyPos+len(partialKey)]
+						log.Printf("[DM Analyzer] Boolean value incomplete, completing to 'false'")
+						return beforeValue + "false}"
+					}
+					if strings.HasPrefix(afterKey, "tru") && !strings.Contains(afterKey, "true") {
+						beforeValue := jsonStr[:keyPos+len(partialKey)]
+						log.Printf("[DM Analyzer] Boolean value incomplete, completing to 'true'")
+						return beforeValue + "true}"
+					}
 				}
 
 				// Проверяем на незавершенные числовые значения
-				if partialKey == `"experience_gained":` && (afterKey == "" || strings.HasPrefix(afterKey, "0") && len(afterKey) < 2) {
+				if partialKey == `"experience_gained":` && afterKey != "" && !strings.Contains(afterKey, ",") {
 					beforeValue := jsonStr[:keyPos+len(partialKey)]
-					log.Printf("[DM Analyzer] Numeric value incomplete, completing to '0'")
-					return beforeValue + "0}"
+					// Пытаемся завершить число
+					if strings.HasPrefix(afterKey, "0") && len(afterKey) < 5 {
+						log.Printf("[DM Analyzer] Numeric value incomplete, completing")
+						return beforeValue + "0}"
+					}
+					// Для других цифр пытаемся угадать завершение
+					if len(afterKey) == 1 && (afterKey[0] >= '0' && afterKey[0] <= '9') {
+						completion := string(afterKey[0]) + "0"
+						log.Printf("[DM Analyzer] Numeric value incomplete, completing to '%s'", completion)
+						return beforeValue + completion + "}"
+					}
 				}
 
 				// Проверяем на незавершенные строковые значения
-				if (partialKey == `"quest_title":` || partialKey == `"experience_reason":`) &&
-					(strings.HasPrefix(afterKey, `"`) && !strings.Contains(afterKey, `"`)) {
-					beforeValue := jsonStr[:keyPos+len(partialKey)]
-					log.Printf("[DM Analyzer] String value incomplete, completing with empty string")
-					return beforeValue + `""}`
+				if (partialKey == `"quest_title":` || partialKey == `"experience_reason":`) {
+					if strings.HasPrefix(afterKey, `"`) && !strings.Contains(afterKey, `",`) && !strings.HasSuffix(afterKey, `"}`) {
+						beforeValue := jsonStr[:keyPos+len(partialKey)]
+						log.Printf("[DM Analyzer] String value incomplete, completing with empty string")
+						return beforeValue + `""}`
+					}
 				}
 			}
 		}

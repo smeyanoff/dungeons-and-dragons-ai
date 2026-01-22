@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,30 +30,21 @@ type GenerateImageResponse struct {
 }
 
 // ExtractImageID извлекает file_id изображения из ответа модели
-// Ответ может содержать <img src="file_id" fuse="true"/> или просто file_id
+// Ответ содержит <img src="file_id" fuse="true"/>
 func ExtractImageID(content string) (string, error) {
 	log.Printf("[GigaChat] Extracting image ID from content: %s", content)
 
-	// Сначала пробуем найти в HTML теге <img>
+	// Регулярное выражение для поиска file_id в теге <img>
 	re := regexp.MustCompile(`<img\s+src="([^"]+)"`)
 	matches := re.FindStringSubmatch(content)
-	if len(matches) >= 2 {
-		fileID := matches[1]
-		log.Printf("[GigaChat] Successfully extracted image ID from HTML: %s", fileID)
-		return fileID, nil
+	if len(matches) < 2 {
+		log.Printf("[GigaChat] No image ID matches found in content")
+		return "", fmt.Errorf("no image ID found in content: %s", content)
 	}
 
-	// Если не нашли в HTML, ищем UUID паттерн напрямую
-	uuidPattern := regexp.MustCompile(`[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}`)
-	matches = uuidPattern.FindStringSubmatch(content)
-	if len(matches) > 0 {
-		fileID := matches[0]
-		log.Printf("[GigaChat] Successfully extracted image ID as raw UUID: %s", fileID)
-		return fileID, nil
-	}
-
-	log.Printf("[GigaChat] No image ID found in content")
-	return "", fmt.Errorf("no image ID found in content: %s", content)
+	fileID := matches[1]
+	log.Printf("[GigaChat] Successfully extracted image ID: %s", fileID)
+	return fileID, nil
 }
 
 // TestExtractImageID тестирует извлечение image ID из различных форматов ответов
@@ -135,6 +125,32 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 		Stream:       &stream,
 	}
 
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	// Создаем сообщения для генерации изображения
+	messages := []Message{
+		{
+			Role:    "system",
+			Content: systemPrompt,
+		},
+		{
+			Role:    "user",
+			Content: userPrompt,
+		},
+	}
+
+	// Пока отключаем stream для изображений, так как GigaChat может не поддерживать его для function calls
+	stream := false
+	reqBody := GenerateImageRequest{
+		Model:        model,
+		Messages:     messages,
+		FunctionCall: "auto", // Активируем text2image функцию
+		Stream:       &stream,
+	}
+
 	reqBodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
@@ -144,8 +160,8 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 
 	url := fmt.Sprintf("%s/chat/completions", c.cfg.APIBaseURL)
 
-	// Используем doRequestWithClient с imageClient для автоматического retry при 429 ошибках
-	resp, err := c.doRequestWithClient(ctx, c.imageClient, http.MethodPost, url, reqBodyBytes)
+	// Используем doRequest для автоматического retry при 429 ошибках
+	resp, err := c.doRequest(ctx, http.MethodPost, url, reqBodyBytes)
 	if err != nil {
 		return "", err
 	}
@@ -191,21 +207,10 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 
 	fileID, err := ExtractImageID(content)
 	if err != nil {
-		// Если не удалось извлечь из HTML, попробуем найти UUID напрямую в тексте
-		log.Printf("[GigaChat] Failed to extract from HTML, trying direct UUID extraction: %v", err)
-
-		// Ищем UUID паттерн в тексте
-		uuidPattern := regexp.MustCompile(`[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}`)
-		matches := uuidPattern.FindStringSubmatch(content)
-		if len(matches) > 0 {
-			fileID = matches[0]
-			log.Printf("[GigaChat] Extracted file ID directly from text: %s", fileID)
-		} else {
-			return "", fmt.Errorf("failed to extract image ID: %w", err)
-		}
+		return "", fmt.Errorf("failed to extract image ID: %w", err)
 	}
 
-	log.Printf("[GigaChat] Final file ID: %s", fileID)
+	log.Printf("[GigaChat] Extracted file ID: %s", fileID)
 	return fileID, nil
 }
 
@@ -335,9 +340,9 @@ func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, erro
 
 		log.Printf("[GigaChat] Download attempt %d/%d for fileID: %s", attempt+1, maxRetries, fileID)
 
-		// Используем doRequestWithClient с imageClient для автоматического retry
-		// doRequestWithClient сам добавит X-Client-ID для image-related запросов
-		resp, err := c.doRequestWithClient(ctx, c.imageClient, http.MethodGet, url, nil)
+		// Используем doRequest для автоматического retry при 429 ошибках
+		// doRequest сам добавит X-Client-ID для image-related запросов
+		resp, err := c.doRequest(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			log.Printf("[GigaChat] Download attempt %d failed with network error: %v", attempt+1, err)
 			if attempt < maxRetries-1 {
@@ -358,9 +363,8 @@ func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, erro
 		defer resp.Body.Close()
 
 		// Логируем заголовки ответа
-		contentLength := resp.Header.Get("Content-Length")
 		log.Printf("[GigaChat] Download response headers: Content-Length=%s, Content-Type=%s",
-			contentLength, resp.Header.Get("Content-Type"))
+			resp.Header.Get("Content-Length"), resp.Header.Get("Content-Type"))
 
 		if resp.StatusCode >= 400 {
 			data, _ := io.ReadAll(resp.Body)
@@ -376,32 +380,9 @@ func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, erro
 		default:
 		}
 
-		// Читаем данные полностью
 		imageData, err := io.ReadAll(resp.Body)
 		if err != nil {
-			log.Printf("[GigaChat] Failed to read image data after %d bytes: %v", len(imageData), err)
-
-			// Проверяем, является ли это частичным чтением из-за отмены контекста
-			if err == context.Canceled || err == context.DeadlineExceeded {
-				log.Printf("[GigaChat] Context canceled during download, read %d bytes", len(imageData))
-
-				// Если Content-Length указан и мы прочитали меньше - это действительно partial
-				if contentLength != "" {
-					if expectedLen, parseErr := strconv.Atoi(contentLength); parseErr == nil && len(imageData) < expectedLen {
-						log.Printf("[GigaChat] Partial download: got %d bytes, expected %d bytes", len(imageData), expectedLen)
-						return nil, fmt.Errorf("partial image download: got %d/%d bytes", len(imageData), expectedLen)
-					}
-				}
-
-				// Если Content-Length не указан, пробуем проверить, является ли это валидным JPEG
-				if len(imageData) > 0 && isValidJPEGHeader(imageData) {
-					log.Printf("[GigaChat] Context canceled but data appears to be valid JPEG, returning partial result")
-					return imageData, nil
-				}
-
-				return nil, fmt.Errorf("download interrupted and data appears incomplete")
-			}
-
+			log.Printf("[GigaChat] Failed to read image data, got %d bytes before error: %v", len(imageData), err)
 			return nil, fmt.Errorf("failed to read image data: %w", err)
 		}
 
@@ -410,13 +391,4 @@ func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, erro
 	}
 
 	return nil, fmt.Errorf("failed to download image after %d attempts", maxRetries)
-}
-
-// isValidJPEGHeader проверяет, начинается ли данные с валидного JPEG заголовка
-func isValidJPEGHeader(data []byte) bool {
-	if len(data) < 4 {
-		return false
-	}
-	// JPEG файлы начинаются с FF D8 FF
-	return data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF
 }

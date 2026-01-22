@@ -32,14 +32,16 @@ type PerformAbilityCheckUseCase struct {
 }
 
 type PerformAbilityCheckResult struct {
-	Message       string
-	Ability       string
-	DC            int
-	BaseRoll      int
-	Modifier      int
-	Total         int
-	Success       bool
-	CharacterName string
+	Message         string
+	Ability         string
+	DC              int    // Адаптивный DC
+	BaseDC          int    // Базовый DC
+	DifficultyDesc  string // Описание сложности
+	BaseRoll        int
+	Modifier        int
+	Total           int
+	Success         bool
+	CharacterName   string
 }
 
 func NewPerformAbilityCheckUseCase(
@@ -85,7 +87,10 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 	}
 
 	ability := gs.PendingAbilityCheckAbility
-	dc := gs.PendingAbilityCheckDC
+	baseDC := gs.PendingAbilityCheckDC
+
+	// Применяем адаптивную сложность
+	dc := gs.GetAdaptiveDC(baseDC)
 
 	abilityName, abilityValue := resolveAbility(player.Character.Stats, ability)
 	modifier := dice.CalculateModifier(abilityValue)
@@ -107,13 +112,17 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 	}
 	success := total >= dc
 
+	// Записываем результат в статистику адаптивной сложности
+	gs.RecordAbilityCheckResult(success)
+
 	outcome := "Провал"
 	if success {
 		outcome = "Успех"
 	}
 
-	message := fmt.Sprintf("🎲 Проверка %s (DC %d): d20=%d %+d = %d. %s.",
-		abilityName, dc, baseRoll, modifier, total, outcome)
+	difficultyDesc := gs.GetDifficultyDescription()
+	message := fmt.Sprintf("🎲 Проверка %s (DC %d, сложность: %s): d20=%d %+d = %d. %s.",
+		abilityName, dc, difficultyDesc, baseRoll, modifier, total, outcome)
 
 	// Сохраняем событие и индексируем в RAG
 	eventItem := &event.StoryEvent{
@@ -152,14 +161,16 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 	}
 
 	return &PerformAbilityCheckResult{
-		Message:       message,
-		Ability:       ability,
-		DC:            dc,
-		BaseRoll:      baseRoll,
-		Modifier:      modifier,
-		Total:         total,
-		Success:       success,
-		CharacterName: player.Character.Name,
+		Message:        message,
+		Ability:        ability,
+		DC:             dc,
+		BaseDC:         baseDC,
+		DifficultyDesc: difficultyDesc,
+		BaseRoll:       baseRoll,
+		Modifier:       modifier,
+		Total:          total,
+		Success:        success,
+		CharacterName:  player.Character.Name,
 	}, nil
 }
 

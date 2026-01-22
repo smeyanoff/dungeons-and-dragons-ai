@@ -34,13 +34,39 @@ const (
 	WorldEventStatusCancelled WorldEventStatus = "cancelled" // Отменено
 )
 
+// LocationEventBranch представляет ветку развития события
+type LocationEventBranch struct {
+	ID             string `json:"id"`                       // Уникальный ID ветки
+	Name           string `json:"name"`                     // Название ветки
+	Description    string `json:"description"`              // Описание ветки
+	RequiredAction string `json:"required_action"`          // Необходимое действие игрока
+	SuccessRate    int    `json:"success_rate"`             // Шанс успеха (0-100)
+	Consequences   string `json:"consequences"`             // Последствия выбора этой ветки
+	Reward         string `json:"reward,omitempty"`         // Возможная награда
+}
+
+// LocationEventOutcome представляет исход события
+type LocationEventOutcome struct {
+	BranchID     string `json:"branch_id"`      // ID выбранной ветки
+	Success      bool   `json:"success"`        // Успех или провал
+	Description  string `json:"description"`    // Описание исхода
+	Consequences string `json:"consequences"`  // Последствия
+	Reward       string `json:"reward,omitempty"` // Награда
+}
+
 // LocationEventMetadata описывает структурированную полезную нагрузку событий локации.
 type LocationEventMetadata struct {
-	Hook            string   `json:"hook"`
-	Options         []string `json:"options,omitempty"`
-	SuggestedChecks []string `json:"suggested_checks,omitempty"`
-	Stakes          string   `json:"stakes,omitempty"`
-	Status          string   `json:"status,omitempty"`
+	Hook            string                 `json:"hook"`
+	Options         []string               `json:"options,omitempty"`
+	SuggestedChecks []string               `json:"suggested_checks,omitempty"`
+	Stakes          string                 `json:"stakes,omitempty"`
+	Status          string                 `json:"status,omitempty"`
+
+	// Новые поля для вариативности
+	Branches       []LocationEventBranch `json:"branches,omitempty"`       // Возможные ветки развития
+	CurrentBranch  *string               `json:"current_branch,omitempty"` // Выбранная ветка
+	Outcome        *LocationEventOutcome `json:"outcome,omitempty"`        // Исход события
+	EventType      string                `json:"event_type"`               // Тип события для генерации веток
 }
 
 // WorldEvent представляет динамическое событие в игровом мире

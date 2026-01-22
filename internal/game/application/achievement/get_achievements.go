@@ -8,16 +8,15 @@ import (
 
 	"dungeons-and-dragons-ai/internal/game/domain/achievement"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 )
 
 type GetAchievementsUseCase struct {
-	achievementRepo *persistence.AchievementRepository
+	achievementRepo AchievementRepository
 	sessionRepo     session.Repository
 }
 
 func NewGetAchievementsUseCase(
-	achievementRepo *persistence.AchievementRepository,
+	achievementRepo AchievementRepository,
 	sessionRepo session.Repository,
 ) *GetAchievementsUseCase {
 	return &GetAchievementsUseCase{

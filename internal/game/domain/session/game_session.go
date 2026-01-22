@@ -10,6 +10,24 @@ import (
 	"gorm.io/gorm"
 )
 
+// Companion представляет NPC компаньона в отряде игрока
+type Companion struct {
+	ID          uint   `gorm:"primaryKey"`
+	GameSessionID uint `gorm:"index"`
+	Name        string
+	Description string
+	Class       string
+	Level       int
+	HP          int
+	MaxHP       int
+	AC          int
+	AttackBonus int
+	DamageDice  string
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type State string
 
 const (
@@ -41,7 +59,14 @@ type GameSession struct {
 	PendingAbilityCheckRequestedAt *time.Time
 	PendingAbilityCheckNotified    bool
 
-	Players []player.Player `gorm:"foreignKey:GameSessionID"`
+	// Adaptive difficulty statistics (адаптивная сложность)
+	SessionSuccessCount   int `gorm:"default:0"` // Количество успешных проверок в сессии
+	SessionFailureCount   int `gorm:"default:0"` // Количество провальных проверок в сессии
+	SessionChecksCount    int `gorm:"default:0"` // Общее количество проверок в сессии
+	SessionDifficultyMod  int `gorm:"default:0"` // Модификатор сложности для сессии (-2 до +2)
+
+	Players    []player.Player `gorm:"foreignKey:GameSessionID"`
+	Companions []Companion     `gorm:"foreignKey:GameSessionID"` // NPC компаньоны игрока
 }
 
 func (s *GameSession) IsActive() bool {
@@ -74,6 +99,32 @@ func (s *GameSession) GetFirstPlayer() *player.Player {
 	return &s.Players[0]
 }
 
+// AddCompanion добавляет компаньона в отряд
+func (s *GameSession) AddCompanion(companion *Companion) {
+	s.Companions = append(s.Companions, *companion)
+}
+
+// RemoveCompanion удаляет компаньона из отряда по ID
+func (s *GameSession) RemoveCompanion(companionID uint) bool {
+	for i, companion := range s.Companions {
+		if companion.ID == companionID {
+			s.Companions = append(s.Companions[:i], s.Companions[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// GetCompanionByID находит компаньона по ID
+func (s *GameSession) GetCompanionByID(companionID uint) *Companion {
+	for i := range s.Companions {
+		if s.Companions[i].ID == companionID {
+			return &s.Companions[i]
+		}
+	}
+	return nil
+}
+
 func (s *GameSession) HasPendingAbilityCheck() bool {
 	return s.PendingAbilityCheckID != "" && s.PendingAbilityCheckAbility != "" && s.PendingAbilityCheckDC > 0
 }
@@ -93,6 +144,84 @@ func (s *GameSession) ClearPendingAbilityCheck() {
 	s.PendingAbilityCheckDC = 0
 	s.PendingAbilityCheckRequestedAt = nil
 	s.PendingAbilityCheckNotified = false
+}
+
+// RecordAbilityCheckResult записывает результат проверки навыка для адаптивной сложности
+func (s *GameSession) RecordAbilityCheckResult(success bool) {
+	s.SessionChecksCount++
+	if success {
+		s.SessionSuccessCount++
+	} else {
+		s.SessionFailureCount++
+	}
+	s.updateDifficultyModifier()
+}
+
+// updateDifficultyModifier обновляет модификатор сложности на основе статистики сессии
+func (s *GameSession) updateDifficultyModifier() {
+	if s.SessionChecksCount < 3 {
+		// Недостаточно данных для адаптации
+		s.SessionDifficultyMod = 0
+		return
+	}
+
+	successRate := float64(s.SessionSuccessCount) / float64(s.SessionChecksCount)
+
+	// Адаптивная логика:
+	// - Если успехов > 80%, делаем сложнее (+1)
+	// - Если успехов > 90%, делаем еще сложнее (+2)
+	// - Если успехов < 30%, делаем легче (-1)
+	// - Если успехов < 15%, делаем еще легче (-2)
+	// - Иначе оставляем без изменений (0)
+
+	if successRate > 0.9 {
+		s.SessionDifficultyMod = 2
+	} else if successRate > 0.8 {
+		s.SessionDifficultyMod = 1
+	} else if successRate < 0.15 {
+		s.SessionDifficultyMod = -2
+	} else if successRate < 0.3 {
+		s.SessionDifficultyMod = -1
+	} else {
+		s.SessionDifficultyMod = 0
+	}
+}
+
+// GetAdaptiveDC возвращает DC с учетом адаптивной сложности
+func (s *GameSession) GetAdaptiveDC(baseDC int) int {
+	adaptiveDC := baseDC + s.SessionDifficultyMod
+
+	// Ограничиваем DC в разумных пределах (8-20 для типичных проверок)
+	if adaptiveDC < 8 {
+		adaptiveDC = 8
+	}
+	if adaptiveDC > 20 {
+		adaptiveDC = 20
+	}
+
+	return adaptiveDC
+}
+
+// GetDifficultyDescription возвращает текстовое описание текущей сложности
+func (s *GameSession) GetDifficultyDescription() string {
+	if s.SessionChecksCount < 3 {
+		return "адаптация в процессе"
+	}
+
+	switch s.SessionDifficultyMod {
+	case -2:
+		return "очень легко"
+	case -1:
+		return "легко"
+	case 0:
+		return "нормально"
+	case 1:
+		return "сложно"
+	case 2:
+		return "очень сложно"
+	default:
+		return "нормально"
+	}
 }
 
 type Repository interface {

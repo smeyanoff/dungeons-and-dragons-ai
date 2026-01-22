@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"regexp"
 	"sort"
@@ -38,6 +39,12 @@ import (
 
 	"github.com/google/uuid"
 )
+
+var rng *rand.Rand
+
+func init() {
+	rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+}
 
 type HandleActionUseCase struct {
 	llm                     domain.LLM
@@ -147,10 +154,10 @@ func (a *sessionRepoAdapterForDM) GetByChatID(ctx context.Context, chatID int64)
 		characterInfo = &dm_analyzer.CharacterInfo{
 			ID:          player.ID,
 			Name:        player.Name,
-			Class:       player.Class,
-			Level:       player.Level,
-			Race:        player.Race,
-			Description: player.Description,
+			Class:       string(player.Character.Class),
+			Level:       player.Character.Level,
+			Race:        string(player.Character.Race),
+			Description: fmt.Sprintf("%s %s уровня %d", player.Character.Race, player.Character.Class, player.Character.Level),
 		}
 	}
 
@@ -567,7 +574,7 @@ func (uc *HandleActionUseCase) Execute(
 				logger.Bool("hard_truncated", hardTruncated),
 			)
 		}
-		prompt := BuildDMPrompt(contextForPrompt, playerMessage)
+		prompt := BuildDMPrompt(contextForPrompt, playerMessage, player.GetPreferences())
 		if len(prompt) > maxPromptLength {
 			prompt = truncateMiddle(prompt, maxPromptLength)
 			logger.Warn("Prompt length exceeded, truncating",
@@ -1470,7 +1477,14 @@ func (uc *HandleActionUseCase) buildCombatContext(gs *session.GameSession, activ
 // buildDMPrompt - алиас для обратной совместимости
 // Deprecated: используйте BuildDMPrompt вместо этого
 func buildDMPrompt(gameContext, playerMessage string) string {
-	return BuildDMPrompt(gameContext, playerMessage)
+	// Используем настройки по умолчанию для обратной совместимости
+	defaultPrefs := player.UserPreferences{
+		NarrativeStyle: player.NarrativeStyleBalanced,
+		DetailLevel:    player.DetailLevelMedium,
+		Language:       "ru",
+		ShowStats:      true,
+	}
+	return BuildDMPrompt(gameContext, playerMessage, defaultPrefs)
 }
 
 // buildActionAnalysisContext формирует контекст для DM на основе анализа действия игрока
@@ -1911,26 +1925,26 @@ func (uc *HandleActionUseCase) resolveLocationEventFromCheck(
 	}
 
 	now := time.Now()
+
+	// Обработка события с ветками развития
+	outcome, selectedBranch := uc.processLocationEventWithBranches(target, success)
+
 	if success {
 		target.Complete()
 		target.UpdatedAt = now
-		target.Metadata = updateLocationEventMetadataStatus(target.Metadata, "resolved_success")
+		target.Metadata = updateLocationEventMetadataWithOutcome(target.Metadata, "resolved_success", outcome)
 	} else {
 		target.Cancel()
 		target.CompletedAt = &now
 		target.UpdatedAt = now
-		target.Metadata = updateLocationEventMetadataStatus(target.Metadata, "resolved_fail")
+		target.Metadata = updateLocationEventMetadataWithOutcome(target.Metadata, "resolved_fail", outcome)
 	}
 
 	if err := uc.sessionRepo.Save(ctx, gs); err != nil {
 		return fmt.Errorf("failed to save location event outcome: %w", err)
 	}
 
-	outcome := "✅ Успех проверки. Событие локации завершено."
-	if !success {
-		outcome = "❌ Провал проверки. Событие локации завершено неудачей."
-	}
-	content := buildLocationEventOutcomeStory(target, outcome, message)
+	content := buildLocationEventOutcomeStoryWithBranch(target, outcome, selectedBranch, message)
 
 	if uc.eventRepo != nil {
 		eventItem := &event.StoryEvent{
@@ -1993,6 +2007,117 @@ func updateLocationEventMetadataStatus(meta []byte, status string) []byte {
 	return updated
 }
 
+// processLocationEventWithBranches обрабатывает событие с ветками развития
+func (uc *HandleActionUseCase) processLocationEventWithBranches(ev *world.WorldEvent, success bool) (*world.LocationEventOutcome, *world.LocationEventBranch) {
+	var meta world.LocationEventMetadata
+	if len(ev.Metadata) > 0 {
+		_ = json.Unmarshal(ev.Metadata, &meta)
+	}
+
+	// Если нет веток, используем старую логику
+	if len(meta.Branches) == 0 {
+		outcome := &world.LocationEventOutcome{
+			Success:      success,
+			Description:  "Проверка завершена",
+			Consequences: "Событие разрешено",
+		}
+		return outcome, nil
+	}
+
+	// Выбираем ветку случайным образом (в будущем можно сделать выбор на основе действия игрока)
+	selectedBranch := &meta.Branches[rng.Intn(len(meta.Branches))]
+
+	// Определяем исход на основе успеха и ветки
+	outcome := &world.LocationEventOutcome{
+		BranchID: selectedBranch.ID,
+		Success:  success,
+	}
+
+	if success {
+		outcome.Description = fmt.Sprintf("Вы успешно выбрали подход: %s", selectedBranch.Name)
+		outcome.Consequences = selectedBranch.Consequences
+		outcome.Reward = selectedBranch.Reward
+
+		// Специальная обработка рекрутинга компаньона
+		if selectedBranch.ID == "recruit_companion" {
+			if err := uc.recruitCompanion(ev, outcome); err != nil {
+				logger.Error("Failed to recruit companion", logger.ErrorField(err))
+			}
+		}
+	} else {
+		outcome.Description = fmt.Sprintf("Ваш подход '%s' не удался", selectedBranch.Name)
+		outcome.Consequences = "Неудача привела к негативным последствиям"
+	}
+
+	return outcome, selectedBranch
+}
+
+// recruitCompanion рекрутирует NPC как компаньона игрока
+func (uc *HandleActionUseCase) recruitCompanion(ev *world.WorldEvent, outcome *world.LocationEventOutcome) error {
+	// Получаем сессию
+	gs, err := uc.sessionRepo.GetByChatID(context.Background(), 0) // TODO: передать правильный chatID
+	if err != nil {
+		return err
+	}
+	if gs == nil {
+		return fmt.Errorf("session not found")
+	}
+
+	// Создаем случайного компаньона
+	companionClasses := []string{"Воин", "Маг", "Разбойник", "Целитель"}
+	companionNames := []string{"Алара", "Борис", "Виктор", "Галина", "Дмитрий", "Елена", "Жанна", "Захар"}
+
+	selectedClass := companionClasses[rng.Intn(len(companionClasses))]
+	selectedName := companionNames[rng.Intn(len(companionNames))]
+
+	companion := &session.Companion{
+		GameSessionID: gs.ID,
+		Name:          selectedName,
+		Description:   fmt.Sprintf("%s класса %s", selectedName, selectedClass),
+		Class:         selectedClass,
+		Level:         1 + rng.Intn(3), // Уровень 1-3
+		HP:            20 + rng.Intn(30), // HP 20-49
+		MaxHP:         20 + rng.Intn(30),
+		AC:            12 + rng.Intn(4), // AC 12-15
+		AttackBonus:   2 + rng.Intn(3), // +2 to +4
+		DamageDice:    "1d8", // Простое оружие
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	// Устанавливаем HP равным MaxHP
+	companion.HP = companion.MaxHP
+
+	// Добавляем компаньона в сессию
+	gs.AddCompanion(companion)
+
+	// Сохраняем сессию
+	if err := uc.sessionRepo.Save(context.Background(), gs); err != nil {
+		return err
+	}
+
+	outcome.Reward = fmt.Sprintf("Новый компаньон: %s (%s %d уровня)", companion.Name, companion.Class, companion.Level)
+	return nil
+}
+
+// updateLocationEventMetadataWithOutcome обновляет метаданные с исходом события
+func updateLocationEventMetadataWithOutcome(meta []byte, status string, outcome *world.LocationEventOutcome) []byte {
+	if len(meta) == 0 {
+		return meta
+	}
+	var payload world.LocationEventMetadata
+	if err := json.Unmarshal(meta, &payload); err != nil {
+		return meta
+	}
+	payload.Status = status
+	payload.Outcome = outcome
+	updated, err := json.Marshal(payload)
+	if err != nil {
+		return meta
+	}
+	return updated
+}
+
 func buildLocationEventOutcomeStory(ev *world.WorldEvent, outcome, checkMessage string) string {
 	if ev == nil {
 		return outcome
@@ -2008,6 +2133,40 @@ func buildLocationEventOutcomeStory(ev *world.WorldEvent, outcome, checkMessage 
 	}
 	if ev.Description != "" {
 		parts = append(parts, fmt.Sprintf("Описание: %s", ev.Description))
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// buildLocationEventOutcomeStoryWithBranch строит историю исхода события с веткой развития
+func buildLocationEventOutcomeStoryWithBranch(ev *world.WorldEvent, outcome *world.LocationEventOutcome, selectedBranch *world.LocationEventBranch, checkMessage string) string {
+	if ev == nil {
+		return "Событие завершено"
+	}
+
+	var parts []string
+	parts = append(parts, fmt.Sprintf("🎲 Событие локации: %s", ev.Name))
+
+	if selectedBranch != nil {
+		parts = append(parts, fmt.Sprintf("📋 Выбранный подход: %s", selectedBranch.Name))
+		parts = append(parts, fmt.Sprintf("💡 Описание: %s", selectedBranch.Description))
+	}
+
+	if outcome != nil {
+		status := "✅"
+		if !outcome.Success {
+			status = "❌"
+		}
+		parts = append(parts, fmt.Sprintf("%s Исход: %s", status, outcome.Description))
+		parts = append(parts, fmt.Sprintf("📖 Последствия: %s", outcome.Consequences))
+
+		if outcome.Reward != "" {
+			parts = append(parts, fmt.Sprintf("🎁 Награда: %s", outcome.Reward))
+		}
+	}
+
+	if checkMessage != "" {
+		parts = append(parts, fmt.Sprintf("🎯 Результат проверки: %s", checkMessage))
 	}
 
 	return strings.Join(parts, "\n")

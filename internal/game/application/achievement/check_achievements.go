@@ -6,17 +6,29 @@ import (
 	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/achievement"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 )
 
+type AchievementRepository interface {
+	GetAll(ctx context.Context) ([]*achievement.Achievement, error)
+	GetPlayerAchievements(ctx context.Context, playerID uint) ([]*achievement.PlayerAchievement, error)
+	GetPlayerAchievementByCode(ctx context.Context, playerID uint, code string) (*achievement.PlayerAchievement, error)
+	GetAchievementProgress(ctx context.Context, playerID uint, achievementID uint) (*achievement.AchievementProgress, error)
+	SaveAchievementProgress(ctx context.Context, progress *achievement.AchievementProgress) error
+	SavePlayerAchievement(ctx context.Context, playerAchievement *achievement.PlayerAchievement) error
+}
+
+type PlayerRepository interface {
+	// Not used in CheckAchievementsUseCase, but kept for consistency
+}
+
 type CheckAchievementsUseCase struct {
-	achievementRepo *persistence.AchievementRepository
-	playerRepo      *persistence.PlayerRepository
+	achievementRepo AchievementRepository
+	playerRepo      PlayerRepository
 }
 
 func NewCheckAchievementsUseCase(
-	achievementRepo *persistence.AchievementRepository,
-	playerRepo *persistence.PlayerRepository,
+	achievementRepo AchievementRepository,
+	playerRepo PlayerRepository,
 ) *CheckAchievementsUseCase {
 	return &CheckAchievementsUseCase{
 		achievementRepo: achievementRepo,

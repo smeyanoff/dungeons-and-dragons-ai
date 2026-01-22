@@ -11,6 +11,25 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/dice"
 )
 
+// Companion представляет NPC компаньона игрока
+type Companion struct {
+	ID          uint   `gorm:"primaryKey"`
+	PlayerID    uint   `gorm:"index"`
+	Name        string
+	Description string
+	Class       string // Воин, Маг, Разбойник и т.д.
+	Level       int
+	HP          int
+	MaxHP       int
+	AC          int // Класс брони
+	AttackBonus int
+	DamageDice  string // "1d8", "2d6" и т.д.
+	Abilities   string // Особые способности (JSON)
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 // CombatState представляет состояние боя
 type CombatState string
 
@@ -177,11 +196,16 @@ type CombatParticipant struct {
 	ID       uint `gorm:"primaryKey"`
 	CombatID uint `gorm:"index"`
 
-	IsPlayer bool // true для игрока, false для монстра
+	IsPlayer   bool // true для игрока, false для монстра или NPC
+	IsCompanion bool // true если это NPC компаньон игрока
 
 	// Для игрока
 	CharacterID *uint
 	Character   *character.Character `gorm:"foreignKey:CharacterID"`
+
+	// Для NPC компаньона
+	CompanionID *uint
+	Companion   *Companion `gorm:"foreignKey:CompanionID"`
 
 	// Для монстра
 	MonsterName        string
@@ -200,6 +224,9 @@ func (cp *CombatParticipant) IsAlive() bool {
 	if cp.IsPlayer {
 		return cp.Character != nil && cp.Character.Status == character.StatusAlive && cp.Character.HP > 0
 	}
+	if cp.IsCompanion {
+		return cp.Companion != nil && cp.Companion.HP > 0
+	}
 	return cp.MonsterHP > 0
 }
 
@@ -211,6 +238,12 @@ func (cp *CombatParticipant) GetHP() int {
 		}
 		return 0
 	}
+	if cp.IsCompanion {
+		if cp.Companion != nil {
+			return cp.Companion.HP
+		}
+		return 0
+	}
 	return cp.MonsterHP
 }
 
@@ -219,6 +252,12 @@ func (cp *CombatParticipant) GetMaxHP() int {
 	if cp.IsPlayer {
 		if cp.Character != nil {
 			return cp.Character.MaxHP
+		}
+		return 0
+	}
+	if cp.IsCompanion {
+		if cp.Companion != nil {
+			return cp.Companion.MaxHP
 		}
 		return 0
 	}
@@ -234,6 +273,12 @@ func (cp *CombatParticipant) GetAC() int {
 			return 10 + dexModifier
 		}
 		return 10
+	}
+	if cp.IsCompanion {
+		if cp.Companion != nil {
+			return cp.Companion.AC
+		}
+		return 12 // Значение по умолчанию
 	}
 	return cp.MonsterAC
 }
@@ -251,6 +296,12 @@ func (cp *CombatParticipant) GetAttackBonus() int {
 		}
 		return 0
 	}
+	if cp.IsCompanion {
+		if cp.Companion != nil {
+			return cp.Companion.AttackBonus
+		}
+		return 3 // Значение по умолчанию
+	}
 	return cp.MonsterAttackBonus
 }
 
@@ -259,6 +310,19 @@ func (cp *CombatParticipant) RollInitiative() int {
 	var dexModifier int
 	if cp.IsPlayer && cp.Character != nil {
 		dexModifier = dice.CalculateModifier(cp.Character.Stats.Dexterity)
+	} else if cp.IsCompanion && cp.Companion != nil {
+		// Для компаньонов используем модификатор ловкости на основе класса
+		// Простая логика: разные классы имеют разные приоритеты ловкости
+		switch strings.ToLower(cp.Companion.Class) {
+		case "разбойник", "rogue":
+			dexModifier = 3 // Высокая ловкость
+		case "воин", "warrior", "fighter":
+			dexModifier = 1 // Средняя ловкость
+		case "маг", "wizard", "sorcerer":
+			dexModifier = 0 // Низкая ловкость
+		default:
+			dexModifier = 2 // Значение по умолчанию
+		}
 	} else {
 		// Для монстров используем фиксированный модификатор
 		dexModifier = 0
@@ -279,6 +343,17 @@ func (cp *CombatParticipant) ApplyDamage(amount int) error {
 			return errors.New("character is nil")
 		}
 		return cp.Character.ApplyDamage(amount)
+	}
+
+	if cp.IsCompanion {
+		if cp.Companion == nil {
+			return errors.New("companion is nil")
+		}
+		cp.Companion.HP -= amount
+		if cp.Companion.HP < 0 {
+			cp.Companion.HP = 0
+		}
+		return nil
 	}
 
 	cp.MonsterHP -= amount
@@ -367,6 +442,12 @@ func (cp *CombatParticipant) GetName() string {
 			return cp.Character.Name
 		}
 		return "Unknown Player"
+	}
+	if cp.IsCompanion {
+		if cp.Companion != nil {
+			return cp.Companion.Name
+		}
+		return "Unknown Companion"
 	}
 	return cp.MonsterName
 }

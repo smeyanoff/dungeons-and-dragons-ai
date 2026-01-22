@@ -19,6 +19,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Graceful shutdown configuration
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
     networks:
       - dnd-network
 

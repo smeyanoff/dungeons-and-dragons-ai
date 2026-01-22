@@ -165,7 +165,7 @@ func (g *LocationEventGenerator) rollEventType() LocationEventType {
 	return EventTypePuzzle
 }
 
-// createLocationEvent создает событие локации на основе типа
+// createLocationEvent создает событие локации на основе типа с вариативными ветками развития
 func (g *LocationEventGenerator) createLocationEvent(
 	req GenerateLocationEventRequest,
 	eventType LocationEventType,
@@ -176,46 +176,228 @@ func (g *LocationEventGenerator) createLocationEvent(
 	var worldEventType world.WorldEventType
 	var name string
 	var description string
-	var options []string
-	var checks []string
-	var stakes string
+	var branches []world.LocationEventBranch
 
 	switch eventType {
 	case EventTypeNPC:
 		worldEventType = world.WorldEventTypeLocationNPC
 		name = fmt.Sprintf("Встреча в %s", req.LocationName)
-		description = fmt.Sprintf("В локации %s вас встречает интересный персонаж, готовый пообщаться.", req.LocationName)
-		options = []string{"Поговорить", "Спросить о локации", "Игнорировать"}
-		checks = []string{"charisma"}
-		stakes = "Можно получить информацию или помощь, но есть риск навлечь внимание."
+		description = fmt.Sprintf("В локации %s вас встречает таинственный странник. Что вы предпримете?", req.LocationName)
+
+		branches = []world.LocationEventBranch{
+			{
+				ID:             "talk_friendly",
+				Name:           "Дружелюбно поговорить",
+				Description:    "Поприветствовать странника и завязать разговор",
+				RequiredAction: "поговорить дружелюбно",
+				SuccessRate:    70,
+				Consequences:   "Можете получить полезную информацию или временного союзника",
+				Reward:         "информация о локации или квест",
+			},
+			{
+				ID:             "recruit_companion",
+				Name:           "Предложить присоединиться",
+				Description:    "Предложить страннику присоединиться к вашему отряду",
+				RequiredAction: "предложить присоединиться",
+				SuccessRate:    45,
+				Consequences:   "Странник может согласиться присоединиться к вашему отряду как компаньон",
+				Reward:         "новый компаньон в отряде",
+			},
+			{
+				ID:             "ask_about_location",
+				Name:           "Спросить о локации",
+				Description:    "Поинтересоваться информацией о текущем месте",
+				RequiredAction: "спросить о локации",
+				SuccessRate:    60,
+				Consequences:   "Получите карту или подсказку",
+				Reward:         "карта локации",
+			},
+			{
+				ID:             "ignore_suspicious",
+				Name:           "Заподозрить неладное",
+				Description:    "Не доверять незнакомцу и держаться настороже",
+				RequiredAction: "игнорировать с подозрением",
+				SuccessRate:    80,
+				Consequences:   "Избегнете возможной ловушки, но упустите机会",
+				Reward:         "",
+			},
+			{
+				ID:             "intimidate",
+				Name:           "Запугать странника",
+				Description:    "Показать силу и потребовать информацию",
+				RequiredAction: "запугать",
+				SuccessRate:    40,
+				Consequences:   "Можете получить информацию силой, но рискуете конфликтом",
+				Reward:         "ценная информация",
+			},
+		}
+
 	case EventTypeItem:
 		worldEventType = world.WorldEventTypeLocationItem
-		name = fmt.Sprintf("Находка в %s", req.LocationName)
-		description = fmt.Sprintf("В локации %s вы находите заинтересовавший вас предмет.", req.LocationName)
-		options = []string{"Осмотреть", "Взять", "Оставить"}
-		checks = []string{"wisdom"}
-		stakes = "Можно получить полезный предмет или попасть в неприятность."
+		name = fmt.Sprintf("Таинственная находка в %s", req.LocationName)
+		description = fmt.Sprintf("В локации %s вы замечаете подозрительный сундук. Что вы сделаете?", req.LocationName)
+
+		branches = []world.LocationEventBranch{
+			{
+				ID:             "open_carefully",
+				Name:           "Аккуратно открыть",
+				Description:    "Тщательно осмотреть сундук перед открытием",
+				RequiredAction: "осмотреть и открыть аккуратно",
+				SuccessRate:    75,
+				Consequences:   "Безопасно получите содержимое",
+				Reward:         "предмет из сундука",
+			},
+			{
+				ID:             "force_open",
+				Name:           "Взломать силой",
+				Description:    "Просто сломать замок и открыть",
+				RequiredAction: "взломать силой",
+				SuccessRate:    50,
+				Consequences:   "Можете повредить содержимое или активировать ловушку",
+				Reward:         "предмет (возможно поврежденный)",
+			},
+			{
+				ID:             "ignore_caution",
+				Name:           "Осторожно проигнорировать",
+				Description:    "Не трогать подозрительный сундук",
+				RequiredAction: "оставить в покое",
+				SuccessRate:    100,
+				Consequences:   "Избегнете опасности, но упустите возможную награду",
+				Reward:         "",
+			},
+		}
+
 	case EventTypeTrap:
 		worldEventType = world.WorldEventTypeLocationTrap
-		name = fmt.Sprintf("Ловушка в %s", req.LocationName)
-		description = fmt.Sprintf("Осторожно! В локации %s вас поджидает опасная ловушка.", req.LocationName)
-		options = []string{"Попытаться обезвредить", "Обойти", "Осмотреть механизмы"}
-		checks = []string{"dexterity"}
-		stakes = "Ошибка может привести к урону или потере времени."
+		name = fmt.Sprintf("Подозрительные признаки в %s", req.LocationName)
+		description = fmt.Sprintf("В локации %s вы замечаете странные следы на полу. Кажется, здесь ловушка!", req.LocationName)
+
+		branches = []world.LocationEventBranch{
+			{
+				ID:             "disarm_expert",
+				Name:           "Обезвредить как эксперт",
+				Description:    "Тщательно изучить и обезвредить механизм",
+				RequiredAction: "обезвредить ловушку",
+				SuccessRate:    60,
+				Consequences:   "Безопасно пройдете дальше",
+				Reward:         "безопасный проход",
+			},
+			{
+				ID:             "trigger_intentionally",
+				Name:           "Активировать намеренно",
+				Description:    "Специально активировать ловушку в безопасном месте",
+				RequiredAction: "активировать контролируемо",
+				SuccessRate:    45,
+				Consequences:   "Избегнете засады, но получите урон",
+				Reward:         "расчистка пути",
+			},
+			{
+				ID:             "avoid_completely",
+				Name:           "Полностью обойти",
+				Description:    "Найти безопасный обходной путь",
+				RequiredAction: "обойти стороной",
+				SuccessRate:    70,
+				Consequences:   "Потеряете время, но останетесь невредимы",
+				Reward:         "безопасный обход",
+			},
+			{
+				ID:             "rush_through",
+				Name:           "Броситься напролом",
+				Description:    "Быстро пробежать через опасную зону",
+				RequiredAction: "рискованно пробежать",
+				SuccessRate:    30,
+				Consequences:   "Высокий риск получить серьезный урон",
+				Reward:         "быстрый проход или провал",
+			},
+		}
+
 	case EventTypePuzzle:
 		worldEventType = world.WorldEventTypeLocationPuzzle
 		name = fmt.Sprintf("Загадка в %s", req.LocationName)
-		description = fmt.Sprintf("В локации %s вы обнаруживаете загадочную загадку, требующую решения.", req.LocationName)
-		options = []string{"Попытаться решить", "Изучить детали", "Отступить"}
-		checks = []string{"intelligence"}
-		stakes = "Успех может открыть доступ к награде или проходу."
+		description = fmt.Sprintf("В локации %s перед вами древняя загадка, высеченная на камне. Что вы предпримете?", req.LocationName)
+
+		branches = []world.LocationEventBranch{
+			{
+				ID:             "solve_intellectually",
+				Name:           "Решить умом",
+				Description:    "Внимательно изучить и логически решить",
+				RequiredAction: "решить загадку умом",
+				SuccessRate:    65,
+				Consequences:   "Получите награду за сообразительность",
+				Reward:         "сокровище или знание",
+			},
+			{
+				ID:             "use_magic",
+				Name:           "Использовать магию",
+				Description:    "Применить заклинание для решения",
+				RequiredAction: "использовать магию",
+				SuccessRate:    55,
+				Consequences:   "Магическое решение, но потратите ресурсы",
+				Reward:         "магическая награда",
+			},
+			{
+				ID:             "brute_force",
+				Name:           "Силой сломать",
+				Description:    "Просто разрушить механизм загадки",
+				RequiredAction: "разрушить силой",
+				SuccessRate:    35,
+				Consequences:   "Можете повредить механизм или получить урон",
+				Reward:         "доступ к следующей комнате",
+			},
+			{
+				ID:             "seek_hint",
+				Name:           "Поискать подсказки",
+				Description:    "Найти скрытые подсказки вокруг",
+				RequiredAction: "искать подсказки",
+				SuccessRate:    75,
+				Consequences:   "Получите помощь, но потратите время",
+				Reward:         "подсказки для решения",
+			},
+		}
+
 	case EventTypeEncounter:
 		worldEventType = world.WorldEventTypeLocationEncounter
-		name = fmt.Sprintf("Встреча в %s", req.LocationName)
-		description = fmt.Sprintf("В локации %s вы столкнулись с неожиданной встречей, возможно опасной.", req.LocationName)
-		options = []string{"Подготовиться к бою", "Попытаться договориться", "Спрятаться"}
-		checks = []string{"dexterity", "charisma"}
-		stakes = "Исход встречи может изменить ситуацию в локации."
+		name = fmt.Sprintf("Неожиданная встреча в %s", req.LocationName)
+		description = fmt.Sprintf("В локации %s из-за угла выходит группа подозрительных личностей. Ваши действия?", req.LocationName)
+
+		branches = []world.LocationEventBranch{
+			{
+				ID:             "negotiate_peacefully",
+				Name:           "Мирные переговоры",
+				Description:    "Попытаться договориться словами",
+				RequiredAction: "договориться мирно",
+				SuccessRate:    60,
+				Consequences:   "Можете получить союзников или информацию",
+				Reward:         "союзники или информация",
+			},
+			{
+				ID:             "intimidate_group",
+				Name:           "Показать силу",
+				Description:    "Запугать группу своей мощью",
+				RequiredAction: "запудать силой",
+				SuccessRate:    50,
+				Consequences:   "Получите уважение или спровоцируете конфликт",
+				Reward:         "уважение или конфликт",
+			},
+			{
+				ID:             "stealth_avoid",
+				Name:           "Тихо скрыться",
+				Description:    "Незаметно уйти от встречи",
+				RequiredAction: "скрыться незаметно",
+				SuccessRate:    65,
+				Consequences:   "Избегнете проблем, но упустите возможности",
+				Reward:         "безопасное отступление",
+			},
+			{
+				ID:             "prepare_combat",
+				Name:           "Приготовиться к бою",
+				Description:    "Показать готовность к сражению",
+				RequiredAction: "приготовиться к бою",
+				SuccessRate:    70,
+				Consequences:   "Можете предотвратить бой или спровоцировать его",
+				Reward:         "предотвращение боя или победа",
+			},
+		}
 	}
 
 	event := &world.WorldEvent{
@@ -224,7 +406,7 @@ func (g *LocationEventGenerator) createLocationEvent(
 		Status:             world.WorldEventStatusActive,
 		Name:               name,
 		Description:        description,
-		Metadata:           buildLocationEventMetadata(description, options, checks, stakes, locationEventStatusPending),
+		Metadata:           buildLocationEventMetadataWithBranches(description, branches, string(eventType), locationEventStatusPending),
 		RequiredLocationID: &locationID,
 		ActivatedAt:        &now,
 		CreatedAt:          now,
@@ -241,6 +423,28 @@ func buildLocationEventMetadata(hook string, options []string, checks []string, 
 		SuggestedChecks: checks,
 		Stakes:          stakes,
 		Status:          status,
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// buildLocationEventMetadataWithBranches создает метаданные события с ветками развития
+func buildLocationEventMetadataWithBranches(hook string, branches []world.LocationEventBranch, eventType string, status string) []byte {
+	// Создаем совместимые options для обратной совместимости
+	options := make([]string, len(branches))
+	for i, branch := range branches {
+		options[i] = branch.Name
+	}
+
+	meta := world.LocationEventMetadata{
+		Hook:            hook,
+		Options:         options,
+		Status:          status,
+		Branches:        branches,
+		EventType:       eventType,
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {

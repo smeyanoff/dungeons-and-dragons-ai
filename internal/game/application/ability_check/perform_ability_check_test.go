@@ -123,7 +123,7 @@ func TestPerformAbilityCheckUseCase_Execute_Errors(t *testing.T) {
 }
 
 func TestPerformAbilityCheckUseCase_Execute_Success(t *testing.T) {
-	gs := createSessionWithPendingCheck(t, "strength", 1)
+	gs := createSessionWithPendingCheck(t, "strength", 10)
 	sessionRepo := &mockSessionRepo{session: gs}
 	eventRepo := &mockEventRepo{}
 	embedder := &mockEmbedder{}
@@ -139,14 +139,17 @@ func TestPerformAbilityCheckUseCase_Execute_Success(t *testing.T) {
 	if result.Ability != "strength" {
 		t.Fatalf("expected ability=strength, got %s", result.Ability)
 	}
-	if result.DC != 1 {
-		t.Fatalf("expected dc=1, got %d", result.DC)
+	if result.BaseDC != 10 {
+		t.Fatalf("expected base dc=10, got %d", result.BaseDC)
+	}
+	if result.DC < 8 || result.DC > 20 {
+		t.Fatalf("expected adaptive dc in [8..20], got %d", result.DC)
 	}
 	if result.BaseRoll < 1 || result.BaseRoll > 20 {
 		t.Fatalf("expected base roll in [1..20], got %d", result.BaseRoll)
 	}
-	if !result.Success {
-		t.Fatal("expected success=true for dc=1")
+	if result.Total < result.BaseRoll-5 || result.Total > result.BaseRoll+5 {
+		t.Fatalf("expected total close to base roll, got %d (base: %d)", result.Total, result.BaseRoll)
 	}
 	if result.Message == "" {
 		t.Fatal("expected non-empty message")

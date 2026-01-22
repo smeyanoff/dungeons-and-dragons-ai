@@ -8,9 +8,10 @@ type Message struct {
 
 // ChatRequest представляет запрос к GigaChat API для генерации текста
 type ChatRequest struct {
-	Model     string    `json:"model"`                // Имя модели
+	Model     string `json:"model"`                // Имя модели
 	Messages  []Message `json:"messages"`             // Массив сообщений
-	MaxTokens *int      `json:"max_tokens,omitempty"` // Максимальное количество токенов (опционально)
+	MaxTokens *int   `json:"max_tokens,omitempty"` // Максимальное количество токенов (опционально)
+	Stream    *bool  `json:"stream,omitempty"`     // Потоковая генерация (опционально)
 }
 
 // Choice представляет выбор ответа от API

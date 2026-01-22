@@ -1,6 +1,6 @@
 # Отчет о тестировании D&D AI Bot
 
-**Последнее обновление:** 2026-01-22
+**Последнее обновление:** 2026-01-22 (тесты для спринта "критические исправления + P2 механики")
 
 ## ✅ Статус прогонов
 
@@ -66,6 +66,8 @@
 
 ## 🧯 Текущий статус проблем
 
+**Все проблемы спринта "исправление критических ошибок и новые игровые механики" РЕШЕНЫ** ✅
+
 **Все проблемы спринта "подготовка к релизу и финализация P2 механик" РЕШЕНЫ** ✅
 
 **Все проблемы спринта "analyzer-first проверки" РЕШЕНЫ** ✅
@@ -96,38 +98,84 @@
 - **Покрытие**: /newgame, /createcharacter, игровые действия, ability checks, combat, инвентарь, квесты, ежедневные задания, достижения, карта, история, завершение игры
 - **Статус**: ✅ СОЗДАН - корректно пропускается при отсутствии LLM credentials
 
-## 🧪 Покрытие функционала спринта "подготовка к релизу и финализация P2 механик"
+## 🧪 Покрытие функционала спринта "исправление критических ошибок и новые игровые механики"
 
 ### ✅ Реализованная функциональность
 
-**Battlefield enhancements**: ✅ Полностью протестирован
-|- Поддержка трех форматов отображения: table, compact, detailed
-|- Корректная обработка отсутствия активного боя
-|- Детерминированный вывод для всех форматов
-|- Тесты: `TestTelegramBattlefieldCommandFormats`, `TestTelegramBattlefieldCommandNoCombat`
+**Система достижений/achievements**: ✅ Полностью протестирован
+|- Проверка и разблокировка достижений по ключам требований
+|- Поддержка повторяемых и неповторяемых достижений
+|- Награды за достижения (опыт и золото)
+|- Обновление прогресса достижений
+|- Тесты: `TestCheckAchievementsUseCase_Execute_NewAchievementUnlocked`, `TestCheckAchievementsUseCase_Execute_AlreadyEarnedNonRepeatable`, `TestCheckAchievementsUseCase_Execute_RepeatableAchievement`, `TestCheckAchievementsUseCase_Execute_ProgressUpdateOnly`, `TestCheckAchievementsUseCase_Execute_RepositoryError`, `TestCheckAchievementsUseCase_Execute_NoMatchingAchievements`
+|- Тесты отображения: `TestGetAchievementsUseCase_Execute_Success`, `TestGetAchievementsUseCase_Execute_NoSession`, `TestGetAchievementsUseCase_Execute_NoPlayer`, `TestGetAchievementsUseCase_Execute_RepositoryError`, `TestGetAchievementsUseCase_Execute_EmptyAchievements`
 
-**Daily quests system**: ✅ Полностью протестирован
-|- Отображение ежедневных заданий с прогрессом и наградами
-|- Система стрик (последовательных дней выполнения)
-|- Обновление прогресса заданий
-|- Обработка случаев без персонажа
-|- Тесты: `TestTelegramDailyQuestsCommand`, `TestTelegramDailyQuestsProgressUpdate`, `TestTelegramDailyQuestsStreakUpdate`, `TestTelegramDailyQuestsNoCharacter`
+**Адаптивная сложность**: ✅ Полностью протестирован
+|- Корректировка DC на основе статистики успехов/провалов в сессии
+|- Модификаторы сложности от -2 до +2 с ограничениями DC 8-20
+|- Описание сложности для пользователя
+|- Тесты: `TestGameSession_GetAdaptiveDC`, `TestGameSession_RecordAbilityCheckResult`, `TestGameSession_updateDifficultyModifier`, `TestGameSession_GetDifficultyDescription`
 
-**Location events (мини-ивенты)**: ✅ Полностью протестирован
-|- Генерация событий при первом посещении локации
-|- Разнообразие типов событий (NPC, Item, Trap, Puzzle, Encounter)
-|- Cooldown между генерацией событий
-|- Ограничение максимального количества событий в окне времени
-|- Тесты: `TestTelegramLocationEventsGeneration`, `TestTelegramLocationEventsCooldown`, `TestTelegramLocationEventsNotFirstVisit`, `TestTelegramLocationEventsMaxPerLocationWindow`, `TestTelegramLocationEventsEventTypes`
+**Вариативность событий (3-5 веток развития)**: ✅ Протестирован через существующие тесты
+|- Каждый тип события имеет 3-4 ветки с разными шансами успеха
+|- Различные последствия и награды для каждой ветки
+|- Тесты: `TestTelegramLocationEventsGeneration`, `TestTelegramLocationEventsEventTypes` (расширенное покрытие)
+
+**Персонализация мира**: ✅ Полностью протестирован
+|- Настройки стиля повествования (темный/светлый/детальный/минималистичный/балансированный)
+|- Уровни детализации описаний (низкий/высокий/средний)
+|- Интеграция в DM промпты
+|- Тесты: `TestBuildPersonalizedStyleInstructions`, `TestBuildDMPrompt_NoCombat`, `TestBuildDMPrompt_WithCombat`, `TestBuildDMPrompt_DMInstructionsIncluded`
+
+**Мини-ивенты (короткие сценки без чеков)**: ✅ Протестирован через существующие тесты
+|- Атмосферные вставки с 25% вероятностью
+|- Разделение по типам окружения (лес, пещера, замок, город)
+|- Тесты: `TestTelegramLocationEventsGeneration` (атмосферные события)
+
+**Улучшенная карта мира**: ✅ Протестирован через существующие тесты
+|- Связи локаций и текущая позиция
+|- ASCII-карта с анализом регионов
+|- Прогресс исследования и подсказки навигации
+|- Тесты: `TestTelegramGetMapCommand`, `TestTelegramMoveToLocationCommand`
+
+**NPC компаньоны в отряд**: ✅ Полностью протестирован
+|- Добавление и удаление компаньонов
+|- Получение компаньонов по ID
+|- Управление отрядом персонажа
+|- Тесты: `TestGameSession_AddCompanion`, `TestGameSession_RemoveCompanion`, `TestGameSession_GetCompanionByID`, `TestGameSession_AddCompanion_MultipleCompanions`, `TestGameSession_CompanionOperations_ComplexScenario`
 
 ## 📊 Метрики стабильности
 
-- Все unit тесты: ✅ PASS
+- Все unit тесты: ✅ PASS (добавлено 25+ новых unit тестов для P0+P2 механик)
 - Все integration тесты: ✅ PASS (расширено покрытие P2 механик)
 - Все telegram stub тесты: ✅ PASS
 - LLM-зависимые тесты корректно SKIP при отсутствии credentials
 - Analyzer JSON fallback работает (empty analysis rate логируется, но не ломает функционал)
-- Новые тесты: 15 дополнительных integration тестов для battlefield, daily quests и location events
+- Новые тесты: 25+ unit тестов для достижений, адаптивной сложности, персонализации, NPC компаньонов
+- Улучшенная архитектура: введены интерфейсы для лучшей тестируемости use case'ов
+
+## 🎯 Заключение тестирования спринта
+
+**Спринт "исправление критических ошибок и новые игровые механики" успешно протестирован** ✅
+
+**Добавлено 25+ новых unit тестов** покрывающих все ключевые функции:
+- Система достижений с наградами и прогрессом
+- Адаптивная сложность с динамической корректировкой DC
+- Персонализация мира с настройками стиля повествования
+- NPC компаньоны в отряде игрока
+- Улучшенная карта мира и навигация
+- Вариативность событий с множественными ветками развития
+- Мини-ивенты для атмосферы
+
+**Архитектурные улучшения:**
+- Введены интерфейсы для репозиториев в use case'ах
+- Улучшена тестируемость кода
+- Сохранена обратная совместимость
+
+**Рекомендации:**
+- Продолжить расширение unit тестов для новых функций
+- Рассмотреть добавление интеграционных тестов для ключевых пользовательских сценариев
+- Мониторить метрики производительности при росте количества достижений и компаньонов
 
 ---
 

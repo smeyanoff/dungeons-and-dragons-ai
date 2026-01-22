@@ -613,7 +613,14 @@ func TestBuildDMPrompt(t *testing.T) {
 	gameContext := "Мир: Тестовый мир\nОписание: Красивый мир"
 	playerMessage := "Иду на север"
 
-	prompt := buildDMPrompt(gameContext, playerMessage)
+	prefs := player.UserPreferences{
+		NarrativeStyle: player.NarrativeStyleBalanced,
+		DetailLevel:    player.DetailLevelMedium,
+		Language:       "ru",
+		ShowStats:      true,
+	}
+
+	prompt := BuildDMPrompt(gameContext, playerMessage, prefs)
 
 	if prompt == "" {
 		t.Error("expected non-empty prompt")

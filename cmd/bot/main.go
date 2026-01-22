@@ -94,6 +94,8 @@ func (a *locationEventRepoAdapter) Save(ctx context.Context, e *world.WorldEvent
 	return a.repo.Save(ctx, e)
 }
 
+var bot *telegram.Bot // Глобальная переменная для health check
+
 func main() {
 	// Инициализация логгера (должна быть первой)
 	if err := logger.InitFromEnv(); err != nil {
@@ -441,6 +443,16 @@ func main() {
 			return
 		}
 
+		// Проверка подключения к Telegram (если бот инициализирован)
+		if bot != nil {
+			healthCtx, healthCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer healthCancel()
+			if err := bot.HealthCheck(healthCtx); err != nil {
+				http.Error(w, "Telegram API unavailable: "+err.Error(), http.StatusServiceUnavailable)
+				return
+			}
+		}
+
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "OK")
 	})
@@ -496,7 +508,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err := telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
+	bot, err = telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
 	if err != nil {
 		logger.Error("Failed to create bot - continuing without Telegram bot",
 			logger.ErrorField(err),
@@ -560,6 +572,23 @@ func main() {
 	// Graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+
+	// Закрываем соединение с БД
+	logger.Info("Closing database connection")
+	sqlDB, err := db.DB()
+	if err != nil {
+		logger.Error("Failed to get underlying SQL DB",
+			logger.ErrorField(err),
+		)
+	} else {
+		if err := sqlDB.Close(); err != nil {
+			logger.Error("Database connection close error",
+				logger.ErrorField(err),
+			)
+		} else {
+			logger.Info("Database connection closed successfully")
+		}
+	}
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("HTTP server shutdown error",
