@@ -22,10 +22,11 @@ type TokenResponse struct {
 }
 
 type authClient struct {
-	cfg    Config
-	token  *TokenResponse
-	mu     sync.RWMutex
-	client *http.Client
+	cfg               Config
+	token             *TokenResponse
+	lastTokenRefresh  time.Time
+	mu                sync.RWMutex
+	client            *http.Client
 }
 
 func newAuthClient(cfg Config) *authClient {
@@ -89,6 +90,15 @@ func (a *authClient) getToken(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// Проверяем cooldown между обновлениями токенов (минимум 30 секунд)
+	timeSinceLastRefresh := time.Since(a.lastTokenRefresh)
+	if timeSinceLastRefresh < 30*time.Second {
+		log.Printf("GigaChat: Token refresh cooldown active (last refresh: %v ago), using cached token", timeSinceLastRefresh.Round(time.Second))
+		if a.token != nil {
+			return a.token.AccessToken, nil
+		}
+	}
+
 	// Двойная проверка (double-check locking)
 	now := time.Now().Unix()
 	if a.token != nil && a.token.ExpiresAt > 0 {
@@ -136,6 +146,7 @@ func (a *authClient) getToken(ctx context.Context) (string, error) {
 
 	// Сохраняем токен в кэш
 	a.token = token
+	a.lastTokenRefresh = time.Now()
 
 	// Логируем успешное получение токена с информацией об истечении
 	if token.ExpiresAt > 0 {
@@ -352,5 +363,6 @@ func (a *authClient) invalidateToken() {
 	if a.token != nil {
 		log.Printf("GigaChat: Invalidating cached token")
 		a.token = nil
+		a.lastTokenRefresh = time.Time{} // Сбрасываем время последнего обновления
 	}
 }

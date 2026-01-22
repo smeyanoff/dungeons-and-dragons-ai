@@ -38,5 +38,14 @@ services:
     # Если токен не установлен, пропускаем сканирование
     profiles: ["with-snyk-token"]
 
+  # TruffleHog - поиск секретов и чувствительных данных
+  trufflehog:
+    image: trufflesecurity/trufflehog:latest
+    working_dir: /app
+    volumes:
+      - ..:/app
+    entrypoint: ["sh", "-c"]
+    command: ["trufflehog filesystem /app --json > trufflehog-report.json 2>/dev/null || true"]
+
 volumes:
   trivy-cache:

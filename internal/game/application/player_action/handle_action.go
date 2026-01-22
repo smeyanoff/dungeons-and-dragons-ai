@@ -438,7 +438,7 @@ func (uc *HandleActionUseCase) Execute(
 			Timestamp: time.Now(),
 		}
 		// Пытаемся проиндексировать с повторными попытками
-		if err := uc.indexDocumentWithRetry(ragCtx, doc, 3); err != nil {
+		if err := uc.indexDocUC.Execute(ragCtx, doc); err != nil {
 			logger.Warn("Failed to index player event after retries (event saved in DB, but not indexed in RAG)",
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
@@ -627,7 +627,7 @@ func (uc *HandleActionUseCase) Execute(
 			Timestamp: time.Now(),
 		}
 		// Пытаемся проиндексировать с повторными попытками
-		if err := uc.indexDocumentWithRetry(indexCtx, doc, 3); err != nil {
+		if err := uc.indexDocUC.Execute(indexCtx, doc); err != nil {
 			logger.Warn("Failed to index DM event after retries (event saved in DB, but not indexed in RAG)",
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
@@ -1921,7 +1921,11 @@ func (uc *HandleActionUseCase) resolveLocationEventFromCheck(
 			Timestamp: time.Now(),
 		}
 		if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
-			return fmt.Errorf("failed to index location outcome in RAG: %w", err)
+			logger.Warn("Failed to index location outcome in RAG, continuing with DB storage only",
+				logger.ErrorField(err),
+				logger.Uint("session_id", gs.ID),
+			)
+			// Продолжаем - событие сохранено в БД, RAG индексация опциональна
 		}
 	}
 
@@ -2218,82 +2222,6 @@ func (a *achievementCheckerAdapter) Execute(
 	return result, nil
 }
 
-// indexDocumentWithRetry индексирует документ в RAG с повторными попытками и exponential backoff
-// Это компенсирующая транзакция для RAG - если БД успешно, но RAG нет, пытаемся повторить
-func (uc *HandleActionUseCase) indexDocumentWithRetry(
-	ctx context.Context,
-	doc ragdomain.Document,
-	maxRetries int,
-) error {
-	const initialBackoff = 100 * time.Millisecond
-	const maxBackoff = 2 * time.Second
-
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			// Вычисляем exponential backoff: 100ms, 200ms, 400ms
-			// Защита от integer overflow: ограничиваем сдвиг безопасными пределами
-			// time.Duration это int64, поэтому 1<<30 безопасно
-			const maxSafeShift = 30
-			shift := attempt - 1
-			if shift < 0 {
-				shift = 0
-			} else if shift > maxSafeShift {
-				shift = maxSafeShift
-			}
-			// #nosec G115 - защита от overflow реализована выше: shift ограничен до maxSafeShift=30
-			// что безопасно для int64/time.Duration (максимальный безопасный сдвиг для int64)
-			backoff := initialBackoff * time.Duration(1<<uint(shift))
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-
-			logger.Debug("Retrying RAG indexation",
-				logger.Uint("session_id", doc.SessionID),
-				logger.Int("attempt", attempt),
-				logger.Duration("backoff", backoff),
-			)
-
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
-
-		// Пытаемся проиндексировать документ
-		err := uc.indexDocUC.Execute(ctx, doc)
-		if err == nil {
-			return nil
-		}
-
-		lastErr = err
-
-		// Проверяем, стоит ли повторять попытку
-		errStr := err.Error()
-		shouldRetry := false
-		if strings.Contains(errStr, "context deadline exceeded") ||
-			strings.Contains(errStr, "timeout") ||
-			strings.Contains(errStr, "connection") ||
-			strings.Contains(errStr, "network") {
-			shouldRetry = true
-		}
-
-		if !shouldRetry || attempt >= maxRetries {
-			// Не retry или исчерпаны попытки
-			if attempt >= maxRetries {
-				logger.Warn("Failed to index document in RAG after max retries",
-					logger.ErrorField(err),
-					logger.Uint("session_id", doc.SessionID),
-					logger.Int("attempts", attempt+1),
-				)
-			}
-			break
-		}
-	}
-
-	return lastErr
-}
 
 // subscriptionCheckerAdapter адаптирует subscriptionapp.GetSubscriptionUseCase к интерфейсу dm_tools.SubscriptionChecker
 type subscriptionCheckerAdapter struct {

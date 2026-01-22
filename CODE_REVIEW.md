@@ -1,120 +1,95 @@
 # CODE_REVIEW — Dungeons & Dragons AI Bot (Telegram + AI DM + RAG)
 
-**Последнее обновление:** 2026-01-21  
-**Зачем файл:** держим **короткий** список **активных** рисков/дефектов + конкретные action items (что сделать / где / как проверить).  
-**Историю “что уже починили” здесь не храним** — только актуальное.
+**Последнее обновление:** 2026-01-22 (спринт приоритетов обновлен)
+**Зачем файл:** держим **короткий** список **активных** рисков/дефектов + конкретные action items (что сделать / где / где проверить).
+**Историю "что уже починили" здесь не храним** — только актуальное.
 
 ---
 
-## ✅ Состояние (на 2026-01-21)
+## ✅ Состояние (на 2026-01-22)
 
 - **Тесты**: `go test ./...` ✅ PASS; интеграционные прогоны дают сигналы/проблемы (см. `TESTING_REPORT.md`, `FEEDBACK.md`).
 - **Docker (prod)**: `dnd-bot-prod`, `dnd-postgres-prod`, `dnd-qdrant-prod` ✅ healthy.
-  В логах `dnd-bot-prod` зафиксированы: **invalid JSON + failed repair/retry**, **GigaChat 429 rate limit**, **image download 403 Permission denied**, **hard truncation контекста промпта**.
+- **Проблемы в логах**: truncated JSON от DM Analyzer, частые 429 rate limits, image generation timeouts.
 
 ---
 
-## ✅ Активные риски
+## 🚨 Активные риски (P0-P2 приоритезация)
 
-### P0 — качество геймплея: проверки нельзя "починить промптом" ✅ (частично решено)
-- **Симптом**: DM начинает **спамить проверками**; игроки ожидают "редко и значимо" (см. `FEEDBACK.md`).
-- **Решено**: Введены guardrails (budget/cooldown/anti-trivial) + обязательные stakes/reason. Требуется доработка analyzer-first логики.
+### P0 — Качество геймплея: analyzer-first проверки ✅ (завершено)
+- **Статус**: Реализован и стабилен, перенесен в выполненные задачи
+- **Как проверить**: `tests/integration/ability_check_guardrails_test.go` - отсутствие спама проверками
+
+### P1 — DM Analyzer: truncated JSON ответы от LLM
+- **Симптом (prod-логи)**: `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received"` - JSON обрывается посередине ключа
+- **Проблема**: `tryRepairTruncatedJSON` не справляется с восстановлением JSON, обрезанного посередине ключа
 - **Action items**:
-  - Полностью перенести "решение о проверке" в код (tools/анализатор), а не в промпт.
+  - Улучшить логику `tryRepairTruncatedJSON` для обработки незавершенных ключей полей
+  - Добавить валидацию на незавершенные JSON структуры до отправки в LLM
+  - Увеличить maxRetries для DM analyzer
 - **Как проверить**:
-  - `tests/integration/ability_check_guardrails_test.go`
-  - Логи: отсутствие "цепочек" проверок на тривиальные действия.
+  - Логи DM analyzer без "truncated JSON" ошибок
+  - Успешный парсинг всех ответов DM analyzer
 
-### P1 — утечки служебного/инструментального текста в player-facing ответы
-- **Симптом**: в тексте появляются намёки на tools/JSON/“ожидаемый ввод /roll…” (см. `FEEDBACK.md`).
+### P1 — GigaChat rate limiting (429) влияет на UX
+- **Симптом**: Частые `Rate limited (429), retry attempt ...` несмотря на concurrency limit = 3
+- **Проблема**: Недостаточно агрессивный backoff или слишком высокая нагрузка
 - **Action items**:
-  - Добавить слой “output sanitizer” для Telegram: запрещённые паттерны (JSON/инструкции/tools) либо вынести в отдельный internal‑канал.
-  - Добавить тесты, что ответы игроку не содержат служебных маркеров.
+  - Дополнительно уменьшить concurrency limit до 2
+  - Увеличить initial backoff delay до 5-10 секунд
+  - Добавить метрики RPS и 429 rate для мониторинга
 - **Как проверить**:
-  - Интеграционные Telegram‑тесты (stubbed/real) + лог‑алерты при срабатывании sanitizer.
+  - Снижение количества 429 ошибок в прод-логах
 
-### P1 — потеря контекста из-за hard truncation промпта ✅ (решено)
-- **Симптом (prod‑логи)**: `Game context truncated for prompt ... hard_truncated=true`, при этом вырезаются блоки вроде **персонажа игрока / истории / анализа**.
-- **Решено**: Введена приоритизация блоков контекста с логированием удалённых блоков.
-- **Метрики**: доля hard_truncated, какие блоки удаляются.
-- **Как проверить**:
-  - Логи `hard_truncated=false` для типичного геймплея; регресс‑тест на сохранение "must-have" блоков.
-
-### P1 — невалидный JSON от LLM в `InitCampaign`/генерации мира ✅ (улучшено)
-- **Симптом (prod‑логи + `TESTING_REPORT.md`)**: `LLM response ... is not valid JSON, attempting to repair` → `Failed to repair ...` (locations/connections/predefined checks).
-- **Решено**: Более строгие JSON-контракты на ретраях, меньше repair/fallback.
+### P1 — Image generation: context deadline exceeded
+- **Симптом**: `Failed to generate world map image ... context deadline exceeded` после retry
+- **Проблема**: Таймаут 180s недостаточен для генерации изображений с rate limiting
 - **Action items**:
-  - Дальнейшее ужесточение контракта: схема/валидация, structured output, ограничение на длину.
+  - Увеличить таймаут генерации изображений до 300s
+  - Улучшить логику retry для image generation (меньше retry, но с большим таймаутом)
+  - Добавить graceful fallback на текстовое описание при persistent failures
 - **Как проверить**:
-  - `make test-telegram-real` (при наличии creds) + отсутствие repair/fallback в логах для InitCampaign.
+  - Успешная генерация изображений локаций/NPC в прод-логах
 
-### P1 — DM Analyzer: truncated JSON ответы от LLM ✅ (исправлено)
-- **Симптом (prod‑логи)**: `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":{"name":"Сер�` - ответ обрывается.
-- **Решено**: Добавлено раннее обнаружение truncated JSON + автоматический repair перед основной валидацией. Увеличен таймаут DM analyzer с 30s до 60s.
+### P0 — Location events integration gap (повышен до P0)
+- **Симптом**: Location events создаются но не попадают в следующий DM prompt
 - **Action items**:
-  - Мониторить логи на отсутствие "Raw LLM response" с обрезанными ответами.
+  - Подключить `world_events` в контекст DM (history/RAG/контекст-билдер)
+  - Проиндексировать location events в RAG как StoryEvent
+  - Перевести тест из `t.Skip` в полноценный assert
 - **Как проверить**:
-  - В логах DM analyzer отсутствие truncated ответов; успешный анализ действий игроков.
+  - `tests/integration/telegram_location_event_simulation_test.go` PASS без Skip
 
-### P1 — LocationEvent создаётся, но не попадает в следующий DM prompt (integration gap)
-- **Симптом (`TESTING_REPORT.md`)**: событие есть в `world_events`, но его нет в следующем prompt; тест сейчас делает `t.Skip`.
+### P2 — DM Analyzer: пустые/битые поля
+- **Симптом**: Возвращает `combat_detected=true` но `enemy.name=""` или пустой JSON `{}`
 - **Action items**:
-  - Подключить `world_events` в контекст (history/RAG/контекст‑билдер), чтобы DM видел событие на следующем ходу.
-  - Проиндексировать location events в RAG как StoryEvent или отдельный doc‑тип.
-  - После фикса — перевести тест из `Skip` в assert (чтобы регресс ловился).
+  - Улучшить `validateCombatAnalysis` с более строгими проверками
+  - Добавить fallback логику для битых врагов
+  - Увеличить валидацию JSON схемы перед парсингом
 - **Как проверить**:
-  - `tests/integration/telegram_location_event_simulation_test.go` должен стать PASS без `Skip`.
+  - Отсутствие "Skipping enemy without name" в логах
 
-### P2 — изображения: 403 Permission denied при скачивании + таймауты генерации ✅ (исправлено)
-- **Симптом (prod‑логи + `TESTING_REPORT.md`)**:
-  - `gigachat image download error status 403: {"message":"Permission denied"}`
-  - `Failed to generate world map image ... context deadline exceeded` (до исправления)
-- **Решение**:
-  - Добавлен консистентный X-Client-ID header при генерации и скачивании изображений (согласно GigaChat API docs).
-  - Добавлена retry логика в `GenerateImage` через `doRequest` для обработки 429 ошибок.
-  - Уменьшен concurrency limit GigaChat с 5 до 2 для снижения rate limiting.
-  - Увеличен таймаут генерации изображений с 90s до 120s.
+### P2 — RAG индексация: редкие провалы памяти
+- **Симптом**: Событие в БД есть, но в индексе/контексте нет
 - **Action items**:
-  - Мониторить прод-логи на отсутствие 403 и таймаутов после применения фикса.
-  - Добавить явный feature-flag "images off" при системных 403, если проблема сохранится.
-  - Уменьшить шум логов (один warn + счетчик), улучшить degrade: всегда текстовый fallback.
+  - Добавить логирование ошибок индексации с алертами
+  - Реализовать graceful fallback на историю из БД при пустом RAG
+  - Улучшить retry логику для IndexDocument
 - **Как проверить**:
-  - В прод‑логах нет повторяющихся 403/таймаутов; генерация карты не ломает `/newgame` UX.
+  - Отсутствие "тихих" пропусков в интеграционных тестах
 
-### P2 — GigaChat rate limiting (429) влияет на latency/UX ✅ (улучшено)
-- **Симптом (prod‑логи)**: `Rate limited (429), retry attempt ...`.
-- **Решено**: Уменьшен concurrency limit с 5 до 2, добавлен jitter в backoff, улучшена retry логика с semaphore.
+### P2 — GigaChat auth: подозрение на expires_in обработку
+- **Симптом**: Риск некорректной ротации токена из-за единиц измерения
 - **Action items**:
-  - Мониторить метрики rate limiting; при необходимости добавить очередь/дедупликацию.
-  - Метрики: RPS, 429 rate, p95 latency.
+  - Проверить расчет TTL токена и единицы `expires_in`
+  - Добавить тест на "почти истекший токен"
 - **Как проверить**:
-  - Падение доли 429 и tail latency в логах/мониторинге.
+  - Стабильность auth в прод-логах без внезапных ошибок
 
-### P2 — RAG: провалы индексации/поиска → “провалы памяти”
-- **Симптом (сигнал `FEEDBACK.md`)**: событие в БД есть, но в индексе/контексте нет (редкие таймауты/пропуски).
-- **Action items**:
-  - Логировать и алертить ошибки индексации (IndexDocument) + ретраи/очередь.
-  - Добавить “graceful fallback”: если RAG пуст, подтягивать историю из БД (минимальный срез).
-- **Как проверить**:
-  - В логах нет “тихих” пропусков; интеграционные сценарии не теряют ключевые факты.
+---
 
-### P2 — DM Analyzer: пустые/битые поля (например, combat_detected=true, но enemy.name="")
-- **Симптом (`TESTING_REPORT.md`)**: модель возвращает врага без имени → пайплайн пытается стартовать бой и падает внутри (“need at least 2 participants”).
-- **Action items**:
-  - Валидация анализа: минимальные требования для боя (имя/HP/сторона) + fallback (“combat_detected=false” или автозаполнение).
-  - Тесты на “битого” врага/пустой анализ.
-- **Как проверить**:
-  - `tests/integration/telegram_real_llm_user_journey_test.go` без предупреждений про “Skipping enemy without name”.
-
-### P2 — GigaChat auth: подозрение на неверную обработку `expires_in`
-- **Симптом (сигнал `FEEDBACK.md`)**: риск некорректной ротации токена из-за единиц измерения `expires_in`.
-- **Action items**:
-  - Проверить контракт GigaChat auth и расчёт TTL; добавить тест на “почти истёкший токен”.
-- **Как проверить**:
-  - В прод‑логах нет внезапных auth‑ошибок/шторма обновления токенов.
-
-### P2 — `/battlefield` продуктово нестабилен ✅ (решено)
-- **Симптом**: игроки жалуются на нестабильность/непрозрачность (см. `FEEDBACK.md`).
-- **Решено**: `/battlefield` сделан детерминированным выводом для дебага боя (без LLM).
-- **Как проверить**:
-  - `tests/integration/telegram_battlefield_test.go` + ручная проверка в Telegram.
+## 📊 Метрики для мониторинга
+- DM Analyzer: доля успешных парсингов JSON (цель >95%)
+- GigaChat: RPS, 429 rate (<5%), p95 latency (<30s)
+- Images: успешная генерация (>80%), отсутствие 403 ошибок
+- RAG: успешная индексация (>95%), отсутствие "провалов памяти"

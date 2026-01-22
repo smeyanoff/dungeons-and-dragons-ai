@@ -330,62 +330,219 @@ func (uc *AnalyzeDMResponseUseCase) Execute(
 	return analysis, nil
 }
 
-// validateCombatAnalysis проверяет корректность анализа боя
+// validateCombatAnalysis проверяет корректность анализа боя с строгими проверками
 func validateCombatAnalysis(analysis *DMResponseAnalysis) (*DMResponseAnalysis, error) {
-	if !analysis.CombatDetected {
-		return analysis, nil
+	// Строгая валидация всех полей анализа
+	return validateAnalysisStrict(analysis)
+}
+
+// validateAnalysisStrict выполняет полную валидацию анализа с fallback логикой
+func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, error) {
+	if analysis == nil {
+		log.Printf("[DM Analyzer] Analysis is nil, returning empty analysis")
+		return &DMResponseAnalysis{}, nil
 	}
 
-	// Если бой обнаружен, но нет врагов - это ошибка
-	if len(analysis.Enemies) == 0 {
-		log.Printf("[DM Analyzer] Combat detected but no enemies specified, setting combat_detected=false")
-		analysis.CombatDetected = false
-		return analysis, nil
+	// Валидируем боевую ситуацию
+	if analysis.CombatDetected {
+		validEnemies, hasValidEnemies := validateEnemiesStrict(analysis.Enemies)
+		if !hasValidEnemies {
+			log.Printf("[DM Analyzer] Combat detected but no valid enemies found, disabling combat")
+			analysis.CombatDetected = false
+			analysis.Enemies = nil
+		} else {
+			analysis.Enemies = validEnemies
+		}
 	}
 
-	// Валидируем каждого врага
-	validEnemies := make([]Enemy, 0, len(analysis.Enemies))
-	for i, enemy := range analysis.Enemies {
-		// Проверяем имя врага
+	// Валидируем квесты
+	if analysis.QuestCompleted || analysis.QuestFailed {
+		if analysis.QuestTitle == "" {
+			log.Printf("[DM Analyzer] Quest status changed but title is empty, clearing quest flags")
+			analysis.QuestCompleted = false
+			analysis.QuestFailed = false
+		}
+	}
+
+	// Валидируем опыт
+	if analysis.ExperienceGained < 0 {
+		log.Printf("[DM Analyzer] Experience gained is negative (%d), setting to 0", analysis.ExperienceGained)
+		analysis.ExperienceGained = 0
+		analysis.ExperienceReason = ""
+	}
+	if analysis.ExperienceGained > 0 && analysis.ExperienceReason == "" {
+		log.Printf("[DM Analyzer] Experience gained (%d) but no reason provided, setting default", analysis.ExperienceGained)
+		analysis.ExperienceReason = "за достижения в игре"
+	}
+
+	// Валидируем предметы
+	validItems := make([]Item, 0, len(analysis.ItemsReceived))
+	for i, item := range analysis.ItemsReceived {
+		if item.Name == "" || strings.TrimSpace(item.Name) == "" {
+			log.Printf("[DM Analyzer] Item %d has empty name, skipping", i)
+			continue
+		}
+		if item.Quantity <= 0 {
+			item.Quantity = 1
+		}
+		if item.Weight < 0 {
+			item.Weight = 0.1 // минимальный вес
+		}
+		if item.Type == "" {
+			item.Type = "misc"
+		}
+		validItems = append(validItems, item)
+	}
+	analysis.ItemsReceived = validItems
+
+	// Валидируем локации
+	if analysis.LocationVisited != nil {
+		if analysis.LocationVisited.Name == "" {
+			log.Printf("[DM Analyzer] Location visited but name is empty, clearing location")
+			analysis.LocationVisited = nil
+		}
+	}
+
+	// Валидируем NPC
+	if analysis.NPCMet != nil {
+		if analysis.NPCMet.Name == "" {
+			log.Printf("[DM Analyzer] NPC met but name is empty, clearing NPC")
+			analysis.NPCMet = nil
+		}
+	}
+
+	return analysis, nil
+}
+
+// validateEnemiesStrict выполняет строгую валидацию врагов
+func validateEnemiesStrict(enemies []Enemy) ([]Enemy, bool) {
+	if len(enemies) == 0 {
+		return nil, false
+	}
+
+	validEnemies := make([]Enemy, 0, len(enemies))
+	for i, enemy := range enemies {
+		// Строгая проверка имени
 		if enemy.Name == "" || strings.TrimSpace(enemy.Name) == "" {
 			log.Printf("[DM Analyzer] Enemy %d has empty name, skipping", i)
 			continue
 		}
 
-		// Валидируем HP
-		if enemy.HP == nil || *enemy.HP <= 0 {
-			defaultHP := 10
-			log.Printf("[DM Analyzer] Enemy '%s' has invalid HP (%v), setting default %d", enemy.Name, enemy.HP, defaultHP)
+		// Проверяем на слишком длинное имя (защита от мусора)
+		if len(enemy.Name) > 100 {
+			log.Printf("[DM Analyzer] Enemy %d name too long (%d chars), truncating", i, len(enemy.Name))
+			enemy.Name = enemy.Name[:100]
+		}
+
+		// Строгая валидация HP
+		if enemy.HP == nil {
+			defaultHP := 15 // более реалистичное значение по умолчанию
+			log.Printf("[DM Analyzer] Enemy '%s' has null HP, setting default %d", enemy.Name, defaultHP)
 			enemy.HP = &defaultHP
+		} else if *enemy.HP <= 0 {
+			defaultHP := 15
+			log.Printf("[DM Analyzer] Enemy '%s' has invalid HP (%d), setting default %d", enemy.Name, *enemy.HP, defaultHP)
+			enemy.HP = &defaultHP
+		} else if *enemy.HP > 1000 { // защита от нереалистичных значений
+			maxHP := 500
+			log.Printf("[DM Analyzer] Enemy '%s' has unrealistic HP (%d), capping to %d", enemy.Name, *enemy.HP, maxHP)
+			enemy.HP = &maxHP
 		}
 
-		// Валидируем AC
-		if enemy.AC == nil || *enemy.AC <= 0 {
-			defaultAC := 12
-			log.Printf("[DM Analyzer] Enemy '%s' has invalid AC (%v), setting default %d", enemy.Name, enemy.AC, defaultAC)
+		// Строгая валидация AC
+		if enemy.AC == nil {
+			defaultAC := 13 // более реалистичное значение по умолчанию
+			log.Printf("[DM Analyzer] Enemy '%s' has null AC, setting default %d", enemy.Name, defaultAC)
 			enemy.AC = &defaultAC
+		} else if *enemy.AC <= 0 {
+			defaultAC := 13
+			log.Printf("[DM Analyzer] Enemy '%s' has invalid AC (%d), setting default %d", enemy.Name, *enemy.AC, defaultAC)
+			enemy.AC = &defaultAC
+		} else if *enemy.AC > 30 { // защита от нереалистичных значений
+			maxAC := 25
+			log.Printf("[DM Analyzer] Enemy '%s' has unrealistic AC (%d), capping to %d", enemy.Name, *enemy.AC, maxAC)
+			enemy.AC = &maxAC
 		}
 
-		// Валидируем attack_bonus
+		// Строгая валидация attack_bonus
 		if enemy.AttackBonus == nil {
-			defaultBonus := 2
+			defaultBonus := 3 // более реалистичное значение по умолчанию
 			log.Printf("[DM Analyzer] Enemy '%s' has null attack_bonus, setting default %d", enemy.Name, defaultBonus)
+			enemy.AttackBonus = &defaultBonus
+		} else if *enemy.AttackBonus < -5 || *enemy.AttackBonus > 20 { // защита от нереалистичных значений
+			defaultBonus := 3
+			log.Printf("[DM Analyzer] Enemy '%s' has unrealistic attack_bonus (%d), setting default %d", enemy.Name, *enemy.AttackBonus, defaultBonus)
 			enemy.AttackBonus = &defaultBonus
 		}
 
 		validEnemies = append(validEnemies, enemy)
 	}
 
-	// Если после валидации не осталось врагов, отключаем бой
-	if len(validEnemies) == 0 {
-		log.Printf("[DM Analyzer] All enemies failed validation, setting combat_detected=false")
-		analysis.CombatDetected = false
-		analysis.Enemies = nil
-		return analysis, nil
+	return validEnemies, len(validEnemies) > 0
+}
+
+// validateJSONSchema проверяет JSON на соответствие ожидаемой схеме анализа DM
+func validateJSONSchema(jsonStr string) error {
+	// Проверяем наличие обязательных полей верхнего уровня
+	requiredFields := []string{
+		"combat_detected",
+		"enemies",
+		"quest_completed",
+		"quest_failed",
+		"quest_title",
+		"experience_gained",
+		"experience_reason",
+		"items_received",
 	}
 
-	analysis.Enemies = validEnemies
-	return analysis, nil
+	for _, field := range requiredFields {
+		fieldPattern := fmt.Sprintf(`"%s":`, field)
+		if !strings.Contains(jsonStr, fieldPattern) {
+			return fmt.Errorf("missing required field: %s", field)
+		}
+	}
+
+	// Проверяем структуру enemies массива
+	if strings.Contains(jsonStr, `"enemies":`) {
+		enemiesStart := strings.Index(jsonStr, `"enemies":`)
+		if enemiesStart >= 0 {
+			// Ищем начало массива enemies
+			bracketStart := strings.Index(jsonStr[enemiesStart:], "[")
+			bracketEnd := strings.Index(jsonStr[enemiesStart:], "]")
+			if bracketStart >= 0 && bracketEnd > bracketStart {
+				enemiesContent := jsonStr[enemiesStart+bracketStart : enemiesStart+bracketEnd+1]
+				// Проверяем, что enemies это массив
+				if !strings.HasPrefix(strings.TrimSpace(enemiesContent), "[") {
+					return fmt.Errorf("enemies field is not an array")
+				}
+			}
+		}
+	}
+
+	// Проверяем структуру items_received массива
+	if strings.Contains(jsonStr, `"items_received":`) {
+		itemsStart := strings.Index(jsonStr, `"items_received":`)
+		if itemsStart >= 0 {
+			bracketStart := strings.Index(jsonStr[itemsStart:], "[")
+			bracketEnd := strings.Index(jsonStr[itemsStart:], "]")
+			if bracketStart >= 0 && bracketEnd > bracketStart {
+				itemsContent := jsonStr[itemsStart+bracketStart : itemsStart+bracketEnd+1]
+				if !strings.HasPrefix(strings.TrimSpace(itemsContent), "[") {
+					return fmt.Errorf("items_received field is not an array")
+				}
+			}
+		}
+	}
+
+	// Проверяем на потенциально проблемные значения
+	if strings.Contains(jsonStr, `"combat_detected": true`) {
+		// Если бой обнаружен, проверяем наличие enemies
+		if !strings.Contains(jsonStr, `"enemies": [`) || strings.Contains(jsonStr, `"enemies": []`) {
+			log.Printf("[DM Analyzer] Warning: combat_detected=true but enemies array is empty or missing")
+		}
+	}
+
+	return nil
 }
 
 // analyzeWithLLM использует LLM для анализа ответа DM
@@ -393,7 +550,7 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLM(
 	ctx context.Context,
 	dmResponse string,
 ) (*DMResponseAnalysis, error) {
-	const maxRetries = 2
+	const maxRetries = 5 // Увеличено для лучшего восстановления truncated JSON
 	return uc.analyzeWithLLMWithRetry(ctx, dmResponse, 0, maxRetries)
 }
 
@@ -404,6 +561,12 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 	attempt int,
 	maxRetries int,
 ) (*DMResponseAnalysis, error) {
+	// Валидируем входные данные перед отправкой в LLM
+	if err := validateDMResponseInput(dmResponse); err != nil {
+		log.Printf("[DM Analyzer] Invalid DM response input: %v, returning fallback analysis", err)
+		return fallbackAnalysisFromResponse(dmResponse), nil
+	}
+
 	prompt := buildAnalysisPrompt(dmResponse, attempt > 0)
 
 	// Увеличено до 30 секунд, так как без ограничения токенов ответ может быть длиннее
@@ -455,6 +618,21 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 				return fallbackAnalysisFromResponse(dmResponse), nil
 			}
 		}
+	}
+
+	// Предварительная валидация JSON схемы перед парсингом
+	if err := validateJSONSchema(cleaned); err != nil {
+		recordAnalyzerJSONFailure("invalid_schema")
+		log.Printf("[DM Analyzer] JSON schema validation failed: %v (attempt: %d)", err, attempt+1)
+		log.Printf("[DM Analyzer] Invalid JSON: %s", cleaned)
+		// Если это не последняя попытка, повторяем запрос
+		if attempt < maxRetries {
+			log.Printf("[DM Analyzer] Retrying LLM request due to schema validation error (attempt %d/%d)", attempt+2, maxRetries+1)
+			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
+		}
+		// Возвращаем детерминированный fallback вместо ошибки
+		log.Printf("[DM Analyzer] Returning fallback analysis after schema validation failures")
+		return fallbackAnalysisFromResponse(dmResponse), nil
 	}
 
 	analysis, err := decodeStrictAnalysis(cleaned)
@@ -630,8 +808,8 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 		return nil
 	}
 
-	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
-	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// Создаем контекст с таймаутом для генерации изображений (увеличено до 180 секунд для обработки rate limiting)
+	imgCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 
 	var generatedImages []GeneratedImage
@@ -659,8 +837,13 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 
 		resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
 		if err != nil {
-			// Логируем ошибку, но не прерываем выполнение
-			log.Printf("Failed to auto-generate image for item '%s': %v", item.Name, err)
+			// Graceful fallback: добавляем текстовое описание вместо изображения
+			log.Printf("Failed to auto-generate image for item '%s', using text fallback: %v", item.Name, err)
+			generatedImages = append(generatedImages, GeneratedImage{
+				Type:       "item",
+				ImagePath:  "", // Пустой путь означает текстовое описание
+				EntityName: item.Name,
+			})
 			// Продолжаем генерацию для остальных предметов
 			continue
 		}
@@ -687,8 +870,8 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 		return nil
 	}
 
-	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
-	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// Создаем контекст с таймаутом для генерации изображений (увеличено до 180 секунд для обработки rate limiting)
+	imgCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 
 	// Формируем промпт для генерации изображения локации
@@ -712,8 +895,13 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 
 	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
 	if err != nil {
-		// Логируем ошибку, но не прерываем выполнение
-		log.Printf("Failed to auto-generate image for location '%s': %v", location.Name, err)
+		// Graceful fallback: не возвращаем изображение, но логируем
+		errStr := err.Error()
+		if strings.Contains(errStr, "429") || strings.Contains(errStr, "Too Many Requests") || strings.Contains(errStr, "rate limited") {
+			log.Printf("Rate limited during image generation for location '%s', skipping auto-generation: %v", location.Name, err)
+		} else {
+			log.Printf("Failed to auto-generate image for location '%s', using text fallback: %v", location.Name, err)
+		}
 		return nil
 	}
 
@@ -735,8 +923,8 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 		return nil
 	}
 
-	// Создаем контекст с таймаутом для генерации изображений (увеличено до 90 секунд для медленных запросов)
-	imgCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	// Создаем контекст с таймаутом для генерации изображений (увеличено до 180 секунд для обработки rate limiting)
+	imgCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 
 	// Формируем промпт для генерации изображения NPC
@@ -760,8 +948,13 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 
 	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
 	if err != nil {
-		// Логируем ошибку, но не прерываем выполнение
-		log.Printf("Failed to auto-generate image for NPC '%s': %v", npc.Name, err)
+		// Graceful fallback: не возвращаем изображение, но логируем
+		errStr := err.Error()
+		if strings.Contains(errStr, "429") || strings.Contains(errStr, "Too Many Requests") || strings.Contains(errStr, "rate limited") {
+			log.Printf("Rate limited during image generation for NPC '%s', skipping auto-generation: %v", npc.Name, err)
+		} else {
+			log.Printf("Failed to auto-generate image for NPC '%s', using text fallback: %v", npc.Name, err)
+		}
 		return nil
 	}
 
@@ -1317,6 +1510,8 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 	inString := false
 	escapeNext := false
 	lastValidPos := 0
+	inKey := false
+	inValue := false
 
 scanLoop:
 	for i := 0; i < len(jsonStr); i++ {
@@ -1367,6 +1562,14 @@ scanLoop:
 				jsonStr = jsonStr[:i]
 				break scanLoop
 			}
+		case ':':
+			if !inKey && !inValue {
+				inValue = true
+			}
+		case ',':
+			if !inKey && !inValue {
+				inKey = true
+			}
 		}
 	}
 
@@ -1376,6 +1579,9 @@ scanLoop:
 	}
 
 	result := strings.TrimRight(jsonStr, " \n\r\t,")
+
+	// Исправляем незавершенные ключи и значения для DMResponseAnalysis структуры
+	result = tryRepairDMResponseJSON(result)
 
 	// Закрываем незакрытые строки
 	if inString {
@@ -1396,6 +1602,118 @@ scanLoop:
 	}
 
 	return result
+}
+
+// validateDMResponseInput проверяет входные данные перед отправкой в LLM
+func validateDMResponseInput(dmResponse string) error {
+	if strings.TrimSpace(dmResponse) == "" {
+		return fmt.Errorf("empty DM response")
+	}
+
+	if len(dmResponse) > 50000 { // Защита от слишком длинных ответов
+		return fmt.Errorf("DM response too long: %d characters", len(dmResponse))
+	}
+
+	// Проверяем на наличие потенциально проблемных символов
+	if strings.Contains(dmResponse, "\x00") {
+		return fmt.Errorf("DM response contains null bytes")
+	}
+
+	return nil
+}
+
+// tryRepairDMResponseJSON пытается исправить незавершенные ключи и значения для DMResponseAnalysis структуры
+func tryRepairDMResponseJSON(jsonStr string) string {
+	jsonStr = strings.TrimSpace(jsonStr)
+
+	// Проверяем на незавершенные ключи и значения, характерные для DMResponseAnalysis
+	repairRules := map[string]string{
+		`"combat_detected":`:          `"combat_detected":false`,
+		`"enemies":`:                  `"enemies":[]`,
+		`"quest_completed":`:          `"quest_completed":false`,
+		`"quest_failed":`:             `"quest_failed":false`,
+		`"quest_title":`:              `"quest_title":""`,
+		`"experience_gained":`:        `"experience_gained":0`,
+		`"experience_reason":`:        `"experience_reason":""`,
+		`"items_received":`:           `"items_received":[]`,
+		`"location_visited":`:         `"location_visited":null`,
+		`"npc_met":`:                  `"npc_met":null`,
+		`"generated_images":`:         `"generated_images":[]`,
+	}
+
+	// Проверяем каждый ключ на незавершенность
+	for partialKey, fullReplacement := range repairRules {
+		if strings.HasSuffix(jsonStr, partialKey) {
+			log.Printf("[DM Analyzer] Detected truncated JSON ending with partial key '%s', completing with default value", partialKey)
+			return jsonStr + fullReplacement + "}"
+		}
+
+		// Проверяем на незавершенные значения (например, "combat_detected":fal или "experience_gained":)
+		if strings.Contains(jsonStr, partialKey) {
+			// Ищем позицию ключа
+			keyPos := strings.LastIndex(jsonStr, partialKey)
+			if keyPos >= 0 {
+				// Берем часть после ключа
+				afterKey := jsonStr[keyPos+len(partialKey):]
+				afterKey = strings.TrimSpace(afterKey)
+
+				// Проверяем на незавершенные значения
+				if afterKey == "" {
+					// Ключ без значения, добавляем полное значение
+					beforeKey := jsonStr[:keyPos+len(partialKey)]
+					log.Printf("[DM Analyzer] Key '%s' has no value, completing with default", partialKey)
+					return beforeKey + fullReplacement + "}"
+				}
+
+				// Проверяем на незавершенные булевы значения
+				if partialKey == `"combat_detected":` && strings.HasPrefix(afterKey, "fal") {
+					beforeValue := jsonStr[:keyPos+len(partialKey)]
+					log.Printf("[DM Analyzer] Boolean value 'fal' incomplete, completing to 'false'")
+					return beforeValue + "false}"
+				}
+				if partialKey == `"combat_detected":` && strings.HasPrefix(afterKey, "tru") {
+					beforeValue := jsonStr[:keyPos+len(partialKey)]
+					log.Printf("[DM Analyzer] Boolean value 'tru' incomplete, completing to 'true'")
+					return beforeValue + "true}"
+				}
+
+				// Проверяем на незавершенные числовые значения
+				if partialKey == `"experience_gained":` && (afterKey == "" || strings.HasPrefix(afterKey, "0") && len(afterKey) < 2) {
+					beforeValue := jsonStr[:keyPos+len(partialKey)]
+					log.Printf("[DM Analyzer] Numeric value incomplete, completing to '0'")
+					return beforeValue + "0}"
+				}
+
+				// Проверяем на незавершенные строковые значения
+				if (partialKey == `"quest_title":` || partialKey == `"experience_reason":`) &&
+					(strings.HasPrefix(afterKey, `"`) && !strings.Contains(afterKey, `"`)) {
+					beforeValue := jsonStr[:keyPos+len(partialKey)]
+					log.Printf("[DM Analyzer] String value incomplete, completing with empty string")
+					return beforeValue + `""}`
+				}
+			}
+		}
+	}
+
+	// Проверяем на незавершенные массивы врагов
+	if strings.HasSuffix(jsonStr, `"enemies":[`) {
+		log.Printf("[DM Analyzer] Detected truncated JSON ending with 'enemies:[', completing with empty array")
+		return jsonStr + "]"
+	}
+
+	// Проверяем на незавершенные массивы предметов
+	if strings.HasSuffix(jsonStr, `"items_received":[`) {
+		log.Printf("[DM Analyzer] Detected truncated JSON ending with 'items_received:[', completing with empty array")
+		return jsonStr + "]"
+	}
+
+	// Проверяем на незавершенные массивы изображений
+	if strings.HasSuffix(jsonStr, `"generated_images":[`) {
+		log.Printf("[DM Analyzer] Detected truncated JSON ending with 'generated_images:[', completing with empty array")
+		return jsonStr + "]"
+	}
+
+	return jsonStr
 }
 
 func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
@@ -1424,15 +1742,31 @@ func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
 	}
 
 	if uc.indexDocUC != nil {
-		doc := ragdomain.Document{
+		// Индексируем location event как StoryEvent для истории
+		storyDoc := ragdomain.Document{
 			ID:        uuid.New().String(),
 			Source:    ragdomain.SourceEvent,
 			SessionID: uc.sessionID,
 			Text:      content,
 			Timestamp: time.Now(),
 		}
-		if err := uc.indexDocumentWithRetry(ctx, doc, 3); err != nil {
-			return fmt.Errorf("failed to index location event in RAG: %w", err)
+		if err := uc.indexDocUC.Execute(ctx, storyDoc); err != nil {
+			log.Printf("[DM Analyzer] Failed to index location event story in RAG: %v", err)
+			// Graceful fallback - продолжаем без индексации
+		}
+
+		// Дополнительно индексируем location event как отдельный документ для лучшего поиска RAG
+		// Это позволяет находить информацию о location events через семантический поиск
+		locationDoc := ragdomain.Document{
+			ID:        uuid.New().String(),
+			Source:    ragdomain.SourceLocation,
+			SessionID: uc.sessionID,
+			Text:      fmt.Sprintf("Локация: %s. %s", resp.Event.Name, resp.Event.Description),
+			Timestamp: time.Now(),
+		}
+		if err := uc.indexDocUC.Execute(ctx, locationDoc); err != nil {
+			log.Printf("[DM Analyzer] Failed to index location event as separate document: %v", err)
+			// Graceful fallback - продолжаем без дополнительной индексации
 		}
 	}
 
@@ -1475,47 +1809,6 @@ func buildLocationEventStory(ev *world.WorldEvent, fallbackDescription string) s
 	return strings.Join(parts, "\n")
 }
 
-// indexDocumentWithRetry индексирует документ в RAG с повторными попытками
-func (uc *AnalyzeDMResponseUseCase) indexDocumentWithRetry(
-	ctx context.Context,
-	doc ragdomain.Document,
-	maxRetries int,
-) error {
-	const initialBackoff = 100 * time.Millisecond
-	const maxBackoff = 2 * time.Second
-
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			const maxSafeShift = 30
-			shift := attempt - 1
-			if shift < 0 {
-				shift = 0
-			} else if shift > maxSafeShift {
-				shift = maxSafeShift
-			}
-			// #nosec G115 - shift ограничен безопасным диапазоном
-			backoff := initialBackoff * time.Duration(1<<uint(shift))
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
-
-		if err := uc.indexDocUC.Execute(ctx, doc); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-	}
-
-	return lastErr
-}
 
 // findLocationIDByName ищет локацию по имени в мире и возвращает её ID
 func (uc *AnalyzeDMResponseUseCase) findLocationIDByName(ctx context.Context, locationName string) uint {

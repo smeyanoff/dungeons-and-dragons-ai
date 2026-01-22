@@ -23,6 +23,7 @@ type Client struct {
 	requestCount  int64         // Counter for metrics
 	errorCount    int64         // Counter for error metrics
 	rateLimitCount int64        // Counter for 429 responses
+	startTime     time.Time     // Time when client was created for RPS calculation
 }
 
 func NewClient(cfg Config) *Client {
@@ -41,8 +42,8 @@ func NewClient(cfg Config) *Client {
 		}
 	}
 
-	// Concurrency limit: по умолчанию 5 одновременных запросов
-	concurrencyLimit := 5
+	// Concurrency limit: уменьшаем до 2 для предотвращения rate limiting
+	concurrencyLimit := 2
 	if cfg.ConcurrencyLimit > 0 {
 		concurrencyLimit = cfg.ConcurrencyLimit
 	}
@@ -58,6 +59,7 @@ func NewClient(cfg Config) *Client {
 		requestCount:  0,
 		errorCount:    0,
 		rateLimitCount: 0,
+		startTime:     time.Now(),
 	}
 }
 
@@ -73,7 +75,18 @@ func (c *Client) GetMetrics() map[string]int64 {
 		"requests":     atomic.LoadInt64(&c.requestCount),
 		"errors":       atomic.LoadInt64(&c.errorCount),
 		"rate_limits":  atomic.LoadInt64(&c.rateLimitCount),
+		"rps":          c.calculateRPS(), // Добавляем RPS метрику
 	}
+}
+
+// calculateRPS вычисляет requests per second на основе общего времени работы
+func (c *Client) calculateRPS() int64 {
+	elapsed := time.Since(c.startTime)
+	if elapsed.Seconds() == 0 {
+		return 0
+	}
+	requests := atomic.LoadInt64(&c.requestCount)
+	return int64(float64(requests) / elapsed.Seconds())
 }
 
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
@@ -88,8 +101,8 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 	// Добавляем X-Client-ID для image-related запросов (генерация и скачивание изображений)
 	isImageRequest := strings.Contains(url, "/files/") || (strings.Contains(url, "/chat/completions") && len(body) > 0 && strings.Contains(string(body), "text2image"))
 	const maxRetries = 3
-	const initialBackoff = 2 * time.Second
-	const maxBackoff = 30 * time.Second
+	const initialBackoff = 5 * time.Second // Увеличиваем начальную задержку для rate limiting
+	const maxBackoff = 60 * time.Second    // Увеличиваем максимальную задержку
 	const jitterFactor = 0.1 // 10% jitter
 
 	var lastErr error
@@ -177,10 +190,10 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			req.Header.Set("Accept", "application/json")
 			req.Header.Set("Content-Type", "application/json")
 
-			// Добавляем X-Client-ID для image-related запросов
-			if isImageRequest && c.cfg.ClientID != "" {
-				req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
-			}
+		// Добавляем X-Client-ID для image-related запросов
+		if isImageRequest && c.cfg.ClientID != "" {
+			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
+		}
 
 			resp, err = c.client.Do(req)
 			if err != nil {
@@ -196,66 +209,13 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			data, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
-			log.Printf("GigaChat: Permission denied (403), attempt %d/%d. Response: %s", attempt+1, maxRetries+1, string(data))
+			log.Printf("GigaChat: Permission denied (403) for URL %s, attempt %d/%d. Response: %s", url, attempt+1, maxRetries+1, string(data))
+			log.Printf("GigaChat: NOT refreshing token for 403 error - this indicates permissions issue, not token expiry")
 
-			// Если это не последняя попытка, пробуем обновить токен и повторить
-			if attempt < maxRetries {
-				// Инвалидируем старый токен
-				c.auth.invalidateToken()
-
-				// Получаем новый токен
-				newToken, err := c.auth.getToken(ctx)
-				if err != nil {
-					log.Printf("GigaChat: Failed to refresh token after 403: %v", err)
-					lastErr = fmt.Errorf("gigachat error status 403: Permission denied (failed to refresh token: %w)", err)
-					// Добавляем небольшую задержку перед следующей попыткой
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					case <-time.After(1 * time.Second):
-					}
-					continue
-				}
-
-				log.Printf("GigaChat: Token refreshed after 403, retrying request")
-
-				// Добавляем небольшую задержку перед повторным запросом (может быть временная проблема)
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(1 * time.Second):
-				}
-
-				// Повторяем запрос с новым токеном
-				req, err = http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
-				if err != nil {
-					return nil, err
-				}
-				req.Header.Set("Authorization", "Bearer "+newToken)
-				req.Header.Set("Accept", "application/json")
-				req.Header.Set("Content-Type", "application/json")
-
-				// Добавляем X-Client-ID для image-related запросов
-				if isImageRequest && c.cfg.ClientID != "" {
-					req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
-				}
-
-				resp, err = c.client.Do(req)
-				if err != nil {
-					lastErr = err
-					continue
-				}
-
-				// Если после обновления токена все еще 403, продолжаем retry цикл
-				if resp.StatusCode == 403 {
-					lastErr = fmt.Errorf("gigachat error status 403: Permission denied")
-					continue
-				}
-				// Если получили другой статус, продолжаем обработку
-			} else {
-				// Если это последняя попытка, возвращаем ошибку с деталями
-				return nil, fmt.Errorf("gigachat error status 403: Permission denied - возможно, отсутствуют необходимые права доступа или неверные учетные данные. Ответ API: %s", string(data))
-			}
+			// Для 403 ошибок НЕ обновляем токен, так как это проблема прав доступа
+			// 403 = Forbidden, что означает недостаточные права для данного ClientID/токена
+			lastErr = fmt.Errorf("gigachat error status 403: Permission denied - check ClientID permissions, X-Client-ID, and API access rights. Response: %s", string(data))
+			break
 		}
 
 		// Если получили 429 Too Many Requests, пробуем повторить с задержкой
