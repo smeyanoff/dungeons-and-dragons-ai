@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"dungeons-and-dragons-ai/internal/llm/domain"
@@ -40,6 +41,7 @@ type GenerateImageRequest struct {
 	UserPrompt      string // Пользовательский промпт (что нарисовать)
 	Type            string // Тип изображения: "location", "npc", "item", "character", "custom"
 	EntityID        uint   // ID сущности (локации, NPC, предмета)
+	EntityName      string // Уникальное имя сущности для кэширования (используется когда EntityID = 0)
 	ForceRegenerate bool   // Принудительная регенерация (игнорировать кэш)
 	UserID          int64  // ID пользователя для проверки лимитов
 	SkipLimitCheck  bool   // Пропустить проверку лимита (для Premium пользователей)
@@ -67,16 +69,27 @@ func (uc *ImageGenerationUseCase) Execute(ctx context.Context, req GenerateImage
 		}
 	}
 
-	// Генерируем имя файла на основе типа и ID сущности (или хэша промпта)
+	// Генерируем имя файла на основе типа и уникального идентификатора сущности
 	var filename string
 	if req.EntityID > 0 {
+		// Используем EntityID если он доступен
 		filename = fmt.Sprintf("%s_%d.jpg", req.Type, req.EntityID)
+	} else if req.EntityName != "" {
+		// Используем EntityName для создания уникального идентификатора
+		// Нормализуем имя (убираем пробелы, приводим к нижнему регистру)
+		normalizedName := strings.ToLower(strings.ReplaceAll(req.EntityName, " ", "_"))
+		normalizedName = strings.ReplaceAll(normalizedName, "'", "")
+		normalizedName = strings.ReplaceAll(normalizedName, "\"", "")
+		// Ограничиваем длину имени файла (максимум 100 символов)
+		if len(normalizedName) > 100 {
+			hash := sha256.Sum256([]byte(normalizedName))
+			normalizedName = hex.EncodeToString(hash[:8]) // 16 символов
+		}
+		filename = fmt.Sprintf("%s_%s.jpg", req.Type, normalizedName)
 	} else {
-		// Для кастомных изображений используем SHA256 хэш промпта
-		// Используем SHA256 вместо MD5 для более безопасного хэширования
+		// Для полностью кастомных изображений используем SHA256 хэш промпта
 		hash := sha256.Sum256([]byte(req.UserPrompt))
-		// Используем первые 16 байт (32 hex символа) из SHA256 хэша для имени файла
-		filename = fmt.Sprintf("%s_%s_%s.jpg", req.Type, hex.EncodeToString(hash[:16]), time.Now().Format("20060102"))
+		filename = fmt.Sprintf("%s_%s.jpg", req.Type, hex.EncodeToString(hash[:16]))
 	}
 
 	// Проверяем кэш, если не требуется принудительная регенерация

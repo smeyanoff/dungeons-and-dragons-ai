@@ -233,6 +233,7 @@ type GenerateImageRequest struct {
 	UserPrompt      string
 	Type            string // "location", "npc", "item", "character", "custom"
 	EntityID        uint
+	EntityName      string // Уникальное имя сущности для кэширования
 	ForceRegenerate bool
 	UserID          int64
 	SkipLimitCheck  bool
@@ -1000,6 +1001,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 			UserPrompt:      userPrompt,
 			Type:            "item",
 			EntityID:        0, // Пока нет привязки к ID предмета в БД
+			EntityName:      item.Name, // Используем имя предмета для кэширования
 			ForceRegenerate: false,
 			UserID:          uc.userID,
 			SkipLimitCheck:  false, // Проверяем лимиты
@@ -1071,6 +1073,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 		UserPrompt:      userPrompt,
 		Type:            "location",
 		EntityID:        0, // Пока нет привязки к ID локации в БД
+		EntityName:      location.Name, // Используем имя локации для кэширования
 		ForceRegenerate: false,
 		UserID:          uc.userID,
 		SkipLimitCheck:  false, // Проверяем лимиты
@@ -1135,6 +1138,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 		UserPrompt:      userPrompt,
 		Type:            "npc",
 		EntityID:        0, // Пока нет привязки к ID NPC в БД
+		EntityName:      npc.Name, // Используем имя NPC для кэширования
 		ForceRegenerate: false,
 		UserID:          uc.userID,
 		SkipLimitCheck:  false, // Проверяем лимиты

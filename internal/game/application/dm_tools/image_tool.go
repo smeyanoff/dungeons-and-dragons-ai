@@ -35,6 +35,7 @@ type GenerateImageRequest struct {
 	UserPrompt      string
 	Type            string
 	EntityID        uint
+	EntityName      string // Уникальное имя сущности для кэширования
 	ForceRegenerate bool
 	UserID          int64
 	SkipLimitCheck  bool
