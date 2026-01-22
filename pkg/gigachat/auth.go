@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/time/rate"
 )
 
 type TokenResponse struct {
@@ -27,6 +28,7 @@ type authClient struct {
 	lastTokenRefresh  time.Time
 	mu                sync.RWMutex
 	client            *http.Client
+	rateLimiter       *rate.Limiter // Rate limiter for auth requests
 }
 
 func newAuthClient(cfg Config) *authClient {
@@ -45,12 +47,17 @@ func newAuthClient(cfg Config) *authClient {
 		}
 	}
 
+	// Rate limiter for auth requests: more conservative (2 RPS, burst 1)
+	// Auth requests should be limited to prevent token refresh storms
+	authRateLimiter := rate.NewLimiter(2, 1)
+
 	return &authClient{
 		cfg: cfg,
 		client: &http.Client{
 			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
+		rateLimiter: authRateLimiter,
 	}
 }
 
@@ -60,12 +67,12 @@ func (a *authClient) getToken(ctx context.Context) (string, error) {
 	a.mu.RLock()
 	// Проверяем, есть ли валидный токен
 	if a.token != nil {
-		// Проверяем expires_at (оставляем запас 60 секунд)
+		// Проверяем expires_at (оставляем запас 30 секунд для частого обновления)
 		now := time.Now().Unix()
 		if a.token.ExpiresAt > 0 {
-			// Токен валиден, если до истечения остается больше 60 секунд
+			// Токен валиден, если до истечения остается больше 30 секунд
 			timeUntilExpiry := a.token.ExpiresAt - now
-			if timeUntilExpiry > 60 {
+			if timeUntilExpiry > 30 {
 				token := a.token.AccessToken
 				a.mu.RUnlock()
 				return token, nil
@@ -87,6 +94,7 @@ func (a *authClient) getToken(ctx context.Context) (string, error) {
 	a.mu.RUnlock()
 
 	// Токена нет или он истек, получаем новый
+	log.Printf("[GigaChat Auth] Requesting new token (no cached or expired token)")
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -153,10 +161,10 @@ func (a *authClient) getToken(ctx context.Context) (string, error) {
 		now := time.Now().Unix()
 		// Безопасное вычисление разницы времени (может быть отрицательным, если токен уже истек)
 		expiresIn := token.ExpiresAt - now
-		log.Printf("GigaChat: New token obtained, expires in %d seconds (at %s)",
+		log.Printf("[GigaChat Auth] New token obtained, expires in %d seconds (at %s)",
 			expiresIn, time.Unix(token.ExpiresAt, 0).Format(time.RFC3339))
 	} else {
-		log.Printf("GigaChat: New token obtained (expires_at not provided by API)")
+		log.Printf("[GigaChat Auth] New token obtained (expires_at not provided by API)")
 	}
 
 	return token.AccessToken, nil
@@ -257,6 +265,15 @@ func (a *authClient) requestToken(ctx context.Context, clientID, authHeader, sco
 	// Логируем детали запроса для диагностики (без credentials)
 	log.Printf("GigaChat auth request: Method=%s, URL=%s, Scope=%s, RqUID=%s, Content-Type=%s, Authorization header present=%v",
 		req.Method, req.URL.String(), scope, rqUID, req.Header.Get("Content-Type"), req.Header.Get("Authorization") != "")
+
+	// Apply rate limiter before making the request
+	authRateLimiterTokens := a.rateLimiter.Tokens()
+	log.Printf("[GigaChat Auth] Token request, rate limiter tokens=%.1f", authRateLimiterTokens)
+
+	if err := a.rateLimiter.Wait(ctx); err != nil {
+		log.Printf("[GigaChat Auth] Rate limiter wait failed for token request: %v", err)
+		return nil, fmt.Errorf("auth rate limiter wait failed: %w", err)
+	}
 
 	resp, err := a.client.Do(req)
 	if err != nil {

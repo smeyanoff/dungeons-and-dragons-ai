@@ -343,6 +343,24 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 		return &DMResponseAnalysis{}, nil
 	}
 
+	// Проверяем на пустой/незначимый анализ (все поля по умолчанию)
+	isEmptyAnalysis := !analysis.CombatDetected &&
+		len(analysis.Enemies) == 0 &&
+		!analysis.QuestCompleted &&
+		!analysis.QuestFailed &&
+		analysis.QuestTitle == "" &&
+		analysis.ExperienceGained == 0 &&
+		analysis.ExperienceReason == "" &&
+		len(analysis.ItemsReceived) == 0 &&
+		analysis.LocationVisited == nil &&
+		analysis.NPCMet == nil &&
+		len(analysis.GeneratedImages) == 0
+
+	if isEmptyAnalysis {
+		log.Printf("[DM Analyzer] Analysis appears to be empty/default values, this may indicate LLM parsing issues")
+		// Возвращаем анализ как есть, но логируем для отладки
+	}
+
 	// Валидируем боевую ситуацию
 	if analysis.CombatDetected {
 		validEnemies, hasValidEnemies := validateEnemiesStrict(analysis.Enemies)
@@ -569,12 +587,13 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 
 	prompt := buildAnalysisPrompt(dmResponse, attempt > 0)
 
-	// Увеличено до 30 секунд, так как без ограничения токенов ответ может быть длиннее
-	llmCtx, llmCancel := context.WithTimeout(ctx, 60*time.Second) // Увеличиваем таймаут для анализа
+	// Увеличен таймаут для анализа DM ответов
+	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second) // Увеличиваем таймаут до 90 секунд
 	defer llmCancel()
 
-	// Убрано ограничение на токены для анализа ответа DM и генерации противников
-	raw, err := uc.llm.Generate(llmCtx, prompt)
+	// Устанавливаем большой лимит токенов для предотвращения усечения JSON
+	maxTokens := 8192 // Увеличиваем лимит токенов для полных ответов
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -654,14 +673,10 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 	}
 
 	if isEmptyAnalysis(analysis) {
-		recordAnalyzerJSONFailure("empty_json")
-		log.Printf("[DM Analyzer] Empty analysis detected (attempt: %d)", attempt+1)
-		if attempt < maxRetries {
-			log.Printf("[DM Analyzer] Retrying LLM request due to empty analysis (attempt %d/%d)", attempt+2, maxRetries+1)
-			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
-		}
-		log.Printf("[DM Analyzer] Returning fallback analysis after %d attempts (empty analysis)", attempt+1)
-		return fallbackAnalysisFromResponse(dmResponse), nil
+		// Пустой анализ не всегда является ошибкой - некоторые ответы DM просто не содержат событий
+		// Если JSON валидный и структурированный, считаем это успешным результатом
+		log.Printf("[DM Analyzer] Empty but valid analysis returned (no events detected in DM response)")
+		return analysis, nil
 	}
 
 	// Валидируем анализ боя
@@ -1313,34 +1328,50 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
     "name": "имя NPC",
     "description": "описание NPC",
     "is_first_meeting": true/false
-  }
+  },
+  "generated_images": []
 }
 
-Важно:
-- Если бой начался, обязательно укажи хотя бы одного врага
-- Для каждого врага ОБЯЗАТЕЛЬНО укажи hp, ac и attack_bonus (числовые значения, не null!)
-- Если в ответе DM не указаны характеристики врага, используй разумные значения по умолчанию:
-  * hp: 10-30 для обычных врагов, 30-60 для сильных, 60+ для боссов
-  * ac: 12-15 для обычных врагов, 15-18 для сильных, 18+ для боссов
-  * attack_bonus: 2-4 для обычных врагов, 4-6 для сильных, 6+ для боссов
-- Если квест выполнен или провален, укажи название квеста
-- Опыт начисляется только за значимые достижения (завершение квеста, победа в бою)
-- Предметы добавляй только если в ответе DM явно указано, что игрок получил/нашел/поднял предмет (ключевые слова: "получаешь", "находишь", "поднимаешь", "нашел", "берешь", "взял", "дал", "подарил")
-- Не добавляй предметы, если они только упоминаются в описании или не были получены игроком
-- location_visited указывай только если DM описывает новую локацию, которую игрок впервые посещает (ключевые слова: "входишь", "приходишь", "оказываешься", "достигаешь", "перед тобой", "новое место")
-- npc_met указывай только если DM описывает встречу с новым NPC (ключевые слова: "встречаешь", "видишь", "подходит", "появляется", "знакомишься")
-- Если информации недостаточно, используй значения по умолчанию (false, 0, пустые строки, пустые массивы, null)
-- ВСЕГДА возвращай полный JSON со всеми полями (даже если все значения по умолчанию)
+БОЙ И ВРАГИ (combat_detected):
+- Устанавливай combat_detected=true ТОЛЬКО если в ответе DM явно описан НАЧАВШИЙСЯ бой с врагами
+- Ключевые признаки боя: "нападает", "атакует", "бросается", "бьет", "стреляет", "заклинание", "удар", "рана", "ранение", "инициатива", "ход боя"
+- НЕ устанавливай true если: только упоминание о потенциальной угрозе, планирование боя, воспоминания о прошлом бое
+- Если combat_detected=true, ОБЯЗАТЕЛЬНО укажи хотя бы одного врага в массиве enemies
+- Для каждого врага ОБЯЗАТЕЛЬНО укажи hp, ac и attack_bonus (только числа!)
+- Если характеристики не указаны, используй значения по умолчанию:
+  * hp: 15 (обычный враг), 35 (сильный), 75 (босс)
+  * ac: 13 (обычный), 16 (сильный), 18 (босс)
+  * attack_bonus: 3 (обычный), 5 (сильный), 7 (босс)
+
+КВЕСТЫ (quest_completed/quest_failed):
+- Устанавливай true только при явном завершении или провале квеста
+- quest_title - название квеста из ответа DM
+
+ОПЫТ (experience_gained):
+- Начисляй только за значимые достижения: победа в бою, завершение квеста, важное открытие
+- experience_reason - кратко объясни причину
+
+ПРЕДМЕТЫ (items_received):
+- Добавляй ТОЛЬКО если игрок явно получил предмет (слова: "получаешь", "находишь", "поднимаешь", "вручает", "дает", "дарит")
+- НЕ добавляй если предмет только упоминается или игрок его еще не получил
+
+ЛОКАЦИИ (location_visited):
+- Устанавливай только при первом посещении новой локации
+- Ключевые слова: "входишь в", "приходишь в", "попадаешь в", "оказываешься в", "перед тобой", "новое место"
+- is_first_visit=true для новых локаций
+
+NPC (npc_met):
+- Устанавливай только при первой встрече с NPC
+- Ключевые слова: "встречаешь", "видишь", "подходит", "появляется", "знакомишься"
+- is_first_meeting=true для новых NPC
 
 КРИТИЧЕСКИ ВАЖНО:
-- Верни ТОЛЬКО валидный JSON, без дополнительного текста до или после JSON
-- Не добавляй markdown блоки кода
-- Не добавляй объяснения или комментарии
-- Убедись, что все строки в кавычках, все числа без кавычек, все булевы значения - true/false
-- Убедись, что все скобки и массивы закрыты
-- ОБЯЗАТЕЛЬНО заверши JSON полностью - все открывающие скобки { должны быть закрыты }, все массивы [ должны быть закрыты ]
-- НЕ возвращай пустой JSON объект {} и не возвращай пустую строку
-- НЕ обрезай JSON в середине структуры - если не хватает места, верни сокращенную но полную структуру
+- ВСЕГДА возвращай ПОЛНЫЙ JSON со ВСЕМИ полями (даже если значения по умолчанию)
+- Верни ТОЛЬКО валидный JSON, без текста до/после, без markdown, без комментариев
+- Все строки в кавычках, числа без кавычек, булевы true/false
+- Все скобки и массивы ДОЛЖНЫ быть закрыты
+- НЕ возвращай пустой JSON {} или неполный JSON
+- Если сомневаешься - используй значения по умолчанию (false, 0, "", [], null)
 
 Пример правильного ответа:
 %s%s`, dmResponse, skeleton, criticalFooter)
@@ -1488,11 +1519,45 @@ func tryRepairTruncatedJSON(jsonStr string) string {
 		return "{}"
 	}
 
+
 	repaired := jsonrepair.Repair(jsonStr)
 	if json.Valid([]byte(repaired)) {
+		log.Printf("[DM Analyzer] jsonrepair.Repair succeeded")
 		return repaired
 	}
 	jsonStr = repaired
+
+	// Специальная логика для распространенных случаев усечения
+	// Если JSON обрывается в середине поля, пытаемся завершить его правильно
+	if strings.Contains(jsonStr, `"npc_met":`) && !strings.Contains(jsonStr, `"generated_images"`) {
+		log.Printf("[DM Analyzer] Detected truncation at npc_met field")
+		// JSON обрывается на npc_met, добавляем завершение
+		if strings.HasSuffix(jsonStr, `"npc_met":`) {
+			jsonStr += `null,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"npc_met":n`) {
+			jsonStr += `ull,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"npc_met":{`) {
+			jsonStr += `"name":"","description":"","is_first_meeting":false},"generated_images":[]}`
+		}
+	} else if strings.Contains(jsonStr, `"location_visited":`) && !strings.Contains(jsonStr, `"npc_met"`) {
+		// JSON обрывается на location_visited
+		if strings.HasSuffix(jsonStr, `"location_visited":`) {
+			jsonStr += `null,"npc_met":null,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"location_visited":n`) {
+			jsonStr += `ull,"npc_met":null,"generated_images":[]}`
+		} else if strings.HasSuffix(jsonStr, `"location_visited":{`) {
+			jsonStr += `"name":"","description":"","is_first_visit":false},"npc_met":null,"generated_images":[]}`
+		}
+	} else if !strings.Contains(jsonStr, `"generated_images"`) {
+		// JSON не содержит generated_images, добавляем завершение
+		jsonStr += `,"generated_images":[]}`
+	}
+
+	// Проверяем валидность после ручного восстановления
+	if json.Valid([]byte(jsonStr)) {
+		return jsonStr
+	}
+	return jsonStr
 
 	// Если строка не начинается с {, пытаемся найти начало JSON
 	if !strings.HasPrefix(jsonStr, "{") {

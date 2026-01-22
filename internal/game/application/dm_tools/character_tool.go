@@ -319,27 +319,32 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 				content := strings.ToLower(evt.Content)
 				// Проверяем, является ли это сообщением от DM (не от игрока)
 				if evt.AuthorType == event.AuthorTypeDM {
-					// Ищем упоминания характеристики и результата проверки
-					hasAbility := strings.Contains(content, abilityStr) ||
-						strings.Contains(content, strings.ToLower(abilityName)) ||
-						(abilityStr == "wisdom" && (strings.Contains(content, "мудрост") || strings.Contains(content, "восприяти"))) ||
-						(abilityStr == "intelligence" && (strings.Contains(content, "интеллект") || strings.Contains(content, "разобрать") || strings.Contains(content, "прочитать"))) ||
-						(abilityStr == "dexterity" && strings.Contains(content, "ловкост")) ||
-						(abilityStr == "strength" && strings.Contains(content, "сил")) ||
-						(abilityStr == "constitution" && strings.Contains(content, "телосложени")) ||
-						(abilityStr == "charisma" && strings.Contains(content, "харизм"))
+					// Ищем упоминания характеристики в контексте выполненной проверки навыка
+					// Используем более строгие паттерны, чтобы избежать ложных срабатываний
+					hasAbility := false
+
+					// Проверяем точные совпадения с названиями характеристик в контексте проверки
+					if strings.Contains(strings.ToLower(content), "проверка "+strings.ToLower(abilityName)) ||
+						strings.Contains(strings.ToLower(content), abilityStr+" ") ||
+						strings.Contains(strings.ToLower(content), "проверки "+strings.ToLower(abilityName)) {
+						hasAbility = true
+					} else {
+						// Альтернативные названия только для точных совпадений в контексте проверки
+						checkContext := strings.Contains(content, "проверка") || strings.Contains(content, "проверки") ||
+							strings.Contains(content, "d20") || strings.Contains(content, "бросок")
+						if checkContext {
+							// Используем только основные названия характеристик, без синонимов
+							hasAbility = strings.Contains(content, strings.ToLower(abilityName))
+						}
+					}
 
 					// Проверяем, есть ли в событии результат проверки (успех или провал)
-					// Также проверяем контекстные слова, указывающие на выполненную проверку
+					// Ищем более специфические паттерны результатов проверок
 					hasResult := strings.Contains(content, "успех") || strings.Contains(content, "провал") ||
 						strings.Contains(content, "success") || strings.Contains(content, "failure") ||
 						strings.Contains(content, "✅") || strings.Contains(content, "❌") ||
-						strings.Contains(content, "прошел проверку") || strings.Contains(content, "провалил проверку") ||
-						strings.Contains(content, "разобрать") || strings.Contains(content, "прочитать") ||
-						strings.Contains(content, "сосредоточиться") || strings.Contains(content, "изучить") ||
-						strings.Contains(content, "записи") || strings.Contains(content, "дневник") ||
-						strings.Contains(content, "свиток") || strings.Contains(content, "текст") ||
-						strings.Contains(content, "бросок") && (strings.Contains(content, "d20") || strings.Contains(content, "кубик"))
+						strings.Contains(content, "= d20") || // результат броска
+						(strings.Contains(content, "бросок") && strings.Contains(content, "результат"))
 
 					if hasAbility && hasResult {
 						// Найдена предыдущая проверка той же характеристики

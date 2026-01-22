@@ -13,17 +13,20 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type Client struct {
-	auth          *authClient
-	cfg           Config
-	client        *http.Client
-	semaphore     chan struct{} // Concurrency control semaphore
-	requestCount  int64         // Counter for metrics
-	errorCount    int64         // Counter for error metrics
-	rateLimitCount int64        // Counter for 429 responses
-	startTime     time.Time     // Time when client was created for RPS calculation
+	auth           *authClient
+	cfg            Config
+	client         *http.Client
+	semaphore      chan struct{} // Concurrency control semaphore
+	rateLimiter    *rate.Limiter // Global rate limiter for all requests (10 RPS by default)
+	requestCount   int64         // Counter for metrics
+	errorCount     int64         // Counter for error metrics
+	rateLimitCount int64         // Counter for 429 responses
+	startTime      time.Time     // Time when client was created for RPS calculation
 }
 
 func NewClient(cfg Config) *Client {
@@ -43,23 +46,35 @@ func NewClient(cfg Config) *Client {
 	}
 
 	// Concurrency limit: уменьшаем до 2 для предотвращения rate limiting
-	concurrencyLimit := 2
+	concurrencyLimit := 1
 	if cfg.ConcurrencyLimit > 0 {
 		concurrencyLimit = cfg.ConcurrencyLimit
 	}
 
+	// Global rate limiter: configurable RPS with burst to prevent DDoS-like behavior
+	rpsLimit := rate.Limit(10.0) // Default 10 requests per second
+	if cfg.RPSLimit > 0 {
+		rpsLimit = rate.Limit(cfg.RPSLimit)
+	}
+	burstLimit := 5 // Default burst of 5 requests
+	if cfg.RateBurst > 0 {
+		burstLimit = cfg.RateBurst
+	}
+	rateLimiter := rate.NewLimiter(rpsLimit, burstLimit)
+
 	return &Client{
-		auth:          newAuthClient(cfg),
-		cfg:           cfg,
+		auth: newAuthClient(cfg),
+		cfg:  cfg,
 		client: &http.Client{
 			Timeout:   30 * time.Second,
 			Transport: transport,
 		},
-		semaphore:     make(chan struct{}, concurrencyLimit),
-		requestCount:  0,
-		errorCount:    0,
+		semaphore:      make(chan struct{}, concurrencyLimit),
+		rateLimiter:    rateLimiter,
+		requestCount:   0,
+		errorCount:     0,
 		rateLimitCount: 0,
-		startTime:     time.Now(),
+		startTime:      time.Now(),
 	}
 }
 
@@ -71,12 +86,24 @@ func (c *Client) GetToken(ctx context.Context) (string, error) {
 
 // GetMetrics возвращает текущие метрики клиента
 func (c *Client) GetMetrics() map[string]int64 {
-	return map[string]int64{
-		"requests":     atomic.LoadInt64(&c.requestCount),
-		"errors":       atomic.LoadInt64(&c.errorCount),
-		"rate_limits":  atomic.LoadInt64(&c.rateLimitCount),
-		"rps":          c.calculateRPS(), // Добавляем RPS метрику
+	metrics := map[string]int64{
+		"requests":    atomic.LoadInt64(&c.requestCount),
+		"errors":      atomic.LoadInt64(&c.errorCount),
+		"rate_limits": atomic.LoadInt64(&c.rateLimitCount),
+		"rps":         c.calculateRPS(), // Добавляем RPS метрику
 	}
+
+	// Add rate limiter tokens info if available
+	if c.rateLimiter != nil {
+		metrics["rate_limiter_tokens"] = int64(c.rateLimiter.Tokens())
+	}
+
+	// Add auth rate limiter tokens info if available
+	if c.auth != nil && c.auth.rateLimiter != nil {
+		metrics["auth_rate_limiter_tokens"] = int64(c.auth.rateLimiter.Tokens())
+	}
+
+	return metrics
 }
 
 // calculateRPS вычисляет requests per second на основе общего времени работы
@@ -98,12 +125,25 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 		return nil, ctx.Err()
 	}
 
-	// Добавляем X-Client-ID для image-related запросов (генерация и скачивание изображений)
-	isImageRequest := strings.Contains(url, "/files/") || (strings.Contains(url, "/chat/completions") && len(body) > 0 && strings.Contains(string(body), "text2image"))
+	// Apply global rate limiter to prevent DDoS-like behavior
+	rateLimiterTokens := c.rateLimiter.Tokens()
+	log.Printf("[GigaChat] Request: %s %s, rate limiter tokens=%.1f", method, url, rateLimiterTokens)
+
+	if err := c.rateLimiter.Wait(ctx); err != nil {
+		log.Printf("[GigaChat] Rate limiter wait failed for %s %s: %v", method, url, err)
+		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
+	}
+
+	// Добавляем X-Client-ID для всех image-related запросов
+	// Важно: один и тот же X-Client-ID должен использоваться для генерации и скачивания изображений
+	isImageRequest := strings.Contains(url, "/files/") ||
+		(strings.Contains(url, "/chat/completions") && len(body) > 0 && strings.Contains(string(body), "function_call"))
+	log.Printf("[GigaChat] Request analysis: URL=%s, hasBody=%v, containsFunctionCall=%v, isImageRequest=%v",
+		url, len(body) > 0, len(body) > 0 && strings.Contains(string(body), "function_call"), isImageRequest)
 	const maxRetries = 3
 	const initialBackoff = 5 * time.Second // Увеличиваем начальную задержку для rate limiting
 	const maxBackoff = 60 * time.Second    // Увеличиваем максимальную задержку
-	const jitterFactor = 0.1 // 10% jitter
+	const jitterFactor = 0.1               // 10% jitter
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -144,13 +184,34 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			return nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Content-Type", "application/json")
 
-		// Добавляем X-Client-ID для image-related запросов
+		// Устанавливаем правильный Accept header в зависимости от типа запроса
+		if isImageRequest && strings.Contains(url, "/files/") {
+			// Для скачивания изображений
+			req.Header.Set("Accept", "application/jpg")
+		} else {
+			// Для обычных API запросов
+			req.Header.Set("Accept", "application/json")
+		}
+
+		// Устанавливаем Content-Type только если есть тело запроса
+		if len(body) > 0 {
+			req.Header.Set("Content-Type", "application/json")
+		}
+
+			// Добавляем X-Client-ID для image-related запросов
 		if isImageRequest && c.cfg.ClientID != "" {
 			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
+			log.Printf("[GigaChat] Set X-Client-ID for image request: %s", strings.TrimSpace(c.cfg.ClientID))
+		} else if isImageRequest {
+			log.Printf("[GigaChat] Image request detected but ClientID empty: cfg.ClientID='%s'", c.cfg.ClientID)
 		}
+
+		// Логируем заголовки для диагностики
+		log.Printf("[GigaChat] Headers: Accept=%s, Content-Type=%s, X-Client-ID=%s",
+			req.Header.Get("Accept"),
+			req.Header.Get("Content-Type"),
+			req.Header.Get("X-Client-ID"))
 
 		// Increment request counter
 		atomic.AddInt64(&c.requestCount, 1)
@@ -158,10 +219,14 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 		resp, err := c.client.Do(req)
 		if err != nil {
 			atomic.AddInt64(&c.errorCount, 1)
+			log.Printf("[GigaChat] Network error for %s %s: %v", method, url, err)
 			lastErr = err
 			// Для сетевых ошибок продолжаем retry
 			continue
 		}
+
+		// Логируем статус ответа
+		log.Printf("[GigaChat] Response status: %d for %s %s", resp.StatusCode, method, url)
 
 		// Если получили 401 Unauthorized, токен мог истек - пробуем обновить и повторить запрос
 		if resp.StatusCode == 401 {
@@ -190,10 +255,10 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			req.Header.Set("Accept", "application/json")
 			req.Header.Set("Content-Type", "application/json")
 
-		// Добавляем X-Client-ID для image-related запросов
-		if isImageRequest && c.cfg.ClientID != "" {
-			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
-		}
+			// Добавляем X-Client-ID для image-related запросов
+			if isImageRequest && c.cfg.ClientID != "" {
+				req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
+			}
 
 			resp, err = c.client.Do(req)
 			if err != nil {
@@ -264,6 +329,19 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			// Возвращаем ответ для дальнейшей обработки
 			return resp, nil
 		}
+
+		// Специальная обработка 403 Forbidden
+		if resp.StatusCode == 403 {
+			data, _ := io.ReadAll(resp.Body)
+			log.Printf("[GigaChat] Forbidden (403) - possible token expiry or X-Client-ID issue")
+			log.Printf("[GigaChat] 403 Details: URL=%s, Method=%s, X-Client-ID=%s, Response=%s",
+				url, method, req.Header.Get("X-Client-ID"), string(data))
+			resp.Body.Close()
+			return nil, fmt.Errorf("gigachat forbidden (403): %s", string(data))
+		}
+
+		// Логируем успешные ответы
+		log.Printf("[GigaChat] Success response: %d for %s %s", resp.StatusCode, method, url)
 
 		// Успешный ответ или 401 (уже обработан)
 		return resp, nil

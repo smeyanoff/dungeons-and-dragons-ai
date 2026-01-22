@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"time"
@@ -103,13 +104,13 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, error) {
 	url := fmt.Sprintf("%s/files/%s/content", c.cfg.APIBaseURL, fileID)
 
-	const maxRetries = 5 // Увеличиваем количество попыток для изображений
-	const initialDelay = 1 * time.Second // Начинаем с меньшей задержки
-	const maxDelay = 8 * time.Second // Максимальная задержка
+	const maxRetries = 3                 // Уменьшаем количество попыток для изображений
+	const initialDelay = 2 * time.Second // Увеличиваем начальную задержку
+	const maxDelay = 10 * time.Second    // Максимальная задержка
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff для изображений: 1s, 2s, 4s, 8s
+			// Exponential backoff для изображений: 2s, 4s, 8s
 			delay := initialDelay * time.Duration(1<<uint(attempt-1))
 			if delay > maxDelay {
 				delay = maxDelay
@@ -136,7 +137,7 @@ func (c *Client) DownloadImage(ctx context.Context, fileID string) ([]byte, erro
 		if resp.StatusCode == 403 && attempt < maxRetries-1 {
 			if err := resp.Body.Close(); err != nil {
 				// Логируем ошибку закрытия, но продолжаем retry
-				fmt.Printf("warning: failed to close response body: %v\n", err)
+				log.Printf("warning: failed to close response body: %v", err)
 			}
 			continue
 		}

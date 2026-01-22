@@ -1569,7 +1569,7 @@ func (uc *HandleActionUseCase) createAbilityCheckFromAnalyzer(
 
 	abilityName := formatAbilityNameForPlayer(ability)
 	playerMsg := fmt.Sprintf(
-		"🎲 Нужна проверка %s (DC %d).\nПричина: %s.\nНа кону: %s.\n\nНапишите /roll d20, чтобы бросить кубик. Можно отправить результат числом (например: 17).",
+		"🎲 Нужна проверка %s (DC %d).\nПричина: %s.\nНа кону: %s.\n\nНапишите /roll, чтобы бросить кубик. Можно отправить результат числом (например: 17).",
 		abilityName, dc, reason, stakes,
 	)
 

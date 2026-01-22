@@ -9,4 +9,6 @@ type Config struct {
 	Scope            string // например "GIGACHAT_API_PERS"
 	SkipTLSVerify    bool   // Пропустить проверку TLS сертификата (только для тестов)
 	ConcurrencyLimit int    // Максимальное количество одновременных запросов (по умолчанию 5)
+	RPSLimit         float64 // Максимальное количество запросов в секунду (по умолчанию 10.0)
+	RateBurst        int     // Burst limit для rate limiter (по умолчанию 5)
 }

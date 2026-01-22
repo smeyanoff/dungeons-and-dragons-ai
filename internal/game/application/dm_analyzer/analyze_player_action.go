@@ -99,11 +99,12 @@ func (uc *AnalyzePlayerActionUseCase) Execute(
 	// Формируем промпт для анализа
 	prompt := buildPlayerActionAnalysisPrompt(playerMessage, gameContext, recentEvents)
 
-	// Вызываем LLM для анализа
-	llmCtx, llmCancel := context.WithTimeout(ctx, 15*time.Second)
+	// Вызываем LLM для анализа с увеличенными лимитами
+	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer llmCancel()
 
-	raw, err := uc.llm.Generate(llmCtx, prompt)
+	maxTokens := 12000 // Увеличиваем лимит токенов для анализа действий игрока
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}

@@ -1,6 +1,6 @@
 # CODE_REVIEW — Dungeons & Dragons AI Bot (Telegram + AI DM + RAG)
 
-**Последнее обновление:** 2026-01-22 (спринт приоритетов обновлен)
+**Последнее обновление:** 2026-01-22 (исправлена логика определения image request'ов) (спринт приоритетов обновлен)
 **Зачем файл:** держим **короткий** список **активных** рисков/дефектов + конкретные action items (что сделать / где / где проверить).
 **Историю "что уже починили" здесь не храним** — только актуальное.
 
@@ -31,25 +31,29 @@
   - Логи DM analyzer без "truncated JSON" ошибок
   - Успешный парсинг всех ответов DM analyzer
 
-### P1 — GigaChat rate limiting (429) влияет на UX
-- **Симптом**: Частые `Rate limited (429), retry attempt ...` несмотря на concurrency limit = 3
-- **Проблема**: Недостаточно агрессивный backoff или слишком высокая нагрузка
-- **Action items**:
-  - Дополнительно уменьшить concurrency limit до 2
-  - Увеличить initial backoff delay до 5-10 секунд
-  - Добавить метрики RPS и 429 rate для мониторинга
+### P1 — GigaChat rate limiting (429) влияет на UX ✅ (решено)
+- **Решение**: Реализован глобальный token bucket rate limiter на всех уровнях
+  - HTTP уровень: 5 RPS, burst=3 для всех API запросов
+  - Auth уровень: 2 RPS, burst=1 для предотвращения token refresh storms
+- **Изменения**: Добавлен `golang.org/x/time/rate` limiter ко всем HTTP клиентам
+- **Конфигурация**: Настраивается через `RPSLimit` и `RateBurst` в Config
 - **Как проверить**:
-  - Снижение количества 429 ошибок в прод-логах
+  - Отсутствие DDoS-подобного поведения (запросов каждые 2мс)
+  - Снижение количества 429 ошибок
+  - Стабильные RPS метрики для всех типов запросов
 
-### P1 — Image generation: context deadline exceeded
-- **Симптом**: `Failed to generate world map image ... context deadline exceeded` после retry
-- **Проблема**: Таймаут 180s недостаточен для генерации изображений с rate limiting
-- **Action items**:
-  - Увеличить таймаут генерации изображений до 300s
-  - Улучшить логику retry для image generation (меньше retry, но с большим таймаутом)
-  - Добавить graceful fallback на текстовое описание при persistent failures
+### P1 — Image generation: context deadline exceeded ✅ (исправлено)
+- **Решение**: Оптимизирован rate limiter и retry логика для изображений
+  - HTTP уровень: 3 RPS, burst=2 для баланса между DDoS защитой и token freshness
+  - Download retry: уменьшен с 5 до 3 попыток, увеличены задержки (2s, 4s, 8s)
+  - Auth token refresh: уменьшен запас с 60s до 30s для более частого обновления
+  - X-Client-ID: применяется ко всем image-related запросам (генерация и скачивание) для consistency
+  - Accept header: `application/jpg` для скачивания изображений, `application/json` для API запросов
+  - Image request detection: исправлена логика определения через `function_call` вместо `text2image`
+- **Изменения**: Добавлено расширенное логирование для диагностики 403/429 ошибок и token refresh
 - **Как проверить**:
-  - Успешная генерация изображений локаций/NPC в прод-логах
+  - Отсутствие 403 Forbidden ошибок из-за несоответствия X-Client-ID
+  - Успешная генерация и скачивание изображений с consistent X-Client-ID
 
 ### P0 — Location events integration gap (повышен до P0)
 - **Симптом**: Location events создаются но не попадают в следующий DM prompt

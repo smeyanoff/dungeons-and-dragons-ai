@@ -158,7 +158,9 @@ func main() {
 		ClientID:         gigachatClientID,
 		ClientSecret:     gigachatClientSecret,
 		Scope:            getEnv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
-		ConcurrencyLimit: 2, // Уменьшаем concurrency для уменьшения rate limiting
+		ConcurrencyLimit: 1, // Ограничиваем до 1 одновременного запроса
+		RPSLimit:         3.0, // Ограничиваем до 3 запросов в секунду для баланса между DDoS защитой и token freshness
+		RateBurst:        2,   // Burst до 2 запросов
 	}
 
 	// Валидация GigaChat credentials
@@ -188,6 +190,10 @@ func main() {
 		logger.String("apiURL", gigachatCfg.APIBaseURL),
 		logger.String("scope", gigachatScope),
 		logger.String("model", gigachatModel),
+		logger.String("clientID", maskClientID(gigachatCfg.ClientID)),
+		logger.Float64("rps_limit", gigachatCfg.RPSLimit),
+		logger.Int("rate_burst", gigachatCfg.RateBurst),
+		logger.Int("concurrency_limit", gigachatCfg.ConcurrencyLimit),
 	)
 
 	gigachatClient := gigachat.NewClient(gigachatCfg)
@@ -725,4 +731,16 @@ func maskDSN(dsn string) string {
 		return dsn[:20] + "***"
 	}
 	return "***"
+}
+
+// maskClientID маскирует ClientID для логирования
+func maskClientID(clientID string) string {
+	if len(clientID) == 0 {
+		return ""
+	}
+	if len(clientID) <= 8 {
+		return "***"
+	}
+	// Показываем первые 4 и последние 4 символа
+	return clientID[:4] + "***" + clientID[len(clientID)-4:]
 }
