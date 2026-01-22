@@ -140,12 +140,44 @@ func (a *sessionRepoAdapterForDM) GetByChatID(ctx context.Context, chatID int64)
 		})
 	}
 
+	// Получаем информацию о персонаже
+	var characterInfo *dm_analyzer.CharacterInfo
+	if len(gs.Players) > 0 {
+		player := gs.Players[0] // Берем первого игрока (основного)
+		characterInfo = &dm_analyzer.CharacterInfo{
+			ID:          player.ID,
+			Name:        player.Name,
+			Class:       player.Class,
+			Level:       player.Level,
+			Race:        player.Race,
+			Description: player.Description,
+		}
+	}
+
+	// Получаем информацию о текущей локации
+	var currentLocation *dm_analyzer.LocationInfo
+	if gs.CurrentLocationID != nil {
+		// Ищем локацию по ID в мире
+		for _, loc := range gs.World.Locations {
+			if loc.ID == *gs.CurrentLocationID {
+				currentLocation = &dm_analyzer.LocationInfo{
+					ID:          loc.ID,
+					Name:        loc.Name,
+					Description: loc.Description,
+				}
+				break
+			}
+		}
+	}
+
 	return &dm_analyzer.SessionSnapshot{
-		ID: gs.ID,
+		ID:              gs.ID,
 		World: dm_analyzer.WorldSnapshot{
 			ID:        gs.World.ID,
 			Locations: locations,
 		},
+		CurrentLocation: currentLocation,
+		Character:       characterInfo,
 	}, nil
 }
 

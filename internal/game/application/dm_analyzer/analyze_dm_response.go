@@ -140,8 +140,10 @@ type SessionRepository interface {
 
 // SessionSnapshot — упрощенная структура сессии (для доступа к миру и локациям)
 type SessionSnapshot struct {
-	ID    uint
-	World WorldSnapshot
+	ID               uint
+	World            WorldSnapshot
+	CurrentLocation  *LocationInfo  // Текущая локация персонажа
+	Character        *CharacterInfo // Информация о персонаже
 }
 
 // WorldSnapshot — упрощенная структура мира (для доступа к локациям)
@@ -154,6 +156,23 @@ type WorldSnapshot struct {
 type LocationSnapshot struct {
 	ID   uint
 	Name string
+}
+
+// LocationInfo — информация о текущей локации
+type LocationInfo struct {
+	ID          uint
+	Name        string
+	Description string
+}
+
+// CharacterInfo — информация о персонаже
+type CharacterInfo struct {
+	ID          uint
+	Name        string
+	Class       string
+	Level       int
+	Race        string
+	Description string
 }
 
 // AchievementChecker интерфейс для проверки достижений
