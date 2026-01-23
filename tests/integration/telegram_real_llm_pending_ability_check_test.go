@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
+	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
@@ -39,6 +40,10 @@ func TestTelegramGameplay_RealLLM_PendingAbilityCheck_ManualAndRoll(t *testing.T
 	eventRepo := persistence.NewGameEventRepository(cfg.db)
 	combatRepo := persistence.NewCombatRepository(cfg.db)
 	feedbackRepo := persistence.NewFeedbackRepository(cfg.db)
+	playerRepo := persistence.NewPlayerRepository(cfg.db)
+	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
+	// For tests, we need to pass nil for LLM and other dependencies
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
 
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, nil)
 
@@ -57,7 +62,7 @@ func TestTelegramGameplay_RealLLM_PendingAbilityCheck_ManualAndRoll(t *testing.T
 		cfg.getDailyQuestsUC,
 		cfg.checkDailyProgressUC,
 		cfg.getMapUC,
-		nil, // moveToLocationUC
+		moveToLocationUC,
 		cfg.getAchievementsUC,
 		cfg.getSpellsUC,
 		cfg.useSpellUC,
@@ -68,6 +73,7 @@ func TestTelegramGameplay_RealLLM_PendingAbilityCheck_ManualAndRoll(t *testing.T
 		nil, // updateRatingUC
 		performAbilityCheckUC,
 		cfg.sessionRepo,
+		playerRepo,
 		combatRepo,
 		feedbackRepo,
 		eventRepo,

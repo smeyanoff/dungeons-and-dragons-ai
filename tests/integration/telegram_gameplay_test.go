@@ -105,7 +105,7 @@ func TestTelegramGameplay_CompleteFlow(t *testing.T) {
 		if err := cfg.waitForRateLimit(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("Ошибка rate limiter: %v", err))
 		}
-		response, err := cfg.handleActionUC.Execute(ctx, chatID, "Осматриваю комнату, в которой нахожусь")
+		response, err := cfg.handleActionUC.Execute(ctx, chatID, tgUserID, "Осматриваю комнату, в которой нахожусь")
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("Не удалось обработать действие: %v", err))
 			t.Fatalf("Не удалось обработать действие: %v", err)
@@ -161,6 +161,7 @@ func TestTelegramGameplay_CombatFlow(t *testing.T) {
 
 	ctx := cfg.ctx
 	chatID := cfg.chatID
+	tgUserID := cfg.tgUserID
 
 	var problems []string
 	var llmFeedback []string
@@ -192,7 +193,7 @@ func TestTelegramGameplay_CombatFlow(t *testing.T) {
 	if err := cfg.waitForRateLimit(ctx); err != nil {
 		problems = append(problems, fmt.Sprintf("Ошибка rate limiter: %v", err))
 	}
-	resp, err := cfg.handleActionUC.Execute(ctx, chatID, "Вижу гоблина и атакую его мечом")
+	resp, err := cfg.handleActionUC.Execute(ctx, chatID, tgUserID, "Вижу гоблина и атакую его мечом")
 	if err != nil {
 		problems = append(problems, fmt.Sprintf("Не удалось обработать боевое действие: %v", err))
 		t.Fatalf("Не удалось обработать боевое действие: %v", err)

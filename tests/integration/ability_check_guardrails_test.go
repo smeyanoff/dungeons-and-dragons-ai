@@ -268,6 +268,7 @@ func TestAbilityCheck_RollWithoutPendingDoesNotResolve(t *testing.T) {
 		nil, // updateRatingUC
 		nil, // performAbilityCheckUC
 		cfg.sessionRepo,
+		nil, // playerRepo
 		nil, // combatRepo
 		nil, // feedbackRepo
 		nil, // eventRepo

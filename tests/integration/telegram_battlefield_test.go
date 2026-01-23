@@ -86,6 +86,7 @@ func TestTelegramBattlefieldCommand(t *testing.T) {
 		nil, // updateRatingUC
 		nil, // performAbilityCheckUC
 		cfg.sessionRepo,
+		nil, // playerRepo
 		combatRepo,
 		feedbackRepo,
 		nil, // eventRepo
@@ -219,6 +220,7 @@ func TestTelegramBattlefieldCommandFormats(t *testing.T) {
 		nil, // updateRatingUC
 		nil, // performAbilityCheckUC
 		cfg.sessionRepo,
+		nil, // playerRepo
 		combatRepo,
 		feedbackRepo,
 		nil, // eventRepo
@@ -383,6 +385,7 @@ func TestTelegramBattlefieldCommandNoCombat(t *testing.T) {
 		nil, // updateRatingUC
 		nil, // performAbilityCheckUC
 		cfg.sessionRepo,
+		nil, // playerRepo
 		combatRepo,
 		feedbackRepo,
 		nil, // eventRepo

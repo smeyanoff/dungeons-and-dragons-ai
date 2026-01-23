@@ -90,6 +90,7 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 		nil, // updateRatingUC
 		performUC,
 		cfg.sessionRepo,
+		nil, // playerRepo
 		nil, // combatRepo
 		nil, // feedbackRepo
 		nil, // eventRepo (/roll history)

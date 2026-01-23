@@ -100,6 +100,7 @@ func TestLLM_RealIntegration_CombatAnalysis(t *testing.T) {
 				1, // worldID
 				1, // characterID
 				1, // playerID
+				false, // autoGenerateImages
 			)
 
 			// Rate limiting - wait 2 seconds between requests

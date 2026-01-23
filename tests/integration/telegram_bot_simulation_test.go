@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
@@ -295,10 +296,14 @@ func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
 	apiEndpointFmt := strings.TrimRight(srv.URL, "/") + "/bot%s/%s"
 
 	// Repos for bot-only features
+	eventRepo := persistence.NewGameEventRepository(cfg.db)
 	combatRepo := persistence.NewCombatRepository(cfg.db)
 	feedbackRepo := persistence.NewFeedbackRepository(cfg.db)
+	playerRepo := persistence.NewPlayerRepository(cfg.db)
 	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(cfg.sessionRepo, worldEventRepo, nil, nil)
+	// For tests, we need to pass nil for LLM and other dependencies
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
+	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, nil)
 
 	// IMPORTANT: to avoid extra (costly) model calls, we pass generateImageUC=nil and indexDocUC=nil in bot.
 	bot, err := telegrambot.NewBotWithAPIEndpoint(
@@ -325,11 +330,12 @@ func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
 		nil, // checkLimitsUC
 		nil, // getLeaderboardUC
 		nil, // updateRatingUC
-		nil, // performAbilityCheckUC
+		performAbilityCheckUC,
 		cfg.sessionRepo,
+		playerRepo,
 		combatRepo,
 		feedbackRepo,
-		nil, // eventRepo (skip extra DB writes from /roll)
+		eventRepo,
 		nil, // indexDocUC (skip embeddings calls from /roll)
 	)
 	if err != nil {

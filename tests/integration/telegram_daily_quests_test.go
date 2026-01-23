@@ -87,6 +87,7 @@ func TestTelegramDailyQuestsCommand(t *testing.T) {
 		nil, // updateRatingUC
 		nil, // performAbilityCheckUC
 		cfg.sessionRepo,
+		nil, // playerRepo
 		nil, // combatRepo
 		feedbackRepo,
 		nil, // eventRepo
@@ -267,6 +268,7 @@ func TestTelegramDailyQuestsNoCharacter(t *testing.T) {
 		nil, // updateRatingUC
 		nil, // performAbilityCheckUC
 		cfg.sessionRepo,
+		nil, // playerRepo
 		nil, // combatRepo
 		feedbackRepo,
 		nil, // eventRepo

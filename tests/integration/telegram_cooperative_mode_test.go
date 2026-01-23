@@ -3,13 +3,11 @@ package integration
 import (
 	"fmt"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	sessionapp "dungeons-and-dragons-ai/internal/game/application/session"
-	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
 // TestTelegramGameplay_BotSimulation_CooperativeMode tests cooperative gameplay functionality

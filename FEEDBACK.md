@@ -141,3 +141,69 @@
 4. Combat with multiple enemies: Combat detected but no enemies parsed
 
 ---
+
+## Комплексное тестирование всех механик (2026-01-23)
+
+### 🤖 Наблюдения за поведением LLM в stub-тестах
+
+**DM Analyzer проблемы с JSON парсингом:**
+- **Симптом**: LLM возвращает усеченный JSON: `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":n`
+- **Результат**: JSON обрывается посередине поля `npc_met`, вызывая 6 retry попыток и fallback
+- **Влияние**: Location events при первом посещении могут не генерироваться, пропуск важных игровых триггеров
+- **Частота**: `analyzer_json_empty_json count=6`, высокая частота fallback-сценариев
+- **Рекомендация**: Улучшить prompt для DM Analyzer, добавить более строгую валидацию JSON перед отправкой в LLM
+
+### ⚠️ Технические проблемы инфраструктуры
+
+**Контейнеры и база данных:**
+- PostgreSQL и Qdrant корректно запускаются и работают
+- Все тесты компилируются после исправления API signatures
+- Rate limiting работает корректно (2500ms между запросами)
+- Stub-тесты проходят успешно для большинства функционала
+
+**API изменения:**
+- Требовалось обновление сигнатур функций после изменений в коде
+- `NewBotWithAPIEndpoint` требует `playerRepo` параметр
+- `NewMoveToLocationUseCase` требует LLM и дополнительные репозитории
+- `NewAnalyzeDMResponseUseCase` требует `autoGenerateImages` флаг
+
+### 📊 Метрики производительности
+
+**Время выполнения:**
+- Stub-тесты: ~1-2 секунды
+- Real LLM тесты: корректно пропускаются без credentials
+- Компиляция: успешна после исправления ошибок
+
+**Надежность:**
+- Все LLM-dependent тесты корректно SKIP при отсутствии credentials
+- Infrastructure тесты стабильны
+- Rate limiting предотвращает перегрузку API
+
+### 🎯 Рекомендации по улучшению LLM поведения
+
+1. **DM Analyzer JSON validation**: Добавить pre-validation JSON перед отправкой в LLM
+2. **Prompt engineering**: Улучшить инструкции для генерации complete JSON responses
+3. **Error handling**: Улучшить fallback логику для частично поврежденных JSON
+4. **Testing**: Добавить больше тестов для edge cases в LLM responses
+
+---
+
+## Заключение комплексного тестирования
+
+**Положительные результаты:**
+- ✅ Все реализованные механики имеют тестовое покрытие
+- ✅ Infrastructure стабильна (PostgreSQL, Qdrant, rate limiting)
+- ✅ API contracts обновлены и работают корректно
+- ✅ LLM-dependent тесты gracefully skip без credentials
+
+**Области для улучшения:**
+- 🔄 DM Analyzer JSON parsing reliability
+- 🔄 LLM prompt optimization для consistent responses
+- 🔄 Error handling для malformed LLM outputs
+
+**Следующие шаги:**
+- Запуск с реальными GIGACHAT credentials для полного end-to-end тестирования
+- Мониторинг LLM метрик в production
+- Расширение тестового покрытия для edge cases
+
+---

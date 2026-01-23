@@ -41,8 +41,10 @@ func TestTelegramGameplay_RealLLM_UserJourney_MainMechanics(t *testing.T) {
 	eventRepo := persistence.NewGameEventRepository(cfg.db)
 	combatRepo := persistence.NewCombatRepository(cfg.db)
 	feedbackRepo := persistence.NewFeedbackRepository(cfg.db)
+	playerRepo := persistence.NewPlayerRepository(cfg.db)
 	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(cfg.sessionRepo, worldEventRepo, nil, nil)
+	// For tests, we need to pass nil for LLM and other dependencies
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, nil)
 
 	// IMPORTANT: to avoid extra (costly) model calls, we pass generateImageUC=nil and indexDocUC=nil in bot.
@@ -72,6 +74,7 @@ func TestTelegramGameplay_RealLLM_UserJourney_MainMechanics(t *testing.T) {
 		nil, // updateRatingUC
 		performAbilityCheckUC,
 		cfg.sessionRepo,
+		playerRepo,
 		combatRepo,
 		feedbackRepo,
 		eventRepo,

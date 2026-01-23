@@ -220,6 +220,7 @@ func TestTelegramGameplay_BotSimulation_ToolFirstAbilityCheckFlow(t *testing.T) 
 		nil, // updateRatingUC
 		performUC,
 		cfg.sessionRepo,
+		nil,           // playerRepo
 		nil,           // combatRepo
 		nil,           // feedbackRepo
 		cfg.eventRepo, // eventRepo (ability check writes)

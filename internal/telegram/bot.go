@@ -2010,18 +2010,18 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					var continueMessage string
 					if result.Success {
 						if reason != "" && stakes != "" {
-							continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s успешно %s. Теперь опиши положительные последствия: %s",
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s успешно %s (DC %d, бросок %d). Опиши положительные последствия: %s",
 								result.CharacterName, reason, stakes)
 						} else {
-							continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s прошел проверку %s (DC %d, результат %d). Продолжи историю с положительными последствиями.",
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s прошел проверку %s (DC %d, бросок %d). Продолжи историю с положительными последствиями.",
 								result.CharacterName, result.Ability, result.DC, result.Total)
 						}
 					} else {
 						if reason != "" && stakes != "" {
-							continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s не смог %s. Теперь опиши негативные последствия: %s",
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s не смог %s (DC %d, бросок %d). Опиши негативные последствия: %s",
 								result.CharacterName, reason, stakes)
 						} else {
-							continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s провалил проверку %s (DC %d, результат %d). Продолжи историю с негативными последствиями.",
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s провалил проверку %s (DC %d, бросок %d). Продолжи историю с негативными последствиями.",
 								result.CharacterName, result.Ability, result.DC, result.Total)
 						}
 					}
@@ -2062,18 +2062,18 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					var continueMessage string
 					if result.Success {
 						if reason != "" && stakes != "" {
-							continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s успешно %s. Теперь опиши положительные последствия: %s",
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s успешно %s (DC %d, бросок %d). Опиши положительные последствия: %s",
 								result.CharacterName, reason, stakes)
 						} else {
-							continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s прошел проверку %s (DC %d, результат %d). Продолжи историю с положительными последствиями.",
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s прошел проверку %s (DC %d, бросок %d). Продолжи историю с положительными последствиями.",
 								result.CharacterName, result.Ability, result.DC, result.Total)
 						}
 					} else {
 						if reason != "" && stakes != "" {
-							continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s не смог %s. Теперь опиши негативные последствия: %s",
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s не смог %s (DC %d, бросок %d). Опиши негативные последствия: %s",
 								result.CharacterName, reason, stakes)
 						} else {
-							continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s провалил проверку %s (DC %d, результат %d). Продолжи историю с негативными последствиями.",
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s провалил проверку %s (DC %d, бросок %d). Продолжи историю с негативными последствиями.",
 								result.CharacterName, result.Ability, result.DC, result.Total)
 						}
 					}

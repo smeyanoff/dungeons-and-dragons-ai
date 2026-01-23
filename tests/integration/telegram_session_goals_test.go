@@ -9,15 +9,7 @@ import (
 
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
-	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
-	"dungeons-and-dragons-ai/internal/game/application/history"
-	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
-	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	sessionapp "dungeons-and-dragons-ai/internal/game/application/session"
-	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
-	ragapp "dungeons-and-dragons-ai/internal/rag/application"
-	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
 // TestTelegramGameplay_BotSimulation_SessionGoals tests session goals functionality
@@ -31,7 +23,6 @@ func TestTelegramGameplay_BotSimulation_SessionGoals(t *testing.T) {
 
 	ctx := cfg.ctx
 	chatID := cfg.chatID
-	tgUserID := cfg.tgUserID
 
 	var problems []string
 

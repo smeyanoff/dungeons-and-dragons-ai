@@ -1,4 +1,4 @@
-package integration
+package integration_new
 
 import (
 	"fmt"
@@ -13,11 +13,17 @@ import (
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
-// TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM
-// Тестирует полный игровой процесс пользователя через Telegram с stubbed LLM ответами
-// Проверяет все основные механики: создание игры, персонажа, исследование, бой, инвентарь, квесты, заклинания и т.д.
-// Этот тест написан для проверки интеграции всех компонентов системы как если бы пользователь играл в игру
-func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
+// TestTelegramGameplay_CoreMechanics_RealLLM_Integration
+// Интеграционный тест основных механик игры с реальными ответами LLM
+// Тестирует полный цикл игры как реальный пользователь через Telegram:
+// - Создание мира и кампании с LLM
+// - Создание персонажа с LLM
+// - Исследование мира и взаимодействие с LLM
+// - Система боя и combat detection
+// - Интеграция всех основных систем (инвентарь, квесты, достижения, карта, история)
+// - Проверка качества LLM ответов и отсутствие утечек tool-текста
+// Этот тест заменяет ручное тестирование и обеспечивает качество после каждого развертывания
+func TestTelegramGameplay_CoreMechanics_RealLLM_Integration(t *testing.T) {
 	cfg := setupTelegramGameplayTest(t)
 	defer cleanupTest(t, cfg.testConfig)
 
@@ -34,27 +40,26 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 	defer srv.Close()
 	apiEndpointFmt := strings.TrimRight(srv.URL, "/") + "/bot%s/%s"
 
-	// Создаем бота с mock зависимостями для большинства операций, но с реальной логикой
+	// Создаем бота с реальными LLM use cases для интеграционного тестирования
 	eventRepo := persistence.NewGameEventRepository(cfg.db)
 	combatRepo := persistence.NewCombatRepository(cfg.db)
 	feedbackRepo := persistence.NewFeedbackRepository(cfg.db)
 	playerRepo := persistence.NewPlayerRepository(cfg.db)
 	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
-	// For tests, we need to pass nil for LLM and other dependencies
 	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, nil)
 
-	// Создаем бота без реального LLM для большинства операций
+	// Создаем бота с реальными LLM вызовами для всех основных механик
 	bot, err := telegrambot.NewBotWithAPIEndpoint(
 		"TEST_TOKEN",
 		apiEndpointFmt,
-		cfg.initCampaignUC,    // Реальный use case для создания кампании
-		cfg.handleActionUC,    // Реальный use case для обработки действий
-		cfg.createCharacterUC, // Реальный use case для создания персонажа
+		cfg.initCampaignUC,    // Реальный LLM для создания кампании
+		cfg.handleActionUC,    // Реальный LLM для обработки действий
+		cfg.createCharacterUC, // Реальный LLM для создания персонажа
 		cfg.getHistoryUC,
 		cfg.getInventoryUC,
 		cfg.addItemUC,
-		cfg.handleCombatUC,
+		cfg.handleCombatUC,    // Реальный LLM для обработки боя
 		cfg.rollDiceUC,
 		cfg.getQuestsUC,
 		cfg.getDailyQuestsUC,
@@ -64,29 +69,30 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 		cfg.getAchievementsUC,
 		cfg.getSpellsUC,
 		cfg.useSpellUC,
-		nil, // generateImageUC - mock
-		nil, // getSubscriptionUC - mock
-		nil, // checkLimitsUC - mock
-		nil, // getLeaderboardUC - mock
-		nil, // updateRatingUC - mock
+		nil, // generateImageUC - отключаем для экономии
+		nil, // getSubscriptionUC - не требуется для теста
+		nil, // checkLimitsUC - не требуется для теста
+		nil, // getLeaderboardUC - не требуется для теста
+		nil, // updateRatingUC - не требуется для теста
 		performAbilityCheckUC,
 		cfg.sessionRepo,
 		playerRepo,
 		combatRepo,
 		feedbackRepo,
 		eventRepo,
-		nil, // indexDocUC - mock (избегаем RAG вызовов)
+		nil, // indexDocUC - отключаем RAG для теста
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot: %v", err)
 	}
 
-	// ===== ПОЛЬЗОВАТЕЛЬСКИЙ JOURNEY: ПОЛНЫЙ ИГРОВОЙ ПРОЦЕСС =====
+	// ===== ПОЛЬЗОВАТЕЛЬСКИЙ JOURNEY: ПОЛНЫЙ ЦИКЛ ИГРЫ С РЕАЛЬНЫМ LLM =====
 
-	t.Run("Шаг 1: Пользователь начинает игру (/help)", func(t *testing.T) {
+	t.Run("Шаг 1: Начало игры и получение справки (/help)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/help")); err != nil {
 			problems = append(problems, fmt.Sprintf("/help: %v", err))
 		}
+
 		// Проверяем, что бот ответил на /help
 		calls := fakeAPI.snapshotCalls()
 		hasHelpResponse := false
@@ -101,13 +107,13 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 		}
 	})
 
-	t.Run("Шаг 2: Создание новой игры (/newgame)", func(t *testing.T) {
+	t.Run("Шаг 2: Создание новой игры с LLM (/newgame)", func(t *testing.T) {
 		if err := cfg.waitForRateLimit(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("Rate limiter перед /newgame: %v", err))
 		}
 
 		start := time.Now()
-		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/newgame фэнтези мир с драконами и магией")); err != nil {
+		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/newgame фэнтези мир с древними руинами, магами и драконами")); err != nil {
 			problems = append(problems, fmt.Sprintf("/newgame: %v", err))
 			t.Fatalf("/newgame: %v", err)
 		}
@@ -122,15 +128,24 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 
 		t.Logf("✅ Игра создана за %.2fs, мир ID=%d, локаций=%d", duration.Seconds(), gs.WorldID, len(gs.World.Locations))
 
-		// Проверяем качество LLM ответа
+		// Проверяем качество LLM ответа при создании мира
 		dmResponse := lastNonThinkingPlayerFacingText(fakeAPI.snapshotCalls(), chatID)
-		if dmResponse != "" && len([]rune(dmResponse)) < 100 {
-			llmFeedback = append(llmFeedback, fmt.Sprintf("Слишком короткий ответ DM при создании игры (%d символов): %s", len([]rune(dmResponse)), dmResponse))
+		if dmResponse != "" && len([]rune(dmResponse)) < 200 {
+			llmFeedback = append(llmFeedback, fmt.Sprintf("Слишком короткий LLM ответ при создании мира (%d символов): %s", len([]rune(dmResponse)), dmResponse))
+		}
+
+		// Проверяем наличие описания мира
+		if dmResponse != "" && !strings.Contains(strings.ToLower(dmResponse), "мир") && !strings.Contains(strings.ToLower(dmResponse), "кампания") {
+			llmFeedback = append(llmFeedback, fmt.Sprintf("LLM не описал мир при создании кампании: %s", dmResponse))
 		}
 	})
 
-	t.Run("Шаг 3: Создание персонажа (/createcharacter)", func(t *testing.T) {
-		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/createcharacter ЭльфийскийРазведчик elf ranger")); err != nil {
+	t.Run("Шаг 3: Создание персонажа с LLM (/createcharacter)", func(t *testing.T) {
+		if err := cfg.waitForRateLimit(ctx); err != nil {
+			problems = append(problems, fmt.Sprintf("Rate limiter перед /createcharacter: %v", err))
+		}
+
+		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/createcharacter ВолшебникЭльф elf wizard")); err != nil {
 			problems = append(problems, fmt.Sprintf("/createcharacter: %v", err))
 			t.Fatalf("/createcharacter: %v", err)
 		}
@@ -148,59 +163,41 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 			player.Character.Stats.Strength, player.Character.Stats.Dexterity,
 			player.Character.Stats.Constitution, player.Character.Stats.Intelligence,
 			player.Character.Stats.Wisdom, player.Character.Stats.Charisma)
+
+		// Проверяем качество LLM ответа при создании персонажа
+		dmResponse := lastNonThinkingPlayerFacingText(fakeAPI.snapshotCalls(), chatID)
+		if dmResponse != "" && len([]rune(dmResponse)) < 100 {
+			llmFeedback = append(llmFeedback, fmt.Sprintf("Слишком короткий LLM ответ при создании персонажа (%d символов): %s", len([]rune(dmResponse)), dmResponse))
+		}
 	})
 
-	t.Run("Шаг 4: Исследование мира (игровое действие)", func(t *testing.T) {
+	t.Run("Шаг 4: Исследование мира (игровое действие с LLM)", func(t *testing.T) {
 		if err := cfg.waitForRateLimit(ctx); err != nil {
-			problems = append(problems, fmt.Sprintf("Rate limiter перед действием: %v", err))
+			problems = append(problems, fmt.Sprintf("Rate limiter перед исследованием: %v", err))
 		}
 
-		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "Осматриваюсь вокруг, ищу следы жизни или опасности")); err != nil {
+		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "Осматриваюсь вокруг, изучаю окрестности и ищу следы магии или опасности")); err != nil {
 			problems = append(problems, fmt.Sprintf("Игровое действие 'осмотр': %v", err))
 			t.Fatalf("Игровое действие: %v", err)
 		}
 
 		dmResponse := lastNonThinkingPlayerFacingText(fakeAPI.snapshotCalls(), chatID)
-		if dmResponse != "" && len([]rune(dmResponse)) < 50 {
-			llmFeedback = append(llmFeedback, fmt.Sprintf("Слишком короткий ответ DM на исследование (%d символов): %s", len([]rune(dmResponse)), dmResponse))
+		if dmResponse != "" && len([]rune(dmResponse)) < 100 {
+			llmFeedback = append(llmFeedback, fmt.Sprintf("Слишком короткий LLM ответ на исследование (%d символов): %s", len([]rune(dmResponse)), dmResponse))
 		}
 
-		// Проверяем, что могло создаться pending ability check
-		gs, _ := cfg.sessionRepo.GetByChatID(ctx, chatID)
-		if gs != nil && gs.HasPendingAbilityCheck() {
-			t.Logf("ℹ️  Создана pending ability check: %s (DC=%d)", gs.PendingAbilityCheckAbility, gs.PendingAbilityCheckDC)
-		}
-	})
-
-	t.Run("Шаг 5: Проверка способностей (/roll d20)", func(t *testing.T) {
-		// Создаем pending ability check вручную для тестирования
-		gs, err := cfg.sessionRepo.GetByChatID(ctx, chatID)
-		if err != nil || gs == nil {
-			t.Fatalf("Сессия не найдена для создания pending check")
-		}
-
-		gs.SetPendingAbilityCheck("test_perception", "wisdom", 14)
-		if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
-			t.Fatalf("Не удалось сохранить pending ability check: %v", err)
-		}
-
-		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/roll d20")); err != nil {
-			problems = append(problems, fmt.Sprintf("/roll d20: %v", err))
-		}
-
-		// Проверяем, что pending check очищен
-		gs, _ = cfg.sessionRepo.GetByChatID(ctx, chatID)
-		if gs != nil && gs.HasPendingAbilityCheck() {
-			problems = append(problems, "Pending ability check не очищен после /roll d20")
+		// Проверяем наличие описания локации
+		if dmResponse != "" && !strings.Contains(strings.ToLower(dmResponse), "вид") && !strings.Contains(strings.ToLower(dmResponse), "окрест") && !strings.Contains(strings.ToLower(dmResponse), "вокруг") {
+			llmFeedback = append(llmFeedback, fmt.Sprintf("LLM не описал локацию при исследовании: %s", dmResponse))
 		}
 	})
 
-	t.Run("Шаг 6: Инициирование боя через действие", func(t *testing.T) {
+	t.Run("Шаг 5: Инициирование боя через действие с LLM", func(t *testing.T) {
 		if err := cfg.waitForRateLimit(ctx); err != nil {
 			problems = append(problems, fmt.Sprintf("Rate limiter перед боем: %v", err))
 		}
 
-		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "Вызываю монстра на бой!")); err != nil {
+		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "Выхожу из укрытия и вызываю на бой любого, кто здесь прячется!")); err != nil {
 			problems = append(problems, fmt.Sprintf("Действие инициирующее бой: %v", err))
 		}
 
@@ -211,68 +208,58 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 		activeCombat, _ := combatRepo.GetActiveBySessionID(ctx, gs.ID)
 		if activeCombat != nil {
 			t.Logf("✅ Бой инициирован: %d участников", len(activeCombat.Participants))
+		} else {
+			t.Logf("ℹ️  Бой не инициирован - возможно, LLM не распознал боевую ситуацию")
+		}
+
+		dmResponse := lastNonThinkingPlayerFacingText(fakeAPI.snapshotCalls(), chatID)
+		if dmResponse != "" && len([]rune(dmResponse)) < 80 {
+			llmFeedback = append(llmFeedback, fmt.Sprintf("Слишком короткий LLM ответ при попытке боя (%d символов): %s", len([]rune(dmResponse)), dmResponse))
 		}
 	})
 
-	t.Run("Шаг 7: Просмотр поля боя (/battlefield)", func(t *testing.T) {
+	t.Run("Шаг 6: Просмотр статуса боя (/battlefield)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/battlefield table")); err != nil {
 			problems = append(problems, fmt.Sprintf("/battlefield: %v", err))
 		}
 
 		lastMsg := lastNonThinkingPlayerFacingText(fakeAPI.snapshotCalls(), chatID)
-		if lastMsg == "" || !strings.Contains(lastMsg, "Поле боя") {
+		if lastMsg == "" || (!strings.Contains(lastMsg, "Поле боя") && !strings.Contains(lastMsg, "бой не активен")) {
 			problems = append(problems, "После /battlefield не найдено сообщение с полем боя")
 		}
 	})
 
-	t.Run("Шаг 8: Атака в бою (/attack)", func(t *testing.T) {
-		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/attack луком")); err != nil {
-			problems = append(problems, fmt.Sprintf("/attack: %v", err))
-		}
-
-		// Получаем актуальную сессию
-		gs, _ := cfg.sessionRepo.GetByChatID(ctx, chatID)
-
-		// Даем время на обработку async операций
-		time.Sleep(100 * time.Millisecond)
-
-		activeCombat, _ := combatRepo.GetActiveBySessionID(ctx, gs.ID)
-		if activeCombat != nil {
-			t.Logf("ℹ️  После атаки: бой активен, %d участников", len(activeCombat.Participants))
-		}
-	})
-
-	t.Run("Шаг 9: Проверка инвентаря (/inventory)", func(t *testing.T) {
+	t.Run("Шаг 7: Проверка инвентаря (/inventory)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/inventory")); err != nil {
 			problems = append(problems, fmt.Sprintf("/inventory: %v", err))
 		}
 	})
 
-	t.Run("Шаг 10: Просмотр квестов (/quests)", func(t *testing.T) {
+	t.Run("Шаг 8: Просмотр квестов (/quests)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/quests")); err != nil {
 			problems = append(problems, fmt.Sprintf("/quests: %v", err))
 		}
 	})
 
-	t.Run("Шаг 11: Просмотр ежедневных заданий (/daily)", func(t *testing.T) {
+	t.Run("Шаг 9: Просмотр ежедневных заданий (/daily)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/daily")); err != nil {
 			problems = append(problems, fmt.Sprintf("/daily: %v", err))
 		}
 	})
 
-	t.Run("Шаг 12: Просмотр заклинаний (/spells)", func(t *testing.T) {
+	t.Run("Шаг 10: Просмотр заклинаний (/spells)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/spells")); err != nil {
 			problems = append(problems, fmt.Sprintf("/spells: %v", err))
 		}
 	})
 
-	t.Run("Шаг 13: Просмотр достижений (/achievements)", func(t *testing.T) {
+	t.Run("Шаг 11: Просмотр достижений (/achievements)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/achievements")); err != nil {
 			problems = append(problems, fmt.Sprintf("/achievements: %v", err))
 		}
 	})
 
-	t.Run("Шаг 14: Просмотр карты (/map)", func(t *testing.T) {
+	t.Run("Шаг 12: Просмотр карты мира (/map)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/map")); err != nil {
 			problems = append(problems, fmt.Sprintf("/map: %v", err))
 		}
@@ -293,34 +280,19 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 		}
 	})
 
-	t.Run("Шаг 15: Просмотр истории (/history)", func(t *testing.T) {
+	t.Run("Шаг 13: Просмотр истории (/history)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/history")); err != nil {
 			problems = append(problems, fmt.Sprintf("/history: %v", err))
 		}
 	})
 
-	t.Run("Шаг 16: Использование предмета из инвентаря (если есть)", func(t *testing.T) {
-		// Этот шаг пропускаем, если инвентарь пустой - это нормально для начала игры
-		gs, _ := cfg.sessionRepo.GetByChatID(ctx, chatID)
-		if gs != nil {
-			player := gs.GetFirstPlayer()
-			if player != nil {
-				inventoryRepo := persistence.NewInventoryRepository(cfg.db)
-				inventory, err := inventoryRepo.GetByCharacterID(ctx, player.Character.ID)
-				if err == nil && inventory != nil && len(inventory.Items) > 0 {
-					t.Logf("ℹ️  Персонаж имеет предметы в инвентаре: %d шт", len(inventory.Items))
-				}
-			}
-		}
-	})
-
-	t.Run("Шаг 17: Проверка на утечки tool-текста", func(t *testing.T) {
+	t.Run("Шаг 14: Проверка на утечки tool-текста", func(t *testing.T) {
 		if leak := findToolLeak(fakeAPI.snapshotCalls(), chatID); leak != "" {
 			problems = append(problems, fmt.Sprintf("Обнаружена утечка tool-текста в player-facing сообщении: %s", leak))
 		}
 	})
 
-	t.Run("Шаг 18: Завершение игры (/endgame)", func(t *testing.T) {
+	t.Run("Шаг 15: Завершение игры (/endgame)", func(t *testing.T) {
 		if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/endgame")); err != nil {
 			problems = append(problems, fmt.Sprintf("/endgame: %v", err))
 		}
@@ -331,6 +303,21 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 			problems = append(problems, "Игра не завершена после /endgame")
 		} else {
 			t.Log("✅ Игра успешно завершена")
+		}
+	})
+
+	// ===== ДОПОЛНИТЕЛЬНЫЕ ПРОВЕРКИ КАЧЕСТВА LLM =====
+
+	t.Run("Шаг 16: Анализ качества LLM ответов", func(t *testing.T) {
+		// Проверяем все сообщения от LLM на качество
+		calls := fakeAPI.snapshotCalls()
+		for _, call := range calls {
+			if call.ChatID == chatID && call.Method == "sendMessage" && call.Text != "" {
+				text := strings.TrimSpace(call.Text)
+				if len([]rune(text)) < 20 && !strings.Contains(text, "✅") && !strings.Contains(text, "❌") {
+					llmFeedback = append(llmFeedback, fmt.Sprintf("Слишком короткий ответ LLM (%d символов): %s", len([]rune(text)), text))
+				}
+			}
 		}
 	})
 

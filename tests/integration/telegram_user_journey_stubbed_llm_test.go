@@ -169,7 +169,8 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 	)
 
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(sessionRepo, worldEventRepo, nil, nil)
+	// For tests, we need to pass nil for LLM and other dependencies
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, sessionRepo, worldEventRepo, nil, nil)
 
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(sessionRepo, eventRepo, nil)
 
@@ -199,6 +200,7 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 		nil, // updateRatingUC
 		performAbilityCheckUC,
 		sessionRepo,
+		playerRepo,
 		nil, // combatRepo
 		nil, // feedbackRepo
 		eventRepo,
