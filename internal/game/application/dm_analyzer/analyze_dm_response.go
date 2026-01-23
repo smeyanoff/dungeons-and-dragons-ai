@@ -3268,28 +3268,28 @@ func (uc *AnalyzeDMResponseUseCase) parseNaturalCheckRequest(text string) *Natur
 	// Паттерны для распознавания проверок
 	patterns := map[string]string{
 		// Сила
-		"проверка силы":               "strength",
-		"проверьте силу":              "strength",
-		"проверка на силу":            "strength",
-		"бросьте проверку силы":       "strength",
-		"проверка силы (str)":         "strength",
-		"сила (str)":                  "strength",
+		"проверка силы":         "strength",
+		"проверьте силу":        "strength",
+		"проверка на силу":      "strength",
+		"бросьте проверку силы": "strength",
+		"проверка силы (str)":   "strength",
+		"сила (str)":            "strength",
 
 		// Ловкость
-		"проверка ловкости":           "dexterity",
-		"проверьте ловкость":          "dexterity",
-		"проверка на ловкость":        "dexterity",
-		"бросьте проверку ловкости":   "dexterity",
-		"проверка ловкости (dex)":     "dexterity",
-		"ловкость (dex)":              "dexterity",
+		"проверка ловкости":         "dexterity",
+		"проверьте ловкость":        "dexterity",
+		"проверка на ловкость":      "dexterity",
+		"бросьте проверку ловкости": "dexterity",
+		"проверка ловкости (dex)":   "dexterity",
+		"ловкость (dex)":            "dexterity",
 
 		// Телосложение
-		"проверка телосложения":       "constitution",
-		"проверьте телосложение":      "constitution",
-		"проверка на телосложение":    "constitution",
+		"проверка телосложения":         "constitution",
+		"проверьте телосложение":        "constitution",
+		"проверка на телосложение":      "constitution",
 		"бросьте проверку телосложения": "constitution",
-		"проверка телосложения (con)": "constitution",
-		"телосложение (con)":          "constitution",
+		"проверка телосложения (con)":   "constitution",
+		"телосложение (con)":            "constitution",
 
 		// Интеллект
 		"проверка интеллекта":         "intelligence",
@@ -3300,21 +3300,21 @@ func (uc *AnalyzeDMResponseUseCase) parseNaturalCheckRequest(text string) *Natur
 		"интеллект (int)":             "intelligence",
 
 		// Мудрость
-		"проверка мудрости":           "wisdom",
-		"проверьте мудрость":          "wisdom",
-		"проверка на мудрость":        "wisdom",
-		"бросьте проверку мудрости":   "wisdom",
-		"проверка мудрости (wis)":     "wisdom",
-		"мудрость (wis)":              "wisdom",
-		"проверка восприятия":         "wisdom", // Восприятие = мудрость
+		"проверка мудрости":         "wisdom",
+		"проверьте мудрость":        "wisdom",
+		"проверка на мудрость":      "wisdom",
+		"бросьте проверку мудрости": "wisdom",
+		"проверка мудрости (wis)":   "wisdom",
+		"мудрость (wis)":            "wisdom",
+		"проверка восприятия":       "wisdom", // Восприятие = мудрость
 
 		// Харизма
-		"проверка харизмы":            "charisma",
-		"проверьте харизму":           "charisma",
-		"проверка на харизму":         "charisma",
-		"бросьте проверку харизмы":    "charisma",
-		"проверка харизмы (cha)":      "charisma",
-		"харизма (cha)":               "charisma",
+		"проверка харизмы":         "charisma",
+		"проверьте харизму":        "charisma",
+		"проверка на харизму":      "charisma",
+		"бросьте проверку харизмы": "charisma",
+		"проверка харизмы (cha)":   "charisma",
+		"харизма (cha)":            "charisma",
 	}
 
 	// Ищем совпадения с паттернами

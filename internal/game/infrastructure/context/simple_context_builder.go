@@ -126,18 +126,7 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 			}
 		}
 
-		predefinedChecks := currentLoc.PredefinedChecks()
-		if len(predefinedChecks) > 0 {
-			parts = append(parts, "Предопределенные проверки (используй только если игрок в указанном месте):")
-			for _, check := range predefinedChecks {
-				abilityName := getAbilityNameForContext(check.Ability)
-				hint := ""
-				if check.LocationHint != "" {
-					hint = fmt.Sprintf(" — место: %s", truncateRunes(check.LocationHint, 60))
-				}
-				parts = append(parts, fmt.Sprintf("- %s, DC %d: %s%s", abilityName, check.DC, truncateRunes(check.Description, 80), hint))
-			}
-		}
+		// Предопределенные проверки удалены - система использует естественное распознавание проверок
 	}
 
 	if gs.HasPendingAbilityCheck() {

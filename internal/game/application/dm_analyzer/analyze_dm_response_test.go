@@ -541,11 +541,11 @@ func TestAnalyzeDMResponseUseCase_Execute(t *testing.T) {
 				questRepo,
 				inventoryRepo,
 				1,   // sessionID
-				false, // autoGenerateImages
 				123, // chatID
 				1,   // worldID
 				1,   // characterID
 				1,   // playerID
+				false, // autoGenerateImages
 			)
 
 			analysis, err := uc.Execute(context.Background(), tt.dmResponse)
@@ -853,6 +853,7 @@ func TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC(t *testing.T) {
 				1,   // worldID
 				1,   // characterID
 				1,   // playerID
+				false, // autoGenerateImages
 			)
 
 			ctx := context.Background()
@@ -902,6 +903,7 @@ func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenUsesNonEmpty(t *testin
 		1,   // worldID
 		1,   // characterID
 		1,   // playerID
+		false, // autoGenerateImages
 	)
 
 	analysis, err := uc.Execute(context.Background(), "DM response")
@@ -938,6 +940,7 @@ func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenFallback(t *testing.T)
 		1,   // worldID
 		1,   // characterID
 		1,   // playerID
+		false, // autoGenerateImages
 	)
 
 	analysis, err := uc.Execute(context.Background(), "Начался бой с орком")
