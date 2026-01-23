@@ -456,8 +456,14 @@ func (uc *HandleActionUseCase) Execute(
 	}
 
 	// Анализируем действие игрока для определения необходимости проверок
+	// Пропускаем анализ для системных сообщений (результаты проверок, технические сообщения)
 	var actionAnalysis *dm_analyzer.PlayerActionAnalysis
-	if uc.analyzePlayerActionUC != nil {
+	isSystemMessage := strings.Contains(strings.ToUpper(playerMessage), "РЕЗУЛЬТАТ ПРОВЕРКИ") ||
+		strings.Contains(playerMessage, "🎲 РЕЗУЛЬТАТ ПРОВЕРКИ") ||
+		strings.Contains(playerMessage, "✅ УСПЕХ проверки") ||
+		strings.Contains(playerMessage, "❌ ПРОВАЛ проверки")
+
+	if !isSystemMessage && uc.analyzePlayerActionUC != nil {
 		analysisCtx, analysisCancel := context.WithTimeout(ctx, 10*time.Second)
 		defer analysisCancel()
 		analysis, err := uc.analyzePlayerActionUC.Execute(analysisCtx, gs, playerMessage, gameContext)
@@ -474,9 +480,7 @@ func (uc *HandleActionUseCase) Execute(
 				logger.Bool("needs_ability_check", analysis.NeedsAbilityCheck),
 				logger.Bool("simple_action", analysis.SimpleAction),
 			)
-			// Добавляем результат анализа в контекст для DM
-			analysisContext := buildActionAnalysisContext(analysis)
-			gameContext = gameContext + "\n\n--- Анализ действия игрока ---\n" + analysisContext
+			// Анализ используется только для принятия решений, не добавляем в контекст DM
 		}
 	}
 
@@ -2625,7 +2629,7 @@ func (uc *HandleActionUseCase) updateSessionGoalsProgress(
 	}
 }
 
-// filterMiniEventsFromText удаляет только технические артефакты из текста перед индексацией в RAG
+// filterMiniEventsFromText удаляет технические артефакты из текста перед индексацией в RAG
 // Сохраняет основное повествование для поиска
 func filterMiniEventsFromText(text string) string {
 	lines := strings.Split(text, "\n")
@@ -2635,14 +2639,25 @@ func filterMiniEventsFromText(text string) string {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
 
-		// Удаляем только явные технические артефакты, сохраняя повествование
+		// Удаляем технические разделы и инструкции, но сохраняем повествование
 		if strings.Contains(lower, "--- проверки навыков") ||
 			strings.Contains(lower, "⚠️ не проси игрока") ||
 			strings.Contains(lower, "--- релевантная история") ||
 			strings.Contains(lower, "--- активные события") ||
 			strings.Contains(lower, "--- анализ действия") ||
 			strings.Contains(lower, "⚠️ действие игрока") ||
-			strings.Contains(lower, "рекомендация:") {
+			strings.Contains(lower, "⚠️ критически важно") ||
+			strings.Contains(lower, "инструкции по использованию") ||
+			strings.Contains(lower, "рекомендация:") ||
+			strings.Contains(lower, "правила:") ||
+			strings.Contains(lower, "🎨 стиль:") ||
+			strings.Contains(lower, "⚠️ проверки:") ||
+			strings.Contains(lower, "🖼️ изображения:") ||
+			strings.Contains(lower, "🛠️ инструменты:") ||
+			strings.Contains(lower, "📚 история:") ||
+			strings.Contains(lower, "🚫 запрещено:") ||
+			strings.Contains(lower, "🌿 мини-ивенты:") ||
+			strings.Contains(lower, "✅ обязательно:") {
 			continue
 		}
 
@@ -2660,5 +2675,5 @@ func filterMiniEventsFromText(text string) string {
 		result = strings.TrimSuffix(result, "\n")
 	}
 
-	return result
+	return strings.TrimSpace(result)
 }

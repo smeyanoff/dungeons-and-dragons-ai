@@ -71,11 +71,11 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 		parts = append(parts, fmt.Sprintf("Описание квеста: %s", gs.World.MainQuest.Description))
 	}
 
-	// Локации (список) — БЕЗ предопределенных проверок, чтобы не раздувать контекст и не провоцировать обрезание.
+	// Локации (список) — с краткими описаниями для контекста DM
 	if len(gs.World.Locations) > 0 {
 		parts = append(parts, "\nЛокации (карта мира):")
 		for _, loc := range gs.World.Locations {
-			desc := truncateRunes(loc.Description, 24) // коротко: держим контекст компактным
+			desc := truncateRunes(loc.Description, 60) // увеличено для лучшего контекста
 			if desc != "" {
 				parts = append(parts, fmt.Sprintf("- %s: %s", loc.Name, desc))
 			} else {
@@ -102,7 +102,7 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 		parts = append(parts, "\n--- Текущая локация ---")
 		parts = append(parts, fmt.Sprintf("Локация: %s", currentLoc.Name))
 		if strings.TrimSpace(currentLoc.Description) != "" {
-			parts = append(parts, fmt.Sprintf("Описание: %s", truncateRunes(currentLoc.Description, 80)))
+			parts = append(parts, fmt.Sprintf("Описание: %s", truncateRunes(currentLoc.Description, 150)))
 		}
 
 		// Карта ID → название, чтобы выводить связи читаемо.

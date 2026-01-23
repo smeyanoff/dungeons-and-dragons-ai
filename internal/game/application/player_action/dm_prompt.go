@@ -2,7 +2,6 @@ package player_action
 
 import (
 	"fmt"
-	"strings"
 
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 )
@@ -38,43 +37,23 @@ func buildPersonalizedStyleInstructions(preferences player.UserPreferences) (str
 	return lengthInstruction, styleInstruction
 }
 
-// BuildDMPrompt создает строгий и лаконичный промпт для Dungeon Master
-// с учетом контекста игры, действия игрока и настроек персонализации
+// BuildDMPrompt создает минималистичный промпт для Dungeon Master
 func BuildDMPrompt(gameContext, playerMessage string, preferences player.UserPreferences) string {
-	// Проверяем, есть ли в контексте информация о активном бое
-	hasActiveCombat := strings.Contains(gameContext, "--- Текущий бой ---") ||
-		strings.Contains(gameContext, "⚔️ КРИТИЧЕСКИ ВАЖНО: Статус боя в ответах")
-
-	combatInstruction := ""
-	if hasActiveCombat {
-		combatInstruction = "\n\n⚔️ БОЙ АКТИВЕН. Начинай ответ с '⚔️ [В БОЮ]'."
-	}
-
 	// Получаем персонализированные инструкции стиля
 	lengthInstruction, styleInstruction := buildPersonalizedStyleInstructions(preferences)
 
 	return fmt.Sprintf(`Ты — Dungeon Master в D&D 5e.
 
-КОНТЕКСТ:
+КОНТЕКСТ И ИСТОРИЯ:
 %s
 
-ДЕЙСТВИЕ ИГРОКА: "%s"%s
+ДЕЙСТВИЕ ИГРОКА: "%s"
+
+СТИЛЬ: %s, %s
 
 ПРАВИЛА:
-
-🎨 СТИЛЬ: %s, %s
-
-⚠️ ПРОВЕРКИ: НЕ проси броски кубиков — система сама обработает. Результаты проверок уже в истории. Используй их для описания последствий.
-
-🖼️ ИЗОБРАЖЕНИЯ: Только для ключевых моментов (боссы, важные локации). Максимум 2-3 за сессию.
-
-🛠️ ИНСТРУМЕНТЫ: Используй только когда нужно. Для боя: perform_combat_attack. Для случайностей: roll_dice.
-
-📚 ИСТОРИЯ: Используй RAG для согласованности сюжета. Результаты проверок в истории - используй их!
-
-🚫 ЗАПРЕЩЕНО: Просить /roll, предупреждать о ловушках заранее, игнорировать результаты инструментов.
-
-🌿 МИНИ-ИВЕНТЫ: Иногда добавляй атмосферные описания (1-2 предложения).
-
-✅ ОБЯЗАТЕЛЬНО: Используй результаты проверок из истории. После провала/успеха — опиши последствия и продолжи повествование.`, gameContext, playerMessage, combatInstruction, lengthInstruction, styleInstruction)
+• Используй результаты проверок из истории
+• Добавляй атмосферные описания (1-2 предложения)
+• Используй инструменты только при необходимости
+• Продолжай историю естественно`, gameContext, playerMessage, lengthInstruction, styleInstruction)
 }

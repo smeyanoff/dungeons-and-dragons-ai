@@ -310,20 +310,34 @@ func (b *RAGContextBuilder) BuildContext(
 	if len(ragDocs) > 0 {
 		parts = append(parts, "\n--- Релевантная история игры (найдено через поиск) ---")
 		totalChars := 0
+		addedCount := 0
 		for i, doc := range ragDocs {
 			if i >= maxRAGDocs || totalChars >= maxRAGTotalChars {
 				break
 			}
-			docText := truncateText(doc.Text, maxRAGDocChars)
+			docText := strings.TrimSpace(doc.Text)
+			if docText == "" {
+				logger.Debug("Skipping empty RAG document",
+					logger.Uint("session_id", gs.ID),
+					logger.Int("doc_index", i),
+				)
+				continue
+			}
+			docText = truncateText(docText, maxRAGDocChars)
 			if totalChars+len(docText) > maxRAGTotalChars {
 				docText = truncateText(docText, maxRAGTotalChars-totalChars)
 			}
+			if docText == "" {
+				continue
+			}
 			totalChars += len(docText)
-			parts = append(parts, fmt.Sprintf("[%d] %s", i+1, docText))
+			parts = append(parts, fmt.Sprintf("[%d] %s", addedCount+1, docText))
+			addedCount++
 		}
 		logger.Debug("Added RAG documents to context",
 			logger.Uint("session_id", gs.ID),
-			logger.Int("docs_count", len(ragDocs)),
+			logger.Int("docs_found", len(ragDocs)),
+			logger.Int("docs_added", addedCount),
 		)
 	} else {
 		logger.Debug("No RAG documents found",

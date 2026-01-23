@@ -1,11 +1,11 @@
 # Отчет о тестировании D&D AI Bot
 
-**Последнее обновление:** 2026-01-23 (комплексное end-to-end тестирование всех игровых механик)
+**Последнее обновление:** 2026-01-23 (интеграционное тестирование с production контейнерами)
 
 ## ✅ Статус прогонов
 
 - **`make test`** (=`go test ./...`): ✅ PASS (2026-01-23) - исправлены ошибки компиляции в тестах
-- **`make test-integration`**: ⚠️ Компиляция FAIL (2026-01-23) - ИСПРАВЛЕНО: обновлены сигнатуры функций
+- **`make test-integration`**: ❌ FAIL (2026-01-23) - 30 PASS, 13 FAIL, проблемы с TLS и LLM API
 - **`make test-telegram-stub`**: ⚠️ Один тест FAIL из-за cooperative mode (2026-01-23)
 - **`make test-telegram-real`**: ✅ PASS (2026-01-23) - тесты пропущены из-за отсутствия GIGACHAT credentials
 - **`make test-telegram`**: ✅ PASS (2026-01-23) - после исправления ошибок компиляции
@@ -423,5 +423,257 @@
 - Запускать комплексный тест с реальными GIGACHAT credentials для полной валидации
 - Мониторить метрики LLM (длина ответов, частота ошибок, время отклика)
 - Расширять покрытие тестами для edge cases и error handling
+
+---
+
+## Проблемы, найденные при интеграционном тестировании (2026-01-23 19:55:17)
+
+1. Unit tests failed: exit status 1
+2. Unit test output: 
+2026/01/23 19:45:16 [31;1m/Users/dima/.cursor/worktrees/dungeons-and-dragons-ai/zss/internal/game/infrastructure/persistence/player.go:30 [35;1mrecord not found
+[0m[33m[0.464ms] [34;1m[rows:0][0m SELECT * FROM "players" WHERE tg_user_id = 1769183116344402832 AND game_session_id = 207 ORDER BY "players"."id" LIMIT 1
+{"level":"info","timestamp":"2026-01-23T19:45:16.364+0400","caller":"logger/logger.go:100","msg":"RequestAbilityCheckTool: executing","chat_id":1769183116344402832}
+
+2026/01/23 19:45:16 [31;1m/Users/dima/.cursor/worktrees/dungeons-and-dragons-ai/zss/internal/game/infrastructure/persistence/player.go:30 [35;1mrecord not found
+[0m[33m[0.411ms] [34;1m[rows:0][0m SELECT * FROM "players" WHERE tg_user_id = 1769183116439112764 AND game_session_id = 208 ORDER BY "players"."id" LIMIT 1
+{"level":"info","timestamp":"2026-01-23T19:45:16.455+0400","caller":"logger/logger.go:100","msg":"RequestAbilityCheckTool: executing","chat_id":1769183116439112764}
+
+2026/01/23 19:45:16 [31;1m/Users/dima/.cursor/worktrees/dungeons-and-dragons-ai/zss/internal/game/infrastructure/persistence/player.go:30 [35;1mrecord not found
+[0m[33m[0.414ms] [34;1m[rows:0][0m SELECT * FROM "players" WHERE tg_user_id = 1769183116527110564 AND game_session_id = 209 ORDER BY "players"."id" LIMIT 1
+{"level":"info","timestamp":"2026-01-23T19:45:16.543+0400","caller":"logger/logger.go:100","msg":"RequestAbilityCheckTool: executing","chat_id":1769183116527110564}
+{"level":"info","timestamp":"2026-01-23T19:45:16.545+0400","caller":"logger/logger.go:100","msg":"RequestAbilityCheckTool: budget exceeded","chat_id":1769183116527110564,"recent_checks":3}
+{"level":"info","timestamp":"2026-01-23T19:45:16.618+0400","caller":"logger/logger.go:100","msg":"Configured HTTP client with connection pooling for Telegram Bot API"}
+{"level":"info","timestamp":"2026-01-23T19:45:16.619+0400","caller":"logger/logger.go:100","msg":"Bot commands menu configured successfully","commands_count":33}
+{"level":"info","timestamp":"2026-01-23T19:45:16.619+0400","caller":"logger/logger.go:100","msg":"Command not recognized as command by Telegram, handling manually","command":"roll","text":"/roll d20","chat_id":1769183116613406399}
+
+2026/01/23 19:45:16 [31;1m/Users/dima/.cursor/worktrees/dungeons-and-dragons-ai/zss/internal/game/infrastructure/persistence/player.go:30 [35;1mrecord not found
+[0m[33m[0.441ms] [34;1m[rows:0][0m SELECT * FROM "players" WHERE tg_user_id = 1769183116695201879 AND game_session_id = 211 ORDER BY "players"."id" LIMIT 1
+{"level":"info","timestamp":"2026-01-23T19:45:16.710+0400","caller":"logger/logger.go:100","msg":"RequestAbilityCheckTool: executing","chat_id":1769183116695201879}
+panic: test timed out after 10m0s
+	running tests:
+		TestCoreMechanicsIntegrationSuite (10m0s)
+		TestCoreMechanicsIntegrationSuite/Run_unit_tests (10m0s)
+
+goroutine 134 [running]:
+testing.(*M).startAlarm.func1()
+	/usr/local/go/src/testing/testing.go:2682 +0x2b0
+created by time.goFunc
+	/usr/local/go/src/time/sleep.go:215 +0x38
+
+goroutine 1 [chan receive, 9 minutes]:
+testing.(*T).Run(0x14000102e00, {0x102e4dce0?, 0x14000251b38?}, 0x103289620)
+	/usr/local/go/src/testing/testing.go:2005 +0x378
+testing.runTests.func1(0x14000102e00)
+	/usr/local/go/src/testing/testing.go:2477 +0x38
+testing.tRunner(0x14000102e00, 0x14000251c68)
+	/usr/local/go/src/testing/testing.go:1934 +0xc8
+testing.runTests(0x14000134c90, {0x103a3ed60, 0x28, 0x28}, {0x1400025ca80?, 0x7?, 0x103a4d0e0?})
+	/usr/local/go/src/testing/testing.go:2475 +0x3b8
+testing.(*M).Run(0x14000265900)
+	/usr/local/go/src/testing/testing.go:2337 +0x530
+main.main()
+	_testmain.go:123 +0x80
+
+goroutine 149 [chan receive, 9 minutes]:
+testing.(*T).Run(0x14000398540, {0x102e334b1?, 0x14000122ed8?}, 0x140003d5d88)
+	/usr/local/go/src/testing/testing.go:2005 +0x378
+dungeons-and-dragons-ai/tests/integration.TestCoreMechanicsIntegrationSuite(0x14000398540)
+	/Users/dima/.cursor/worktrees/dungeons-and-dragons-ai/zss/tests/integration/core_mechanics_integration_test.go:17 +0x9c
+testing.tRunner(0x14000398540, 0x103289620)
+	/usr/local/go/src/testing/testing.go:1934 +0xc8
+created by testing.(*T).Run in goroutine 1
+	/usr/local/go/src/testing/testing.go:1997 +0x364
+
+goroutine 24 [select, 9 minutes]:
+database/sql.(*DB).connectionOpener(0x1400028c9c0, {0x1032a26c0, 0x1400023d450})
+	/usr/local/go/src/database/sql/sql.go:1261 +0x80
+created by database/sql.OpenDB in goroutine 23
+	/usr/local/go/src/database/sql/sql.go:841 +0x114
+
+goroutine 82 [select, 9 minutes]:
+database/sql.(*DB).connectionOpener(0x1400028c680, {0x1032a26c0, 0x140000cb860})
+	/usr/local/go/src/database/sql/sql.go:1261 +0x80
+created by database/sql.OpenDB in goroutine 81
+	/usr/local/go/src/database/sql/sql.go:841 +0x114
+
+goroutine 26 [select, 9 minutes]:
+database/sql.(*DB).connectionOpener(0x14000451380, {0x1032a26c0, 0x14000409c70})
+	/usr/local/go/src/database/sql/sql.go:1261 +0x80
+created by database/sql.OpenDB in goroutine 25
+	/usr/local/go/src/database/sql/sql.go:841 +0x114
+
+goroutine 101 [select, 9 minutes]:
+database/sql.(*DB).connectionOpener(0x140003e6680, {0x1032a26c0, 0x1400040f680})
+	/usr/local/go/src/database/sql/sql.go:1261 +0x80
+created by database/sql.OpenDB in goroutine 100
+	/usr/local/go/src/database/sql/sql.go:841 +0x114
+
+goroutine 99 [select, 9 minutes]:
+database/sql.(*DB).connectionOpener(0x140000c8dd0, {0x1032a26c0, 0x1400038f400})
+	/usr/local/go/src/database/sql/sql.go:1261 +0x80
+created by database/sql.OpenDB in goroutine 98
+	/usr/local/go/src/database/sql/sql.go:841 +0x114
+
+goroutine 150 [syscall, 9 minutes]:
+syscall.syscall6(0x1003ca3d8?, 0x12ae80aa8?, 0x103ba66c8?, 0x90?, 0x103a4eb00?, 0x14000028990?, 0x14000123d18?)
+	/usr/local/go/src/runtime/sys_darwin.go:60 +0x40
+syscall.wait4(0x14000123d48?, 0x1025af3dc?, 0x90?, 0x1032623c0?)
+	/usr/local/go/src/syscall/zsyscall_darwin_arm64.go:44 +0x4c
+syscall.Wait4(0x140001d5810?, 0x14000123d84, 0x140003ca3d8?, 0x140001d57a0?)
+	/usr/local/go/src/syscall/syscall_bsd.go:144 +0x28
+os.(*Process).pidWait.func1(...)
+	/usr/local/go/src/os/exec_unix.go:64
+os.ignoringEINTR2[...](...)
+	/usr/local/go/src/os/file_posix.go:266
+os.(*Process).pidWait(0x14000199740)
+	/usr/local/go/src/os/exec_unix.go:63 +0x9c
+os.(*Process).wait(0x103ba66c8?)
+	/usr/local/go/src/os/exec_unix.go:28 +0x24
+os.(*Process).Wait(...)
+	/usr/local/go/src/os/exec.go:340
+os/exec.(*Cmd).Wait(0x140000eef00)
+	/usr/local/go/src/os/exec/exec.go:922 +0x38
+os/exec.(*Cmd).Run(0x140000eef00)
+	/usr/local/go/src/os/exec/exec.go:626 +0x38
+os/exec.(*Cmd).CombinedOutput(0x140000eef00)
+	/usr/local/go/src/os/exec/exec.go:1039 +0x7c
+dungeons-and-dragons-ai/tests/integration.TestCoreMechanicsIntegrationSuite.func1(0x14000398700)
+	/Users/dima/.cursor/worktrees/dungeons-and-dragons-ai/zss/tests/integration/core_mechanics_integration_test.go:19 +0x74
+testing.tRunner(0x14000398700, 0x140003d5d88)
+	/usr/local/go/src/testing/testing.go:1934 +0xc8
+created by testing.(*T).Run in goroutine 149
+	/usr/local/go/src/testing/testing.go:1997 +0x364
+
+goroutine 151 [IO wait, 9 minutes]:
+internal/poll.runtime_pollWait(0x12a72ae00, 0x72)
+	/usr/local/go/src/runtime/netpoll.go:351 +0xa0
+internal/poll.(*pollDesc).wait(0x1400009c660?, 0x140000c2000?, 0x1)
+	/usr/local/go/src/internal/poll/fd_poll_runtime.go:84 +0x28
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/local/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x1400009c660, {0x140000c2000, 0x200, 0x200})
+	/usr/local/go/src/internal/poll/fd_unix.go:165 +0x1e0
+os.(*File).read(...)
+	/usr/local/go/src/os/file_posix.go:29
+os.(*File).Read(0x140003d8ac0, {0x140000c2000?, 0x14000079558?, 0x10259dc1c?})
+	/usr/local/go/src/os/file.go:144 +0x68
+bytes.(*Buffer).ReadFrom(0x1400039bd10, {0x1032920b8, 0x1400011e048})
+	/usr/local/go/src/bytes/buffer.go:217 +0x90
+io.copyBuffer({0x103292920, 0x1400039bd10}, {0x1032920b8, 0x1400011e048}, {0x0, 0x0, 0x0})
+	/usr/local/go/src/io/io.go:415 +0x14c
+io.Copy(...)
+	/usr/local/go/src/io/io.go:388
+os.genericWriteTo(0x14000079701?, {0x103292920, 0x1400039bd10})
+	/usr/local/go/src/os/file.go:295 +0x58
+os.(*File).WriteTo(0x103a23f30?, {0x103292920?, 0x1400039bd10?})
+	/usr/local/go/src/os/file.go:273 +0x5c
+io.copyBuffer({0x103292920, 0x1400039bd10}, {0x1032921a0, 0x140003d8ac0}, {0x0, 0x0, 0x0})
+	/usr/local/go/src/io/io.go:411 +0x98
+io.Copy(...)
+	/usr/local/go/src/io/io.go:388
+os/exec.(*Cmd).writerDescriptor.func1()
+	/usr/local/go/src/os/exec/exec.go:596 +0x40
+os/exec.(*Cmd).Start.func2(0x14000398700?)
+	/usr/local/go/src/os/exec/exec.go:749 +0x30
+created by os/exec.(*Cmd).Start in goroutine 150
+	/usr/local/go/src/os/exec/exec.go:748 +0x6a4
+FAIL	dungeons-and-dragons-ai/tests/integration	600.339s
+FAIL
+
+3. Telegram stub tests failed: exit status 2
+4. Stub test output: make[1]: *** No rule to make target `test-telegram-stub'.  Stop.
+
+5. Comprehensive gameplay tests failed: exit status 2
+6. Gameplay test output: make[1]: *** No rule to make target `test-telegram'.  Stop.
+
+7. Container status check failed: exit status 1
+8. Cannot read FEEDBACK.md: open tests/integration/FEEDBACK.md: no such file or directory
+9. Cannot read TESTING_REPORT.md: open TESTING_REPORT.md: no such file or directory
+
+---
+
+## Проблемы, найденные при интеграционном тестировании (2026-01-23 19:55:17)
+
+1. Core Mechanics Integration: 9 problems found, 0 checks passed
+
+---
+
+## Проблемы, найденные при интеграционном тестировании (2026-01-23 19:55:30)
+
+1. Combat detection - goblin attack: Expected combat=true, got combat=false
+2. Combat with multiple enemies: Expected combat=true, got combat=false
+
+---
+
+## Проблемы, найденные при интеграционном тестировании (2026-01-23 19:55:30)
+
+1. Real LLM Combat Analysis: 2 problems, 4 feedback items from 5 test cases
+
+---
+
+## Проблемы, найденные при интеграционном тестировании (2026-01-23 19:55:44)
+
+1. Request 1 failed: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+2. Request 2 failed: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+3. Request 3 failed: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+4. Request 4 failed: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+5. Request 5 failed: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+6. Rate limited request 1 failed: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+7. Rate limited request 2 failed: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+8. Rate limited request 3 failed: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+
+---
+
+## 🚨 Найденные проблемы в интеграционном тестировании (2026-01-23)
+
+### ❌ Критические проблемы инфраструктуры
+
+**TLS Certificate Verification Errors в GigaChat API:**
+- **Симптом**: `tls: failed to verify certificate: x509: certificate signed by unknown authority`
+- **Влияние**: Все тесты с реальным LLM падают при попытке создать кампанию или персонажа
+- **Затронутые тесты**:
+  - `TestTelegramGameplay_BotSimulation_UserJourney` - FAIL
+  - `TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM` - FAIL
+- **Количество**: 2 теста FAIL из-за TLS проблем
+- **Решение**: Добавить `GIGACHAT_SKIP_TLS_VERIFY=true` в переменные окружения или исправить TLS конфигурацию
+
+**Runtime Panic (Segmentation Fault):**
+- **Симптом**: `panic: runtime error: invalid memory address or nil pointer dereference`
+- **Место**: `telegram_comprehensive_gameplay_test.go:211`
+- **Влияние**: Тест завершается аварийно, прерывая весь прогон
+- **Вероятная причина**: Попытка доступа к nil указателю при работе с игровой сессией
+- **Количество**: 1 panic, вызвавший завершение тестирования
+
+### ⚠️ Проблемы с тестовой инфраструктурой
+
+**Отсутствие сессий в базе данных:**
+- **Симптом**: `record not found` при поиске game_sessions и players
+- **Влияние**: Тесты не могут продолжить выполнение после создания игры
+- **Затронутые тесты**: Несколько тестов FAIL из-за отсутствия данных в production БД
+- **Причина**: Тесты создают данные в test базе, но пытаются работать с production БД
+
+### 📊 Статистика тестирования
+
+- **Всего тестов**: 43 (30 PASS + 13 FAIL)
+- **Процент успешности**: 69.8% (30/43)
+- **Критические FAIL**: 13 тестов
+- **Время выполнения**: ~637 секунд (10.6 минут)
+- **Инфраструктура**: Production PostgreSQL + Qdrant контейнеры
+
+### 🎯 Рекомендации
+
+1. **Исправить TLS конфигурацию** для GigaChat API в production среде
+2. **Добавить nil checks** в код для предотвращения panic
+3. **Синхронизировать тестовые базы данных** между development и production средами
+4. **Добавить graceful fallbacks** для network ошибок в LLM вызовах
+5. **Рассмотреть использование mock LLM** для интеграционных тестов в CI/CD
+
+---
+
+## Проблемы, найденные при интеграционном тестировании (2026-01-23 19:55:47)
+
+1. /newgame: failed to generate main quest: network error: Post "https://ngw.devices.sberbank.ru:9443/api/v2/oauth": tls: failed to verify certificate: x509: certificate signed by unknown authority
+2. После /newgame не найдена активная сессия: err=<nil>, session_nil=true
+3. После /createcharacter не найден персонаж в сессии
 
 ---
