@@ -117,16 +117,42 @@ func (uc *MoveToLocationUseCase) Execute(ctx context.Context, req MoveToLocation
 		return nil, fmt.Errorf("target location not found")
 	}
 
-	// Проверяем достижимость (есть ли связь из текущей локации)
+	// Проверяем достижимость (есть ли связь из текущей локации) и находим соединение
+	var travelConnection *world.LocationConnection
 	reachable := false
 	for _, conn := range current.Connections {
 		if conn.ToLocationID == targetID {
 			reachable = true
+			travelConnection = &conn
 			break
 		}
 	}
 	if !reachable {
 		return nil, fmt.Errorf("target location is not reachable from current location")
+	}
+
+	// Рассчитываем время перемещения и продвигаем время в мире
+	travelHours := gs.World.CalculateTravelTimeHours(*travelConnection)
+	if travelHours > 0 {
+		oldTimeOfDay := gs.World.TimeOfDay
+		oldDay := gs.World.Day
+
+		// Продвигаем время
+		gs.World.AdvanceTimeByHours(travelHours)
+
+		// Проверяем, изменилась ли погода
+		weatherChanged := gs.World.MaybeChangeWeather()
+		newTimeOfDay := gs.World.TimeOfDay
+		newDay := gs.World.Day
+
+		// Сохраняем изменения мира
+		if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+			return nil, fmt.Errorf("failed to save world time changes: %w", err)
+		}
+
+		// Создаем сообщение о времени
+		timeMsg := uc.buildTimeProgressionMessage(oldTimeOfDay, newTimeOfDay, oldDay, newDay, travelHours, weatherChanged, gs.World.Weather)
+		_ = timeMsg // Пока сохраняем для использования в сообщении
 	}
 
 	// Фиксируем активные события локации как "игнор" при уходе
@@ -140,7 +166,8 @@ func (uc *MoveToLocationUseCase) Execute(ctx context.Context, req MoveToLocation
 		return nil, fmt.Errorf("failed to save session: %w", err)
 	}
 
-	msg := fmt.Sprintf("🧭 Вы переместились: %s → %s\n\n%s", current.Name, to.Name, to.Description)
+	// Создаем сообщение о перемещении
+	msg := uc.buildMovementMessage(current, to, travelHours, &gs.World)
 	return &MoveToLocationResponse{
 		From:    current,
 		To:      to,
@@ -270,4 +297,119 @@ func normalizeDirection(dir string) string {
 		return "down"
 	}
 	return d
+}
+
+// buildTimeProgressionMessage создает сообщение о прошедшем времени
+func (uc *MoveToLocationUseCase) buildTimeProgressionMessage(
+	oldTimeOfDay, newTimeOfDay string,
+	oldDay, newDay int,
+	travelHours int,
+	weatherChanged bool,
+	newWeather string,
+) string {
+	var parts []string
+
+	if travelHours == 1 {
+		parts = append(parts, fmt.Sprintf("⏰ В пути вы провели %d час", travelHours))
+	} else if travelHours < 5 {
+		parts = append(parts, fmt.Sprintf("⏰ В пути вы провели %d часа", travelHours))
+	} else {
+		parts = append(parts, fmt.Sprintf("⏰ В пути вы провели %d часов", travelHours))
+	}
+
+	// Информация об изменении времени суток
+	if oldTimeOfDay != newTimeOfDay {
+		timeNames := map[string]string{
+			"morning":   "утро",
+			"noon":      "полдень",
+			"afternoon": "день",
+			"evening":   "вечер",
+			"night":     "ночь",
+			"midnight":  "полночь",
+		}
+
+		if oldName, ok := timeNames[oldTimeOfDay]; ok {
+			if newName, ok := timeNames[newTimeOfDay]; ok {
+				if oldDay != newDay {
+					parts = append(parts, fmt.Sprintf("🌅 Наступил новый день. Время суток изменилось: %s → %s", oldName, newName))
+				} else {
+					parts = append(parts, fmt.Sprintf("🕐 Время суток изменилось: %s → %s", oldName, newName))
+				}
+			}
+		}
+	}
+
+	// Информация об изменении погоды
+	if weatherChanged {
+		weatherNames := map[string]string{
+			"clear":  "ясная",
+			"cloudy": "облачная",
+			"rainy":  "дождливая",
+			"stormy": "штормовая",
+			"foggy":  "туманная",
+			"snowy":  "снежная",
+		}
+
+		if weatherName, ok := weatherNames[newWeather]; ok {
+			parts = append(parts, fmt.Sprintf("🌤️ Погода изменилась на %s", weatherName))
+		}
+	}
+
+	return strings.Join(parts, ". ") + "."
+}
+
+// buildMovementMessage создает сообщение о перемещении с информацией о времени
+func (uc *MoveToLocationUseCase) buildMovementMessage(
+	from, to *world.Location,
+	travelHours int,
+	currentWorld *world.World,
+) string {
+	var parts []string
+
+	// Основное сообщение о перемещении
+	parts = append(parts, fmt.Sprintf("🧭 Вы переместились: %s → %s", from.Name, to.Name))
+
+	// Информация о времени в пути
+	if travelHours > 0 {
+		if travelHours == 1 {
+			parts = append(parts, fmt.Sprintf("⏱️ Время в пути: %d час", travelHours))
+		} else if travelHours < 5 {
+			parts = append(parts, fmt.Sprintf("⏱️ Время в пути: %d часа", travelHours))
+		} else {
+			parts = append(parts, fmt.Sprintf("⏱️ Время в пути: %d часов", travelHours))
+		}
+	}
+
+	// Текущее время и погода
+	timeNames := map[string]string{
+		"morning":   "🌅 Утро",
+		"noon":      "☀️ Полдень",
+		"afternoon": "🌇 День",
+		"evening":   "🌆 Вечер",
+		"night":     "🌙 Ночь",
+		"midnight":  "🕛 Полночь",
+	}
+
+	if timeName, ok := timeNames[currentWorld.TimeOfDay]; ok {
+		parts = append(parts, fmt.Sprintf("🕐 Текущее время: %s", timeName))
+	}
+
+	weatherNames := map[string]string{
+		"clear":  "ясно",
+		"cloudy": "облачно",
+		"rainy":  "дождь",
+		"stormy": "шторм",
+		"foggy":  "туман",
+		"snowy":  "снег",
+	}
+
+	if weatherName, ok := weatherNames[currentWorld.Weather]; ok {
+		parts = append(parts, fmt.Sprintf("🌤️ Погода: %s", weatherName))
+	}
+
+	// Описание новой локации
+	parts = append(parts, "")
+	parts = append(parts, to.Description)
+
+	return strings.Join(parts, "\n")
 }

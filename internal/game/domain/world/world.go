@@ -2,6 +2,8 @@ package world
 
 import (
 	"context"
+	"math/rand"
+	"strings"
 	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/location"
@@ -54,6 +56,68 @@ func (w *World) AdvanceTime() {
 		w.TimeOfDay = "morning"
 		w.AdvanceDay()
 	}
+}
+
+// AdvanceTimeByHours продвигает время в мире на указанное количество часов
+func (w *World) AdvanceTimeByHours(hours int) {
+	for i := 0; i < hours; i++ {
+		w.AdvanceTime()
+	}
+}
+
+// CalculateTravelTimeHours рассчитывает время перемещения между локациями в часах
+// на основе типа соединения и расстояния
+func (w *World) CalculateTravelTimeHours(connection LocationConnection) int {
+	if connection.Description == "" {
+		// Базовое время для простых перемещений
+		return 1
+	}
+
+	desc := strings.ToLower(connection.Description)
+
+	// Анализируем описание пути для определения времени
+	switch {
+	case strings.Contains(desc, "длинный") || strings.Contains(desc, "далекий"):
+		return 3
+	case strings.Contains(desc, "короткий") || strings.Contains(desc, "близкий"):
+		return 1
+	case strings.Contains(desc, "подземный") || strings.Contains(desc, "пещера"):
+		return 2
+	case strings.Contains(desc, "лес") || strings.Contains(desc, "джунгли"):
+		return 2
+	case strings.Contains(desc, "дорога") || strings.Contains(desc, "тракт"):
+		return 1
+	case strings.Contains(desc, "тропинка") || strings.Contains(desc, "тропа"):
+		return 2
+	case strings.Contains(desc, "река") || strings.Contains(desc, "озеро"):
+		return 3
+	case strings.Contains(desc, "море") || strings.Contains(desc, "океан"):
+		return 6
+	case strings.Contains(desc, "портал") || strings.Contains(desc, "телепорт"):
+		return 0 // Мгновенное перемещение
+	default:
+		// Базовое время для неопределенных путей
+		return 2
+	}
+}
+
+// MaybeChangeWeather имеет шанс изменить погоду при изменении времени суток
+func (w *World) MaybeChangeWeather() bool {
+	// Шанс изменения погоды при переходе времени суток (20%)
+	if rand.Intn(100) < 20 {
+		weathers := []string{"clear", "cloudy", "rainy", "foggy"}
+		oldWeather := w.Weather
+		w.Weather = weathers[rand.Intn(len(weathers))]
+
+		// Не меняем погоду на ту же самую
+		if w.Weather == oldWeather && len(weathers) > 1 {
+			for w.Weather == oldWeather {
+				w.Weather = weathers[rand.Intn(len(weathers))]
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // AdvanceDay продвигает день в календаре
