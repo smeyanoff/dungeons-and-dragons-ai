@@ -18,9 +18,9 @@ import (
 	diceapp "dungeons-and-dragons-ai/internal/game/application/dice"
 	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
-	sessionapp "dungeons-and-dragons-ai/internal/game/application/session"
 	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
+	sessionapp "dungeons-and-dragons-ai/internal/game/application/session"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
@@ -179,7 +179,7 @@ func (a *sessionRepoAdapterForDM) GetByChatID(ctx context.Context, chatID int64)
 	}
 
 	return &dm_analyzer.SessionSnapshot{
-		ID:              gs.ID,
+		ID: gs.ID,
 		World: dm_analyzer.WorldSnapshot{
 			ID:        gs.World.ID,
 			Locations: locations,
@@ -838,7 +838,7 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		gs.ChatID, // Передаем chatID для отправки уведомлений
 		gs.WorldID,
 		player.CharacterID,
-		player.ID,     // Передаем playerID для проверки достижений
+		player.ID,             // Передаем playerID для проверки достижений
 		gs.AutoGenerateImages, // Используем настройку из сессии
 	)
 
@@ -2154,12 +2154,12 @@ func (uc *HandleActionUseCase) recruitCompanion(ev *world.WorldEvent, outcome *w
 		Name:          selectedName,
 		Description:   fmt.Sprintf("%s класса %s", selectedName, selectedClass),
 		Class:         selectedClass,
-		Level:         1 + rng.Intn(3), // Уровень 1-3
+		Level:         1 + rng.Intn(3),   // Уровень 1-3
 		HP:            20 + rng.Intn(30), // HP 20-49
 		MaxHP:         20 + rng.Intn(30),
 		AC:            12 + rng.Intn(4), // AC 12-15
-		AttackBonus:   2 + rng.Intn(3), // +2 to +4
-		DamageDice:    "1d8", // Простое оружие
+		AttackBonus:   2 + rng.Intn(3),  // +2 to +4
+		DamageDice:    "1d8",            // Простое оружие
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
 	}
@@ -2492,7 +2492,6 @@ func (a *achievementCheckerAdapter) Execute(
 	return result, nil
 }
 
-
 // subscriptionCheckerAdapter адаптирует subscriptionapp.GetSubscriptionUseCase к интерфейсу dm_tools.SubscriptionChecker
 type subscriptionCheckerAdapter struct {
 	getSubscriptionUC *subscriptionapp.GetSubscriptionUseCase
@@ -2522,25 +2521,25 @@ func (uc *HandleActionUseCase) parseTimeChangeCommand(message string) string {
 	// Паттерны для распознавания команд времени
 	timePatterns := map[string]string{
 		// Русские паттерны
-		"подождать до утра":     "morning",
-		"дождаться утра":        "morning",
-		"подождать до вечера":   "evening",
-		"дождаться вечера":      "evening",
-		"подождать до ночи":     "night",
-		"дождаться ночи":        "night",
-		"подождать до полудня":  "noon",
-		"дождаться полудня":     "noon",
-		"подождать до дня":      "noon",
-		"дождаться дня":         "noon",
-		"подождать до полночь":  "midnight",
-		"дождаться полночь":     "midnight",
+		"подождать до утра":    "morning",
+		"дождаться утра":       "morning",
+		"подождать до вечера":  "evening",
+		"дождаться вечера":     "evening",
+		"подождать до ночи":    "night",
+		"дождаться ночи":       "night",
+		"подождать до полудня": "noon",
+		"дождаться полудня":    "noon",
+		"подождать до дня":     "noon",
+		"дождаться дня":        "noon",
+		"подождать до полночь": "midnight",
+		"дождаться полночь":    "midnight",
 
 		// Английские паттерны
-		"wait until morning":    "morning",
-		"wait until evening":    "evening",
-		"wait until night":      "night",
-		"wait until noon":       "noon",
-		"wait until midnight":   "midnight",
+		"wait until morning":  "morning",
+		"wait until evening":  "evening",
+		"wait until night":    "night",
+		"wait until noon":     "noon",
+		"wait until midnight": "midnight",
 	}
 
 	for pattern, timeOfDay := range timePatterns {
