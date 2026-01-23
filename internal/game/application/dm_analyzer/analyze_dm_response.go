@@ -3200,9 +3200,8 @@ func (uc *AnalyzeDMResponseUseCase) generateLocationScenario(location world.Loca
 // generateSimpleLocationScenario создает простой сценарий без LLM
 func (uc *AnalyzeDMResponseUseCase) generateSimpleLocationScenario(location world.Location) *world.LocationScenario {
 	name := location.Name
-	desc := location.Description
 
-	// Определяем тип сценария на основе названия и описания
+	// Определяем тип сценария на основе названия
 	var title, description, objective, reward string
 	var keyEvents, possibleOutcomes []string
 

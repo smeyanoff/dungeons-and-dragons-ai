@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
+	"dungeons-and-dragons-ai/internal/llm/domain"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 
 	"github.com/google/uuid"
@@ -17,6 +19,7 @@ import (
 
 type MoveToLocationUseCase struct {
 	sessionRepo    session.Repository
+	llm            domain.LLM // Добавлено для генерации сценариев
 	worldEventRepo WorldEventRepository
 	eventRepo      StoryEventRepository
 	indexDocUC     RAGIndexer
@@ -36,12 +39,14 @@ type RAGIndexer interface {
 }
 
 func NewMoveToLocationUseCase(
+	llm domain.LLM,
 	sessionRepo session.Repository,
 	worldEventRepo WorldEventRepository,
 	eventRepo StoryEventRepository,
 	indexDocUC RAGIndexer,
 ) *MoveToLocationUseCase {
 	return &MoveToLocationUseCase{
+		llm:            llm,
 		sessionRepo:    sessionRepo,
 		worldEventRepo: worldEventRepo,
 		eventRepo:      eventRepo,
@@ -314,17 +319,75 @@ func (uc *MoveToLocationUseCase) generateScenarioForLocationIfNeeded(ctx context
 		return nil
 	}
 
-	// Генерируем новый сценарий
-	scenario := uc.generateSimpleLocationScenario(*location)
+	// Сначала пытаемся сгенерировать сценарий с помощью LLM
+	scenario, err := uc.generateLLMLocationScenario(ctx, *location)
+	if err != nil {
+		// Если LLM недоступен или генерация не удалась, используем заранее подготовленный сценарий
+		scenario = uc.generateSimpleLocationScenario(*location)
+	}
 
 	// Сохраняем сценарий в локации
 	if err := location.SetScenario(scenario); err != nil {
 		return fmt.Errorf("failed to set scenario: %w", err)
 	}
 
-	// Сценарий сгенерирован успешно
-
 	return nil
+}
+
+// generateLLMLocationScenario генерирует мини-сценарий для локации с помощью LLM
+func (uc *MoveToLocationUseCase) generateLLMLocationScenario(ctx context.Context, location world.Location) (*world.LocationScenario, error) {
+	if uc.llm == nil {
+		return nil, fmt.Errorf("LLM not available")
+	}
+
+	// Создаем мини-промпт для генерации сценария
+	prompt := fmt.Sprintf(`Создай краткий сценарий для локации в D&D 5e.
+
+Локация: %s
+Описание: %s
+
+Требования к сценарию:
+- Краткое название (2-4 слова)
+- Краткое описание ситуации (1-2 предложения)
+- Конкретная цель для игрока (что нужно сделать)
+- 2-3 ключевых события
+- Возможные исходы (успех/неудача)
+- Небольшая награда
+
+Формат ответа (ТОЛЬКО JSON, без markdown):
+{
+  "title": "Название сценария",
+  "description": "Краткое описание",
+  "objective": "Цель игрока",
+  "key_events": ["Событие 1", "Событие 2"],
+  "possible_outcomes": ["Исход 1", "Исход 2"],
+  "reward": "Награда"
+}`, location.Name, location.Description)
+
+	llmCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 800)
+	if err != nil {
+		log.Printf("[MoveToLocation] Failed to generate LLM scenario for %s: %v", location.Name, err)
+		return nil, err
+	}
+
+	// Парсим JSON ответ
+	var scenario world.LocationScenario
+	cleaned := strings.TrimSpace(strings.Trim(raw, "```json"))
+	if err := json.Unmarshal([]byte(cleaned), &scenario); err != nil {
+		log.Printf("[MoveToLocation] Failed to parse LLM scenario JSON for %s: %v", location.Name, err)
+		return nil, err
+	}
+
+	// Заполняем обязательные поля
+	scenario.ID = fmt.Sprintf("llm_scenario_%d_%d", location.ID, time.Now().Unix())
+	scenario.Status = "not_started"
+	scenario.CreatedAt = time.Now().Format(time.RFC3339)
+
+	log.Printf("[MoveToLocation] Generated LLM scenario for location %s: %s", location.Name, scenario.Title)
+	return &scenario, nil
 }
 
 // generateSimpleLocationScenario создает простой сценарий для локации

@@ -167,7 +167,7 @@ func TestMoveToLocationUseCase_Execute(t *testing.T) {
 		},
 	}
 
-	uc := NewMoveToLocationUseCase(nil, nil, nil, nil)
+	uc := NewMoveToLocationUseCase(nil, nil, nil, nil, nil)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			uc.sessionRepo = tt.repo
