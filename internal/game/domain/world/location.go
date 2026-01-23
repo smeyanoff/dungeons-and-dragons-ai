@@ -10,6 +10,19 @@ type PredefinedCheck struct {
 	LocationHint string `json:"location_hint"` // Подсказка о том, где в локации находится проверка
 }
 
+// LocationScenario представляет сценарий для локации (цель, события, возможные исходы)
+type LocationScenario struct {
+	ID          string   `json:"id"`          // Уникальный ID сценария
+	Title       string   `json:"title"`       // Название сценария
+	Description string   `json:"description"` // Подробное описание
+	Objective   string   `json:"objective"`   // Цель, которую нужно достичь
+	KeyEvents   []string `json:"key_events"` // Ключевые события сценария
+	PossibleOutcomes []string `json:"possible_outcomes"` // Возможные исходы
+	Reward      string   `json:"reward"`      // Награда за успешное завершение
+	Status      string   `json:"status"`      // Статус: "not_started", "in_progress", "completed", "failed"
+	CreatedAt   string   `json:"created_at"`  // Время создания
+}
+
 type Location struct {
 	ID          uint `gorm:"primaryKey"`
 	WorldID     uint `gorm:"index"`
@@ -18,6 +31,9 @@ type Location struct {
 
 	// PredefinedChecks хранятся как JSON в БД
 	PredefinedChecksJSON json.RawMessage `gorm:"type:jsonb" json:"-"` // JSON представление предопределенных проверок для БД
+
+	// Scenario - сгенерированный сценарий для локации (цель, события, исходы)
+	ScenarioJSON json.RawMessage `gorm:"type:jsonb" json:"-"` // JSON представление сценария для БД
 
 	NPCs        []NPC
 	Monsters    []Monster
@@ -47,6 +63,32 @@ func (l *Location) SetPredefinedChecks(checks []PredefinedCheck) error {
 		return err
 	}
 	l.PredefinedChecksJSON = json.RawMessage(data)
+	return nil
+}
+
+// GetScenario возвращает сценарий локации (десериализация из JSON)
+func (l *Location) GetScenario() *LocationScenario {
+	if len(l.ScenarioJSON) == 0 {
+		return nil
+	}
+	var scenario LocationScenario
+	if err := json.Unmarshal(l.ScenarioJSON, &scenario); err != nil {
+		return nil
+	}
+	return &scenario
+}
+
+// SetScenario устанавливает сценарий локации (сериализация в JSON)
+func (l *Location) SetScenario(scenario *LocationScenario) error {
+	if scenario == nil {
+		l.ScenarioJSON = nil
+		return nil
+	}
+	data, err := json.Marshal(scenario)
+	if err != nil {
+		return err
+	}
+	l.ScenarioJSON = json.RawMessage(data)
 	return nil
 }
 

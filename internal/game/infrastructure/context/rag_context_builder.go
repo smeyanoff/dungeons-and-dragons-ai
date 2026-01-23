@@ -360,12 +360,8 @@ func (b *RAGContextBuilder) BuildContext(
 		}
 	}
 
-	// Добавляем мини-ивенты для атмосферы (случайно, не всегда)
-	if rand.Intn(100) < 25 { // 25% шанс добавить мини-ивент
-		parts = append(parts, "\n--- Мини-ивент ---")
-		miniEvent := generateMiniEvent()
-		parts = append(parts, miniEvent)
-	}
+	// Мини-ивенты теперь генерируются только в ответах DM, а не добавляются в контекст RAG
+	// Это предотвращает их повторение и спам
 
 	return strings.Join(parts, "\n"), nil
 }

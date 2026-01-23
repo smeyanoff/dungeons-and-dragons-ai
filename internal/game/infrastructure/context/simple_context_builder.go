@@ -127,6 +127,18 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 		}
 
 		// Предопределенные проверки удалены - система использует естественное распознавание проверок
+
+		// Информация о сценарии локации
+		if scenario := currentLoc.GetScenario(); scenario != nil {
+			parts = append(parts, "")
+			parts = append(parts, fmt.Sprintf("🎯 Сценарий: %s", scenario.Title))
+			if scenario.Objective != "" {
+				parts = append(parts, fmt.Sprintf("Цель: %s", scenario.Objective))
+			}
+			if scenario.Status != "not_started" {
+				parts = append(parts, fmt.Sprintf("Статус: %s", scenario.Status))
+			}
+		}
 	}
 
 	if gs.HasPendingAbilityCheck() {

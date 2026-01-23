@@ -160,6 +160,12 @@ func (uc *MoveToLocationUseCase) Execute(ctx context.Context, req MoveToLocation
 		return nil, err
 	}
 
+	// Генерируем сценарий для новой локации при первом посещении
+	if err := uc.generateScenarioForLocationIfNeeded(ctx, to); err != nil {
+		// Логируем ошибку, но не прерываем перемещение
+		// TODO: добавить логирование когда будет доступен logger
+	}
+
 	// Обновляем текущую локацию
 	gs.CurrentLocationID = &targetID
 	if err := uc.sessionRepo.Save(ctx, gs); err != nil {
@@ -297,6 +303,136 @@ func normalizeDirection(dir string) string {
 		return "down"
 	}
 	return d
+}
+
+// generateScenarioForLocationIfNeeded генерирует сценарий для локации при первом посещении
+func (uc *MoveToLocationUseCase) generateScenarioForLocationIfNeeded(ctx context.Context, location *world.Location) error {
+	// Проверяем, есть ли уже сценарий
+	existingScenario := location.GetScenario()
+	if existingScenario != nil {
+		// Сценарий уже существует
+		return nil
+	}
+
+	// Генерируем новый сценарий
+	scenario := uc.generateSimpleLocationScenario(*location)
+
+	// Сохраняем сценарий в локации
+	if err := location.SetScenario(scenario); err != nil {
+		return fmt.Errorf("failed to set scenario: %w", err)
+	}
+
+	// Сценарий сгенерирован успешно
+
+	return nil
+}
+
+// generateSimpleLocationScenario создает простой сценарий для локации
+func (uc *MoveToLocationUseCase) generateSimpleLocationScenario(location world.Location) *world.LocationScenario {
+	name := location.Name
+	desc := location.Description
+
+	// Определяем тип сценария на основе названия и описания
+	var title, description, objective, reward string
+	var keyEvents, possibleOutcomes []string
+
+	nameLower := strings.ToLower(name)
+	descLower := strings.ToLower(desc)
+
+	if strings.Contains(nameLower, "замок") || strings.Contains(nameLower, "крепост") || strings.Contains(descLower, "замок") {
+		title = "Тайны древнего замка"
+		description = "В этом древнем замке скрыты секреты давно ушедшей эпохи. Стены хранят память о славных победах и трагических поражениях."
+		objective = "Раскрыть главный секрет замка и найти скрытый артефакт"
+		keyEvents = []string{
+			"Исследовать главный зал и найти древние записи",
+			"Встретить стража замка и пройти испытание",
+			"Решить загадку потайной комнаты",
+			"Противостоять защитному голему",
+		}
+		possibleOutcomes = []string{
+			"Получить древний артефакт и благословение замка",
+			"Быть изгнанным стражами и потерять время",
+			"Найти лишь часть сокровищ замка",
+		}
+		reward = "Древний артефакт с магическими свойствами и золотые монеты"
+	} else if strings.Contains(nameLower, "пещер") || strings.Contains(nameLower, "гробниц") || strings.Contains(nameLower, "подзем") {
+		title = "Сокровища подземного мира"
+		description = "В глубинах этой локации хранятся богатства и опасности подземного мира. Темные коридоры полны тайн и опасностей."
+		objective = "Найти и добыть ценный артефакт, охраняемый подземными стражами"
+		keyEvents = []string{
+			"Преодолеть ловушки у входа",
+			"Исследовать основные коридоры и найти подсказки",
+			"Решить механизм защиты сокровищницы",
+			"Противостоять стражу подземелья",
+		}
+		possibleOutcomes = []string{
+			"Получить ценный артефакт и богатства подземелья",
+			"Погибнуть в ловушках или от стражей",
+			"Вернуться с пустыми руками после тяжелой борьбы",
+		}
+		reward = "Ценный артефакт и коллекция драгоценных камней"
+	} else if strings.Contains(nameLower, "лес") || strings.Contains(descLower, "лес") {
+		title = "Тайны древнего леса"
+		description = "Этот лес полон жизни и магии природы. Деревья здесь помнят древние времена, а тропы ведут к священным местам."
+		objective = "Найти и защитить священное место леса от угрозы"
+		keyEvents = []string{
+			"Найти следы древних ритуалов и священных символов",
+			"Встретить хранителя леса и получить его благословение",
+			"Решить природную загадку древнего дуба",
+			"Защитить священное место от вторгшихся существ",
+		}
+		possibleOutcomes = []string{
+			"Получить благословение природы и магические растения",
+			"Быть изгнанным духами леса",
+			"Найти лишь частичные знания о тайнах леса",
+		}
+		reward = "Благословение природы и редкие магические ингредиенты"
+	} else if strings.Contains(nameLower, "город") || strings.Contains(nameLower, "деревн") || strings.Contains(descLower, "город") {
+		title = "Тайны населенного пункта"
+		description = "В этом населенном пункте кипит жизнь, но под спокойной поверхностью скрываются интриги и секреты."
+		objective = "Расследовать подозрительную активность и помочь жителям"
+		keyEvents = []string{
+			"Поговорить с местными жителями и собрать информацию",
+			"Найти следы подозрительной активности",
+			"Исследовать заброшенные районы",
+			"Противостоять источнику проблем",
+		}
+		possibleOutcomes = []string{
+			"Разрешить проблемы города и получить награду от жителей",
+			"Не справиться с задачей и быть вынужденным уйти",
+			"Найти частичные решения и помочь некоторым жителям",
+		}
+		reward = "Благодарность жителей и полезные предметы"
+	} else {
+		// Общий сценарий для остальных локаций
+		title = fmt.Sprintf("Тайна локации '%s'", name)
+		description = fmt.Sprintf("Эта локация хранит свои секреты и ждет достойного исследователя. %s", desc)
+		objective = "Исследовать локацию и раскрыть её главную тайну"
+		keyEvents = []string{
+			"Осмотреть окрестности и найти ключевые объекты",
+			"Найти подсказки о предназначении локации",
+			"Встретить стражей или обитателей локации",
+			"Решить основную загадку или проблему",
+		}
+		possibleOutcomes = []string{
+			"Раскрыть тайну и получить награду",
+			"Не справиться с вызовами локации",
+			"Найти частичные ответы и подсказки",
+		}
+		reward = "Ценный предмет или важная информация"
+	}
+
+	return &world.LocationScenario{
+		ID:               fmt.Sprintf("scenario_%d_%d", location.ID, time.Now().Unix()),
+		Title:            title,
+		Description:      description,
+		Objective:        objective,
+		KeyEvents:        keyEvents,
+		PossibleOutcomes: possibleOutcomes,
+		Reward:           reward,
+		Status:           "not_started",
+		CreatedAt:        time.Now().Format(time.RFC3339),
+	}
 }
 
 // buildTimeProgressionMessage создает сообщение о прошедшем времени

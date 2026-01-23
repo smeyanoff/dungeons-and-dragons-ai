@@ -3141,6 +3141,151 @@ func getLocationTypeDetails(name, description string) string {
 	return "фэнтези локация, атмосферное освещение, детализированная среда, богатые текстуры, классический стиль фэнтези-арта"
 }
 
+// generateLocationScenario генерирует сценарий для локации с помощью LLM
+func (uc *AnalyzeDMResponseUseCase) generateLocationScenario(location world.Location) (*world.LocationScenario, error) {
+	if uc.llm == nil {
+		// Fallback: генерируем простой сценарий без LLM
+		return uc.generateSimpleLocationScenario(location), nil
+	}
+
+	prompt := fmt.Sprintf(`Создай увлекательный сценарий для локации в D&D 5e.
+
+Локация: %s
+Описание: %s
+
+Сценарий должен включать:
+- Название сценария
+- Краткое описание ситуации
+- Конкретную цель для игрока
+- 3-5 ключевых событий
+- 2-3 возможных исхода
+- Награду за успешное завершение
+
+Формат ответа (ТОЛЬКО JSON):
+{
+  "title": "Название сценария",
+  "description": "Подробное описание ситуации",
+  "objective": "Цель игрока",
+  "key_events": ["Событие 1", "Событие 2", "Событие 3"],
+  "possible_outcomes": ["Исход 1", "Исход 2"],
+  "reward": "Описание награды"
+}`, location.Name, location.Description)
+
+	llmCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, 1000)
+	if err != nil {
+		log.Printf("[DM Analyzer] Failed to generate scenario with LLM: %v, using simple fallback", err)
+		return uc.generateSimpleLocationScenario(location), nil
+	}
+
+	// Парсим JSON ответ
+	var scenario world.LocationScenario
+	cleaned := strings.TrimSpace(strings.Trim(raw, "```json"))
+	if err := json.Unmarshal([]byte(cleaned), &scenario); err != nil {
+		log.Printf("[DM Analyzer] Failed to parse scenario JSON: %v, using simple fallback", err)
+		return uc.generateSimpleLocationScenario(location), nil
+	}
+
+	// Заполняем обязательные поля
+	scenario.ID = fmt.Sprintf("scenario_%d_%d", location.ID, time.Now().Unix())
+	scenario.Status = "not_started"
+	scenario.CreatedAt = time.Now().Format(time.RFC3339)
+
+	log.Printf("[DM Analyzer] Generated scenario for location %s: %s", location.Name, scenario.Title)
+	return &scenario, nil
+}
+
+// generateSimpleLocationScenario создает простой сценарий без LLM
+func (uc *AnalyzeDMResponseUseCase) generateSimpleLocationScenario(location world.Location) *world.LocationScenario {
+	name := location.Name
+	desc := location.Description
+
+	// Определяем тип сценария на основе названия и описания
+	var title, description, objective, reward string
+	var keyEvents, possibleOutcomes []string
+
+	if strings.Contains(strings.ToLower(name), "замок") || strings.Contains(strings.ToLower(name), "крепост") {
+		title = "Тайна древнего замка"
+		description = fmt.Sprintf("В локации %s скрываются древние секреты и опасности. Замок хранит память о былых временах и ждет достойного исследователя.", name)
+		objective = "Найти и раскрыть главный секрет замка"
+		keyEvents = []string{
+			"Исследовать главный зал",
+			"Встретить стража замка",
+			"Решить древнюю загадку",
+			"Противостоять защитному механизму",
+		}
+		possibleOutcomes = []string{
+			"Раскрыть секрет и получить древний артефакт",
+			"Быть изгнанным стражами замка",
+			"Найти лишь часть истины",
+		}
+		reward = "Древний артефакт с магическими свойствами"
+	} else if strings.Contains(strings.ToLower(name), "пещер") || strings.Contains(strings.ToLower(name), "гробниц") {
+		title = "Сокровища подземного мира"
+		description = fmt.Sprintf("Локация %s таит в себе богатства и опасности подземного мира. Темные коридоры хранят секреты давно ушедших эпох.", name)
+		objective = "Найти и добыть ценный артефакт"
+		keyEvents = []string{
+			"Преодолеть охрану входа",
+			"Исследовать основные коридоры",
+			"Решить механизм защиты",
+			"Противостоять стражу сокровищ",
+		}
+		possibleOutcomes = []string{
+			"Получить ценный артефакт и богатства",
+			"Быть побежденным стражами",
+			"Найти лишь мелкие сокровища",
+		}
+		reward = "Ценный артефакт и золотые монеты"
+	} else if strings.Contains(strings.ToLower(name), "лес") {
+		title = "Тайны древнего леса"
+		description = fmt.Sprintf("Локация %s полна жизни и тайн природы. Деревья хранят древние знания, а тропы ведут к скрытым сокровищам.", name)
+		objective = "Найти и защитить священное место леса"
+		keyEvents = []string{
+			"Найти следы древних ритуалов",
+			"Встретить хранителя леса",
+			"Решить природную загадку",
+			"Защитить священное место",
+		}
+		possibleOutcomes = []string{
+			"Получить благословение природы",
+			"Быть изгнанным из леса",
+			"Найти лишь частичные знания",
+		}
+		reward = "Благословение природы и магические растения"
+	} else {
+		// Общий сценарий для остальных локаций
+		title = fmt.Sprintf("Тайна локации %s", name)
+		description = fmt.Sprintf("Локация %s хранит свои секреты и ждет исследователя. Здесь можно найти как сокровища, так и опасности.", name)
+		objective = "Исследовать локацию и раскрыть её тайну"
+		keyEvents = []string{
+			"Осмотреть окрестности",
+			"Найти ключевые объекты",
+			"Встретить местных обитателей",
+			"Решить основную загадку",
+		}
+		possibleOutcomes = []string{
+			"Раскрыть тайну и получить награду",
+			"Не справиться с вызовами",
+			"Найти частичные ответы",
+		}
+		reward = "Ценный предмет или информация"
+	}
+
+	return &world.LocationScenario{
+		ID:               fmt.Sprintf("simple_scenario_%d_%d", location.ID, time.Now().Unix()),
+		Title:            title,
+		Description:      description,
+		Objective:        objective,
+		KeyEvents:        keyEvents,
+		PossibleOutcomes: possibleOutcomes,
+		Reward:           reward,
+		Status:           "not_started",
+		CreatedAt:        time.Now().Format(time.RFC3339),
+	}
+}
+
 // getNPCTypeDetails возвращает дополнительные детали внешности на основе типа NPC
 func getNPCTypeDetails(name, description string) string {
 	nameLower := strings.ToLower(name)
