@@ -693,11 +693,20 @@ func (uc *HandleActionUseCase) Execute(
 		// Создаем новый контекст, так как ragCtx мог быть просрочен после долгого вызова LLM
 		indexCtx, indexCancel := context.WithTimeout(ctx, 15*time.Second)
 		defer indexCancel()
+		// Фильтруем мини-ивенты из текста перед индексацией в RAG
+		filteredResponse := filterMiniEventsFromText(response)
+
+		logger.Debug("Indexing DM response in RAG",
+			logger.Uint("session_id", gs.ID),
+			logger.Int("original_length", len(response)),
+			logger.Int("filtered_length", len(filteredResponse)),
+		)
+
 		doc := ragdomain.Document{
 			ID:        uuid.New().String(),
 			Source:    ragdomain.SourceEvent,
 			SessionID: gs.ID,
-			Text:      fmt.Sprintf("DM: %s", response),
+			Text:      fmt.Sprintf("DM: %s", filteredResponse),
 			Timestamp: time.Now(),
 		}
 		// Пытаемся проиндексировать с повторными попытками
@@ -2615,4 +2624,42 @@ func (uc *HandleActionUseCase) updateSessionGoalsProgress(
 			logger.Uint("session_id", gs.ID),
 		)
 	}
+}
+
+// filterMiniEventsFromText удаляет только технические артефакты из текста перед индексацией в RAG
+// Сохраняет основное повествование для поиска
+func filterMiniEventsFromText(text string) string {
+	lines := strings.Split(text, "\n")
+	var filteredLines []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+
+		// Удаляем только явные технические артефакты, сохраняя повествование
+		if strings.Contains(lower, "--- проверки навыков") ||
+			strings.Contains(lower, "⚠️ не проси игрока") ||
+			strings.Contains(lower, "--- релевантная история") ||
+			strings.Contains(lower, "--- активные события") ||
+			strings.Contains(lower, "--- анализ действия") ||
+			strings.Contains(lower, "⚠️ действие игрока") ||
+			strings.Contains(lower, "рекомендация:") {
+			continue
+		}
+
+		// Удаляем пустые строки после фильтрации
+		if trimmed == "" && len(filteredLines) > 0 && filteredLines[len(filteredLines)-1] == "" {
+			continue
+		}
+
+		filteredLines = append(filteredLines, line)
+	}
+
+	result := strings.Join(filteredLines, "\n")
+	// Удаляем множественные пустые строки в конце
+	for strings.HasSuffix(result, "\n\n") {
+		result = strings.TrimSuffix(result, "\n")
+	}
+
+	return result
 }

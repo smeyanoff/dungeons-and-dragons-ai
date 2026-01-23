@@ -296,9 +296,16 @@ func (b *RAGContextBuilder) BuildContext(
 		logger.Warn("Failed to retrieve RAG context",
 			logger.ErrorField(err),
 			logger.Uint("session_id", gs.ID),
+			logger.String("query", playerMessage),
 		)
 		return strings.Join(parts, "\n"), nil
 	}
+
+	logger.Debug("RAG search completed",
+		logger.Uint("session_id", gs.ID),
+		logger.Int("found_docs", len(ragDocs)),
+		logger.String("query", playerMessage),
+	)
 
 	if len(ragDocs) > 0 {
 		parts = append(parts, "\n--- Релевантная история игры (найдено через поиск) ---")
