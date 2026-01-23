@@ -57,6 +57,48 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// requestTracingMiddleware логирует все входящие запросы для трассировки
+func requestTracingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Создаем response writer для захвата статуса
+		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+		// Логируем входящий запрос
+		logger.Info("HTTP Request",
+			logger.String("method", r.Method),
+			logger.String("url", r.URL.Path),
+			logger.String("query", r.URL.RawQuery),
+			logger.String("user_agent", r.Header.Get("User-Agent")),
+			logger.String("remote_addr", r.RemoteAddr),
+		)
+
+		// Выполняем запрос
+		next.ServeHTTP(wrapped, r)
+
+		// Логируем завершение запроса
+		duration := time.Since(start)
+		logger.Info("HTTP Response",
+			logger.String("method", r.Method),
+			logger.String("url", r.URL.Path),
+			logger.Int("status", wrapped.statusCode),
+			logger.Duration("duration", duration),
+		)
+	})
+}
+
+// responseWriter оборачивает http.ResponseWriter для захвата кода статуса
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 // NewServer создает новый сервер мониторинга
 func NewServer(addr string, logRepo LLMLogRepository) *Server {
 	s := &Server{
@@ -79,10 +121,10 @@ func NewServer(addr string, logRepo LLMLogRepository) *Server {
 	mux.HandleFunc("/api/stats", s.handleAPIStats)
 	mux.HandleFunc("/api/branches", s.handleAPIBranches)
 
-	// Оборачиваем в CORS middleware
+	// Оборачиваем в middleware цепочку: tracing -> cors -> mux
 	s.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: corsMiddleware(mux),
+		Handler: requestTracingMiddleware(corsMiddleware(mux)),
 	}
 
 	return s
@@ -332,6 +374,7 @@ func (s *Server) handleErrors(w http.ResponseWriter, r *http.Request) {
 
 // handleStats обрабатывает страницу статистики
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 
@@ -359,15 +402,15 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// TODO: Fix GetStats method - AVG queries return NULL errors
-	// For now, always return empty stats
-	stats := &persistence.LLMStats{
-		TotalRequests:     0,
-		TotalErrors:       0,
-		AverageDurationMs: 0,
-		TotalTokens:       0,
-		TotalToolCalls:    0,
-		TotalProblems:     0,
+	stats, err := s.logRepo.GetStats(ctx, from, to)
+	if err != nil {
+		logger.Error("Failed to get LLM stats",
+			logger.ErrorField(err),
+			logger.Time("from", from),
+			logger.Time("to", to),
+		)
+		http.Error(w, fmt.Sprintf("Failed to get stats: %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	renderStatsPage(w, stats, from, to)
@@ -549,15 +592,43 @@ func (s *Server) handleAPILogDetail(w http.ResponseWriter, r *http.Request) {
 
 // handleAPIStats обрабатывает API запрос для получения статистики
 func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
-	// TODO: Fix GetStats method - AVG queries return NULL errors
-	// For now, always return empty stats
-	stats := &LLMStats{
-		TotalRequests:     0,
-		TotalErrors:       0,
-		AverageDurationMs: 0,
-		TotalTokens:       0,
-		TotalToolCalls:    0,
-		TotalProblems:     0,
+	ctx := r.Context()
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+
+	from := time.Now().Add(-7 * 24 * time.Hour)
+	to := time.Now()
+
+	if fromStr != "" {
+		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
+			from = t
+		} else {
+			logger.Warn("Failed to parse 'from' parameter in handleAPIStats",
+				logger.String("from", fromStr),
+				logger.ErrorField(err),
+			)
+		}
+	}
+	if toStr != "" {
+		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
+			to = t
+		} else {
+			logger.Warn("Failed to parse 'to' parameter in handleAPIStats",
+				logger.String("to", toStr),
+				logger.ErrorField(err),
+			)
+		}
+	}
+
+	stats, err := s.logRepo.GetStats(ctx, from, to)
+	if err != nil {
+		logger.Error("Failed to get LLM stats",
+			logger.ErrorField(err),
+			logger.Time("from", from),
+			logger.Time("to", to),
+		)
+		respondJSONError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get stats: %v", err))
+		return
 	}
 
 	respondJSON(w, http.StatusOK, stats)

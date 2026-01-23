@@ -717,6 +717,15 @@ func (t *GetBattlefieldStatusTool) Execute(ctx context.Context, args map[string]
 		battlefieldView = t.formatTable(activeCombat)
 	}
 
+	// Логируем информацию о бое для отладки
+	logger.Debug("Battlefield formatting completed",
+		logger.Uint("session_id", t.sessionID),
+		logger.String("format", format),
+		logger.Int("participants_count", len(activeCombat.Participants)),
+		logger.Int("current_turn", activeCombat.CurrentTurn),
+		logger.Int("battlefield_length", len(battlefieldView)),
+	)
+
 	result := map[string]interface{}{
 		"active":       true,
 		"format":       format,

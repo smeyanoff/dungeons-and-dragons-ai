@@ -10,6 +10,22 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 )
 
+// truncateRunes безопасно усекает строку до указанного количества рун с добавлением суффикса
+func truncateRunes(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if maxRunes <= 0 || s == "" {
+		return ""
+	}
+
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+
+	// Берем первые maxRunes рун и добавляем суффикс
+	return string(runes[:maxRunes]) + "..."
+}
+
 type GetMapUseCase struct {
 	sessionRepo session.Repository
 	cacheMu     sync.RWMutex
@@ -99,10 +115,7 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 	parts = append(parts, fmt.Sprintf("📌 Название: %s", currentLoc.Name))
 	if currentLoc.Description != "" {
 		// Ограничиваем длину описания для читаемости
-		desc := currentLoc.Description
-		if len(desc) > 100 {
-			desc = desc[:97] + "..."
-		}
+		desc := truncateRunes(currentLoc.Description, 100)
 		parts = append(parts, fmt.Sprintf("📝 Описание: %s", desc))
 	}
 
@@ -156,10 +169,7 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 
 		if loc.Description != "" {
 			// Ограничиваем длину описания для компактности
-			desc := loc.Description
-			if len(desc) > 100 {
-				desc = desc[:97] + "..."
-			}
+			desc := truncateRunes(loc.Description, 100)
 			parts = append(parts, fmt.Sprintf("   %s", desc))
 		}
 
@@ -179,10 +189,7 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 				connectionInfo := fmt.Sprintf("%s %s", directionSymbol, toLocationName)
 
 				if conn.Description != "" {
-					desc := conn.Description
-					if len(desc) > 50 {
-						desc = desc[:47] + "..."
-					}
+					desc := truncateRunes(conn.Description, 50)
 					connectionInfo += fmt.Sprintf(" (%s)", desc)
 				}
 
@@ -432,10 +439,7 @@ func (uc *GetMapUseCase) generateVisualMap(w *world.World, currentLocationID *ui
 				}
 
 				// Сокращаем длинные названия
-				name := loc.Name
-				if len(name) > 12 {
-					name = name[:9] + "..."
-				}
+				name := truncateRunes(loc.Name, 12)
 
 				levelLine = append(levelLine, fmt.Sprintf("%s%s", symbol, name))
 			}

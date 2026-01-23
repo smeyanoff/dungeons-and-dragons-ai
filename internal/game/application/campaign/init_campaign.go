@@ -47,7 +47,7 @@ const (
 	// - INIT_CAMPAIGN_MAX_TOKENS_NPCS
 	// - INIT_CAMPAIGN_MAX_TOKENS_CHECKS
 	// - INIT_CAMPAIGN_MAX_TOKENS_CONNECTIONS
-	defaultMaxTokensMainQuest   = 3500
+	defaultMaxTokensMainQuest   = 1500
 	defaultMaxTokensLocations   = 3500
 	defaultMaxTokensNPCs        = 2200
 	defaultMaxTokensChecks      = 2400
@@ -137,12 +137,29 @@ func (uc *InitCampaignUseCase) generateMainQuest(ctx context.Context, worldTheme
 
 // generateMainQuestWithRetry генерирует главный квест с retry механизмом
 func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, worldTheme string, attempt int) (*QuestDTO, error) {
-	const maxRetries = 1 // Уменьшаем количество retry для ужесточения контрактов
+	const maxRetries = 3 // Увеличиваем количество retry для борьбы с deadline exceeded
 	if attempt > maxRetries {
 		logger.Warn("Failed to generate valid main quest, using fallback",
 			logger.Int("attempts", maxRetries+1),
 		)
 		return fallbackMainQuest(worldTheme), nil
+	}
+
+	// Добавляем exponential backoff для retry
+	if attempt > 0 {
+		backoff := time.Duration(attempt) * 5 * time.Second // 5s, 10s, 15s
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+		logger.Info("Retrying main quest generation",
+			logger.Int("attempt", attempt),
+			logger.Duration("backoff", backoff),
+		)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
 	}
 
 	prompt := GenerateMainQuestPrompt(worldTheme)
@@ -151,16 +168,36 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 		prompt = GenerateMainQuestPromptStrict(worldTheme)
 	}
 
-	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
+	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer llmCancel()
 
 	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
 	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_MAIN_QUEST", defaultMaxTokensMainQuest)
-	logger.Debug("Generating main quest",
+	logger.Info("Generating main quest",
+		logger.Int("attempt", attempt),
 		logger.Int("prompt_length", len(prompt)),
 		logger.Int("max_tokens", maxTokens),
+		logger.Duration("timeout", 90*time.Second),
 	)
+
+	startTime := time.Now()
 	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
+	duration := time.Since(startTime)
+
+	if err != nil {
+		logger.Error("Main quest generation failed",
+			logger.ErrorField(err),
+			logger.Int("attempt", attempt),
+			logger.Duration("duration", duration),
+		)
+		return nil, err
+	}
+
+	logger.Info("Main quest generation completed",
+		logger.Int("attempt", attempt),
+		logger.Duration("duration", duration),
+		logger.Int("response_length", len(raw)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -243,7 +280,7 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 		prompt = GenerateLocationsPromptStrict(worldTheme, mainQuestTitle)
 	}
 
-	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
+	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer llmCancel()
 
 	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
@@ -488,7 +525,7 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 		prompt = GenerateConnectionsPromptStrict(locations)
 	}
 
-	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
+	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer llmCancel()
 
 	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.

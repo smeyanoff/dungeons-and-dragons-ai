@@ -425,9 +425,9 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 		}, nil
 	}
 
-	// Сохраняем ожидаемую проверку в сессии
+	// Сохраняем ожидаемую проверку в сессии с контекстом
 	checkID := uuid.New().String()
-	gs.SetPendingAbilityCheck(checkID, abilityStr, dc)
+	gs.SetPendingAbilityCheckWithContext(checkID, abilityStr, dc, reason, stakes)
 	if err := t.sessionRepo.Save(ctx, gs); err != nil {
 		logger.Error("RequestAbilityCheckTool: failed to save pending check",
 			logger.Int64("chat_id", t.chatID),

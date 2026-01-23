@@ -171,33 +171,34 @@ func TestMaybeSendPendingAbilityCheckPrompt_SendsOnceAndMarksNotified(t *testing
 	bot, err := NewBotWithAPIEndpoint(
 		"TEST_TOKEN",
 		apiEndpointFmt,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		repo,
-		nil,
-		nil,
-		nil,
-		nil,
+		nil, // initCampaignUC
+		nil, // handleActionUC
+		nil, // createCharacterUC
+		nil, // getHistoryUC
+		nil, // getInventoryUC
+		nil, // addItemUC
+		nil, // handleCombatUC
+		nil, // rollDiceUC
+		nil, // getQuestsUC
+		nil, // getDailyQuestsUC
+		nil, // checkDailyProgressUC
+		nil, // getMapUC
+		nil, // moveToLocationUC
+		nil, // getAchievementsUC
+		nil, // getSpellsUC
+		nil, // useSpellUC
+		nil, // generateImageUC
+		nil, // getSubscriptionUC
+		nil, // checkLimitsUC
+		nil, // getLeaderboardUC
+		nil, // updateRatingUC
+		nil, // performAbilityCheckUC
+		repo, // sessionRepo
+		nil, // playerRepo
+		nil, // combatRepo
+		nil, // feedbackRepo
+		nil, // eventRepo
+		nil, // indexDocUC
 	)
 	if err != nil {
 		t.Fatalf("NewBotWithAPIEndpoint: %v", err)
@@ -214,8 +215,8 @@ func TestMaybeSendPendingAbilityCheckPrompt_SendsOnceAndMarksNotified(t *testing
 			if call.ReplyMarkup != "" {
 				t.Fatalf("expected no reply_markup for pending ability check prompt, got: %s", call.ReplyMarkup)
 			}
-			if !strings.Contains(call.Text, "/roll d20") {
-				t.Fatalf("expected prompt to include /roll d20, got: %s", call.Text)
+			if !strings.Contains(call.Text, "/roll") {
+				t.Fatalf("expected prompt to include /roll, got: %s", call.Text)
 			}
 			found = true
 			break

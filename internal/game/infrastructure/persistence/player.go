@@ -39,6 +39,22 @@ func (r *PlayerRepository) GetByTgUserIDAndSessionID(
 	return &p, nil
 }
 
+func (r *PlayerRepository) GetByTgUserID(ctx context.Context, tgUserID int64) (*player.Player, error) {
+	var p player.Player
+
+	err := r.db.WithContext(ctx).
+		Preload("Character").
+		Preload("Character.Stats").
+		Where("tg_user_id = ?", tgUserID).
+		First(&p).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &p, nil
+}
+
 func (r *PlayerRepository) Save(ctx context.Context, p *player.Player) error {
 	return r.db.WithContext(ctx).
 		Session(&gorm.Session{FullSaveAssociations: true}).

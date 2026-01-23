@@ -317,6 +317,7 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 	tests := []struct {
 		name           string
 		chatID         int64
+		userID         int64
 		playerMessage  string
 		setupMocks     func(*mockLLM, *mockSessionRepo, *mockContextBuilder, *mockEventRepo, *mockWorldEventRepo)
 		expectedError  bool
@@ -325,6 +326,7 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 		{
 			name:          "successful action",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "Иду на север",
 			setupMocks: func(llm *mockLLM, sessionRepo *mockSessionRepo, ctxBuilder *mockContextBuilder, eventRepo *mockEventRepo, worldEventRepo *mockWorldEventRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -335,6 +337,8 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 						World:   world.World{ID: 1, Name: "Test World", StartedAt: time.Now()},
 						Players: []player.Player{
 							{
+								ID:       1,
+								TgUserID: 11111,
 								Character: character.Character{
 									Name:  "Test Hero",
 									Race:  character.RaceHuman,
@@ -410,6 +414,7 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 		{
 			name:          "context builder error",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "Иду на север",
 			setupMocks: func(llm *mockLLM, sessionRepo *mockSessionRepo, ctxBuilder *mockContextBuilder, eventRepo *mockEventRepo, worldEventRepo *mockWorldEventRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -420,6 +425,8 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 						World:   world.World{ID: 1, StartedAt: time.Now()},
 						Players: []player.Player{
 							{
+								ID:       1,
+								TgUserID: 11111,
 								Character: character.Character{
 									Name:  "Test Hero",
 									Race:  character.RaceHuman,
@@ -433,11 +440,13 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 					return "", errors.New("context builder error")
 				}
 			},
-			expectedError: true,
+			expectedError:  true,
+			expectedResult: "",
 		},
 		{
 			name:          "LLM error - player event still saved",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "Иду на север",
 			setupMocks: func(llm *mockLLM, sessionRepo *mockSessionRepo, ctxBuilder *mockContextBuilder, eventRepo *mockEventRepo, worldEventRepo *mockWorldEventRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -448,6 +457,8 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 						World:   world.World{ID: 1, Name: "Test World", StartedAt: time.Now()},
 						Players: []player.Player{
 							{
+								ID:       1,
+								TgUserID: 11111,
 								Character: character.Character{
 									Name:  "Test Hero",
 									Race:  character.RaceHuman,
@@ -461,11 +472,13 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 					return "", errors.New("LLM error")
 				}
 			},
-			expectedError: true,
+			expectedError:  true,
+			expectedResult: "",
 		},
 		{
 			name:          "world events checked",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "Иду на север",
 			setupMocks: func(llm *mockLLM, sessionRepo *mockSessionRepo, ctxBuilder *mockContextBuilder, eventRepo *mockEventRepo, worldEventRepo *mockWorldEventRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -476,6 +489,8 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 						World:   world.World{ID: 1, Name: "Test World", StartedAt: time.Now()},
 						Players: []player.Player{
 							{
+								ID:       1,
+								TgUserID: 11111,
 								Character: character.Character{
 									Name:  "Test Hero",
 									Race:  character.RaceHuman,
@@ -501,6 +516,7 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 		{
 			name:          "world events check error - continues execution",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "Иду на север",
 			setupMocks: func(llm *mockLLM, sessionRepo *mockSessionRepo, ctxBuilder *mockContextBuilder, eventRepo *mockEventRepo, worldEventRepo *mockWorldEventRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -511,6 +527,8 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 						World:   world.World{ID: 1, Name: "Test World", StartedAt: time.Now()},
 						Players: []player.Player{
 							{
+								ID:       1,
+								TgUserID: 11111,
 								Character: character.Character{
 									Name:  "Test Hero",
 									Race:  character.RaceHuman,
@@ -582,7 +600,7 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 				nil, // generateLocationEventUC - optional
 			)
 
-			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
+			result, err := uc.Execute(context.Background(), tt.chatID, tt.userID, tt.playerMessage)
 
 			if tt.expectedError {
 				if err == nil {
@@ -655,6 +673,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 	tests := []struct {
 		name           string
 		chatID         int64
+		userID         int64
 		playerMessage  string
 		setupMocks     func(*mockLLM, *mockSessionRepo, *mockContextBuilder, *mockEventRepo, *ActionValidator)
 		expectedError  bool
@@ -663,6 +682,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 		{
 			name:          "action validation fails - dead character",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "Иду на север",
 			setupMocks: func(llm *mockLLM, sessionRepo *mockSessionRepo, ctxBuilder *mockContextBuilder, eventRepo *mockEventRepo, validator *ActionValidator) {
 				char := &character.Character{
@@ -680,6 +700,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 				}
 				p := &player.Player{
 					ID:        1,
+					TgUserID:  11111,
 					Character: *char,
 				}
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -698,6 +719,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 		{
 			name:          "action validation passes",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "Иду на север",
 			setupMocks: func(llm *mockLLM, sessionRepo *mockSessionRepo, ctxBuilder *mockContextBuilder, eventRepo *mockEventRepo, validator *ActionValidator) {
 				char := &character.Character{
@@ -715,6 +737,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 				}
 				p := &player.Player{
 					ID:        1,
+					TgUserID:  11111,
 					Character: *char,
 				}
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -784,7 +807,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator(t *testing.T) {
 				nil, // generateLocationEventUC - optional
 			)
 
-			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
+			result, err := uc.Execute(context.Background(), tt.chatID, tt.userID, tt.playerMessage)
 
 			if tt.expectedError {
 				if err == nil {
@@ -813,6 +836,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 	tests := []struct {
 		name           string
 		chatID         int64
+		userID         int64
 		playerMessage  string
 		characterStats character.Stats
 		setupMocks     func(*mockLLM, *mockSessionRepo, *mockContextBuilder, *mockEventRepo, *ActionValidator, character.Stats)
@@ -823,6 +847,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 		{
 			name:          "action validation does not block - strength checks handled by DM tools",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "поднять тяжелый камень",
 			characterStats: character.Stats{
 				Strength:     8, // Сила 8 < 10
@@ -841,6 +866,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				}
 				p := &player.Player{
 					ID:        1,
+					TgUserID:  11111,
 					Character: *char,
 				}
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -860,6 +886,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 		{
 			name:          "action validation passes - sufficient strength",
 			chatID:        12345,
+			userID:        11111,
 			playerMessage: "поднять тяжелый камень",
 			characterStats: character.Stats{
 				Strength:     16, // Сила 16 >= 10
@@ -878,6 +905,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				}
 				p := &player.Player{
 					ID:        1,
+					TgUserID:  11111,
 					Character: *char,
 				}
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -948,7 +976,7 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				nil, // generateLocationEventUC - optional
 			)
 
-			result, err := uc.Execute(context.Background(), tt.chatID, tt.playerMessage)
+			result, err := uc.Execute(context.Background(), tt.chatID, tt.userID, tt.playerMessage)
 
 			if tt.expectedError {
 				if err == nil {

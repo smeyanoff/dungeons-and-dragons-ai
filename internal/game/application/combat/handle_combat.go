@@ -116,7 +116,7 @@ func (uc *HandleCombatUseCase) Execute(
 	}
 
 	if targetParticipant == nil {
-		// Все враги мертвы
+		// Все враги мертвы - победа в бою!
 		activeCombat.State = combat.CombatStateFinished
 		if err := uc.combatRepo.Save(ctx, activeCombat); err != nil {
 			logger.Error("Failed to save combat state after victory",
@@ -125,6 +125,10 @@ func (uc *HandleCombatUseCase) Execute(
 			)
 			// Продолжаем выполнение, так как бой уже завершен логически
 		}
+
+		// Обновляем прогресс сессионных целей - победа в бою
+		uc.updateSessionCombatVictory(ctx, chatID)
+
 		return "🎉 Все враги побеждены! Бой окончен.", nil
 	}
 
@@ -272,6 +276,41 @@ func (uc *HandleCombatUseCase) Execute(
 	}
 
 	return resultText, nil
+}
+
+// updateSessionCombatVictory обновляет прогресс целей сессии при победе в бою
+func (uc *HandleCombatUseCase) updateSessionCombatVictory(ctx context.Context, chatID int64) {
+	// Получаем сессию
+	gs, err := uc.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil {
+		logger.Warn("Failed to get session for combat victory update",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+		)
+		return
+	}
+
+	if gs == nil {
+		logger.Warn("Session not found for combat victory update",
+			logger.Int64("chat_id", chatID),
+		)
+		return
+	}
+
+	// Обновляем прогресс цели побед в бою
+	gs.UpdateGoalProgress(session.GoalTypeCombat, 1)
+
+	// Сохраняем обновленный прогресс
+	if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+		logger.Warn("Failed to save session goals after combat victory",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+		)
+	}
+
+	logger.Info("Session combat victory goal updated",
+		logger.Int64("chat_id", chatID),
+	)
 }
 
 // getDamageByClass возвращает выражение урона по классу

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 )
 
 func (c *Client) Chat(ctx context.Context, model string, message string) (*ChatResponse, error) {
@@ -32,7 +34,18 @@ func (c *Client) ChatWithMaxTokens(ctx context.Context, model string, message st
 
 	body, _ := json.Marshal(reqBody)
 
-	url := fmt.Sprintf("%s/chat/completions", c.cfg.APIBaseURL)
+	apiURL := c.cfg.APIBaseURL
+	// Fix incorrect URL if it points to auth endpoint
+	if strings.Contains(apiURL, ":9443") && !strings.Contains(apiURL, "/api/") {
+		apiURL = strings.Replace(apiURL, ":9443", ":9443/api/v1", 1)
+		log.Printf("[GigaChat] Fixed API URL from auth endpoint to API endpoint: %s", apiURL)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", apiURL)
+	log.Printf("[GigaChat] APIBaseURL: %s", c.cfg.APIBaseURL)
+	log.Printf("[GigaChat] Fixed API URL: %s", apiURL)
+	log.Printf("[GigaChat] LLM request URL: %s", url)
+	log.Printf("[GigaChat] Request body size: %d bytes, model: %s", len(body), model)
 
 	resp, err := c.doRequest(ctx, http.MethodPost, url, body)
 	if err != nil {

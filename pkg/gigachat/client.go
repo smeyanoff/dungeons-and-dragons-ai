@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -23,20 +24,32 @@ type Client struct {
 	auth           *authClient
 	cfg            Config
 	client         *http.Client
-	imageClient    *http.Client    // HTTP client with extended timeout for image operations
-	semaphore      chan struct{}   // Concurrency control semaphore
-	rateLimiter    *rate.Limiter   // Global rate limiter for all requests (10 RPS by default)
-	requestCount   int64           // Counter for metrics
-	errorCount     int64           // Counter for error metrics
-	rateLimitCount int64           // Counter for 429 responses
-	startTime      time.Time       // Time when client was created for RPS calculation
+	imageClient    *http.Client  // HTTP client with extended timeout for image operations
+	semaphore      chan struct{} // Concurrency control semaphore
+	rateLimiter    *rate.Limiter // Global rate limiter for all requests (10 RPS by default)
+	requestCount   int64         // Counter for metrics
+	errorCount     int64         // Counter for error metrics
+	rateLimitCount int64         // Counter for 429 responses
+	startTime      time.Time     // Time when client was created for RPS calculation
+
+	// Circuit breaker fields
+	circuitBreakerFailures int64        // Number of consecutive failures
+	circuitBreakerLastFail time.Time    // Last failure time
+	circuitBreakerState    string       // "closed", "open", "half-open"
+	circuitBreakerMutex    sync.RWMutex // Protects circuit breaker state
 }
 
 func NewClient(cfg Config) *Client {
 	transport := &http.Transport{
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
+		TLSHandshakeTimeout: 30 * time.Second, // Increased from 10s to handle slow TLS handshakes
+		// Add connection pooling and keep-alive
+		MaxIdleConnsPerHost:   10,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// Enable keep-alive
+		DisableKeepAlives: false,
 	}
 
 	// Если нужно пропустить проверку TLS (только для тестов)
@@ -55,11 +68,11 @@ func NewClient(cfg Config) *Client {
 	}
 
 	// Global rate limiter: configurable RPS with burst to prevent DDoS-like behavior
-	rpsLimit := rate.Limit(10.0) // Default 10 requests per second
+	rpsLimit := rate.Limit(3.0) // Default 3 requests per second (conservative for GigaChat)
 	if cfg.RPSLimit > 0 {
 		rpsLimit = rate.Limit(cfg.RPSLimit)
 	}
-	burstLimit := 5 // Default burst of 5 requests
+	burstLimit := 1 // Conservative burst to prevent API overload
 	if cfg.RateBurst > 0 {
 		burstLimit = cfg.RateBurst
 	}
@@ -76,12 +89,15 @@ func NewClient(cfg Config) *Client {
 			Timeout:   5 * time.Minute, // Extended timeout for image generation and download
 			Transport: transport,
 		},
-		semaphore:      make(chan struct{}, concurrencyLimit),
-		rateLimiter:    rateLimiter,
-		requestCount:   0,
-		errorCount:     0,
-		rateLimitCount: 0,
-		startTime:      time.Now(),
+		semaphore:              make(chan struct{}, concurrencyLimit),
+		rateLimiter:            rateLimiter,
+		requestCount:           0,
+		errorCount:             0,
+		rateLimitCount:         0,
+		startTime:              time.Now(),
+		circuitBreakerFailures: 0,
+		circuitBreakerLastFail: time.Time{},
+		circuitBreakerState:    "closed", // Start in closed state
 	}
 }
 
@@ -110,6 +126,14 @@ func (c *Client) GetMetrics() map[string]int64 {
 		metrics["auth_rate_limiter_tokens"] = int64(c.auth.rateLimiter.Tokens())
 	}
 
+	// Add circuit breaker info
+	c.circuitBreakerMutex.RLock()
+	metrics["circuit_breaker_failures"] = atomic.LoadInt64(&c.circuitBreakerFailures)
+	if !c.circuitBreakerLastFail.IsZero() {
+		metrics["circuit_breaker_last_fail_seconds"] = int64(time.Since(c.circuitBreakerLastFail).Seconds())
+	}
+	c.circuitBreakerMutex.RUnlock()
+
 	return metrics
 }
 
@@ -123,8 +147,77 @@ func (c *Client) calculateRPS() int64 {
 	return int64(float64(requests) / elapsed.Seconds())
 }
 
+// circuitBreakerCheck проверяет состояние circuit breaker
+// Возвращает true если запрос можно выполнять, false если circuit breaker открыт
+func (c *Client) circuitBreakerCheck() bool {
+	c.circuitBreakerMutex.RLock()
+	defer c.circuitBreakerMutex.RUnlock()
+
+	switch c.circuitBreakerState {
+	case "closed":
+		log.Printf("[GigaChat] Circuit breaker: closed, allowing request")
+		return true
+	case "open":
+		// Check if we should transition to half-open (after 60 seconds)
+		if time.Since(c.circuitBreakerLastFail) > 60*time.Second {
+			c.circuitBreakerMutex.RUnlock()
+			c.circuitBreakerMutex.Lock()
+			c.circuitBreakerState = "half-open"
+			c.circuitBreakerMutex.Unlock()
+			c.circuitBreakerMutex.RLock()
+			log.Printf("[GigaChat] Circuit breaker: transitioning to half-open, allowing request")
+			return true
+		}
+		log.Printf("[GigaChat] Circuit breaker: open, blocking request (failures: %d, last fail: %v ago)",
+			c.circuitBreakerFailures, time.Since(c.circuitBreakerLastFail))
+		return false
+	case "half-open":
+		log.Printf("[GigaChat] Circuit breaker: half-open, allowing request")
+		return true
+	default:
+		log.Printf("[GigaChat] Circuit breaker: unknown state '%s', allowing request", c.circuitBreakerState)
+		return true
+	}
+}
+
+// circuitBreakerRecordSuccess записывает успешный запрос
+func (c *Client) circuitBreakerRecordSuccess() {
+	c.circuitBreakerMutex.Lock()
+	defer c.circuitBreakerMutex.Unlock()
+
+	if c.circuitBreakerState == "half-open" {
+		// Transition back to closed on success in half-open state
+		c.circuitBreakerState = "closed"
+		c.circuitBreakerFailures = 0
+	}
+}
+
+// circuitBreakerRecordFailure записывает неудачный запрос
+func (c *Client) circuitBreakerRecordFailure() {
+	c.circuitBreakerMutex.Lock()
+	defer c.circuitBreakerMutex.Unlock()
+
+	c.circuitBreakerFailures++
+	c.circuitBreakerLastFail = time.Now()
+
+	// Open circuit after 5 consecutive failures
+	if c.circuitBreakerFailures >= 5 && c.circuitBreakerState != "open" {
+		c.circuitBreakerState = "open"
+		log.Printf("[GigaChat] Circuit breaker opened after %d consecutive failures", c.circuitBreakerFailures)
+	}
+}
+
 // doRequestWithClient выполняет HTTP запрос с указанным клиентом
 func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, method, url string, body []byte) (*http.Response, error) {
+	log.Printf("[GigaChat] doRequestWithClient called with URL: %s", url)
+
+	// Check circuit breaker before proceeding
+	if !c.circuitBreakerCheck() {
+		atomic.AddInt64(&c.errorCount, 1)
+		log.Printf("[GigaChat] Circuit breaker is open, rejecting request to %s %s", method, url)
+		return nil, fmt.Errorf("circuit breaker is open: too many recent failures")
+	}
+
 	// Acquire semaphore for concurrency control
 	select {
 	case c.semaphore <- struct{}{}:
@@ -134,20 +227,20 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 	}
 
 	// Apply global rate limiter to prevent DDoS-like behavior
-	rateLimiterTokens := c.rateLimiter.Tokens()
-	log.Printf("[GigaChat] Request: %s %s, rate limiter tokens=%.1f", method, url, rateLimiterTokens)
+	log.Printf("[GigaChat] Request: %s %s (rate limited to %.1f RPS)", method, url, c.cfg.RPSLimit)
 
 	if err := c.rateLimiter.Wait(ctx); err != nil {
 		log.Printf("[GigaChat] Rate limiter wait failed for %s %s: %v", method, url, err)
 		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
 
-	// Добавляем X-Client-ID для всех image-related запросов
-	// Важно: один и тот же X-Client-ID должен использоваться для генерации и скачивания изображений
+	// Определяем тип запроса для установки правильных заголовков
 	isImageRequest := strings.Contains(url, "/files/") ||
 		(strings.Contains(url, "/chat/completions") && len(body) > 0 && strings.Contains(string(body), "function_call"))
-	log.Printf("[GigaChat] Request analysis: URL=%s, hasBody=%v, containsFunctionCall=%v, isImageRequest=%v",
-		url, len(body) > 0, len(body) > 0 && strings.Contains(string(body), "function_call"), isImageRequest)
+	isLLMRequest := strings.Contains(url, "/chat/completions") || strings.Contains(url, "/embeddings")
+
+	log.Printf("[GigaChat] Request analysis: URL=%s, hasBody=%v, containsFunctionCall=%v, isImageRequest=%v, isLLMRequest=%v",
+		url, len(body) > 0, len(body) > 0 && strings.Contains(string(body), "function_call"), isImageRequest, isLLMRequest)
 
 	// Логируем body для image запросов
 	if isImageRequest && len(body) > 0 {
@@ -212,19 +305,23 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 			req.Header.Set("Content-Type", "application/json")
 		}
 
-			// Добавляем X-Client-ID для image-related запросов
-		if isImageRequest && c.cfg.ClientID != "" {
-			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
-			log.Printf("[GigaChat] Set X-Client-ID for image request: %s", strings.TrimSpace(c.cfg.ClientID))
-		} else if isImageRequest {
-			log.Printf("[GigaChat] Image request detected but ClientID empty: cfg.ClientID='%s'", c.cfg.ClientID)
+		// Добавляем X-Client-ID для всех API запросов (LLM и image)
+		if (isLLMRequest || isImageRequest) && c.cfg.ClientID != "" {
+			clientID := c.cfg.ClientID
+			req.Header.Set("X-Client-ID", clientID)
+			log.Printf("[GigaChat] Set X-Client-ID: '%s' (length: %d)", clientID, len(clientID))
+		} else if (isLLMRequest || isImageRequest) && c.cfg.ClientID == "" {
+			log.Printf("[GigaChat] Request detected but ClientID empty: cfg.ClientID='%s'", c.cfg.ClientID)
 		}
 
-		// Логируем заголовки для диагностики
-		log.Printf("[GigaChat] Headers: Accept=%s, Content-Type=%s, X-Client-ID=%s",
+		// Логируем заголовки для диагностики (без раскрытия токена)
+		authPresent := req.Header.Get("Authorization") != ""
+		xClientID := req.Header.Get("X-Client-ID")
+		log.Printf("[GigaChat] Headers: Accept=%s, Content-Type=%s, Authorization present=%v, X-Client-ID='%s'",
 			req.Header.Get("Accept"),
 			req.Header.Get("Content-Type"),
-			req.Header.Get("X-Client-ID"))
+			authPresent,
+			xClientID)
 
 		// Increment request counter
 		atomic.AddInt64(&c.requestCount, 1)
@@ -301,6 +398,8 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 
 			// Для 403 ошибок НЕ обновляем токен, так как это проблема прав доступа
 			// 403 = Forbidden, что означает недостаточные права для данного ClientID/токена
+			log.Printf("[GigaChat] 403 Forbidden details: URL=%s, ClientID='%s', X-Client-ID='%s', Authorization present=%v",
+				url, c.cfg.ClientID, req.Header.Get("X-Client-ID"), req.Header.Get("Authorization") != "")
 			lastErr = fmt.Errorf("gigachat error status 403: Permission denied - check ClientID permissions, X-Client-ID, and API access rights. Response: %s", string(data))
 			break
 		}
@@ -365,18 +464,25 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 		// Логируем успешные ответы
 		log.Printf("[GigaChat] Success response: %d for %s %s", resp.StatusCode, method, url)
 
+		// Record success for circuit breaker
+		c.circuitBreakerRecordSuccess()
+
 		// Успешный ответ или 401 (уже обработан)
 		return resp, nil
 	}
 
 	// Если все попытки исчерпаны
 	if lastErr != nil {
+		// Record failure for circuit breaker
+		c.circuitBreakerRecordFailure()
 		return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 	}
 	return nil, fmt.Errorf("failed after %d retries: unknown error", maxRetries)
 }
 
 func (c *Client) doRequest(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
+	log.Printf("[GigaChat] doRequest called with URL: %s", url)
+
 	// Acquire semaphore for concurrency control
 	select {
 	case c.semaphore <- struct{}{}:
@@ -386,20 +492,20 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 	}
 
 	// Apply global rate limiter to prevent DDoS-like behavior
-	rateLimiterTokens := c.rateLimiter.Tokens()
-	log.Printf("[GigaChat] Request: %s %s, rate limiter tokens=%.1f", method, url, rateLimiterTokens)
+	log.Printf("[GigaChat] Request: %s %s (rate limited to %.1f RPS)", method, url, c.cfg.RPSLimit)
 
 	if err := c.rateLimiter.Wait(ctx); err != nil {
 		log.Printf("[GigaChat] Rate limiter wait failed for %s %s: %v", method, url, err)
 		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
 
-	// Добавляем X-Client-ID для всех image-related запросов
-	// Важно: один и тот же X-Client-ID должен использоваться для генерации и скачивания изображений
+	// Определяем тип запроса для установки правильных заголовков
 	isImageRequest := strings.Contains(url, "/files/") ||
 		(strings.Contains(url, "/chat/completions") && len(body) > 0 && strings.Contains(string(body), "function_call"))
-	log.Printf("[GigaChat] Request analysis: URL=%s, hasBody=%v, containsFunctionCall=%v, isImageRequest=%v",
-		url, len(body) > 0, len(body) > 0 && strings.Contains(string(body), "function_call"), isImageRequest)
+	isLLMRequest := strings.Contains(url, "/chat/completions") || strings.Contains(url, "/embeddings")
+
+	log.Printf("[GigaChat] Request analysis: URL=%s, hasBody=%v, containsFunctionCall=%v, isImageRequest=%v, isLLMRequest=%v",
+		url, len(body) > 0, len(body) > 0 && strings.Contains(string(body), "function_call"), isImageRequest, isLLMRequest)
 
 	// Логируем body для image запросов
 	if isImageRequest && len(body) > 0 {
@@ -479,24 +585,35 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			req.Header.Set("Content-Type", "application/json")
 		}
 
-			// Добавляем X-Client-ID для image-related запросов
-		if isImageRequest && c.cfg.ClientID != "" {
-			req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
-			log.Printf("[GigaChat] Set X-Client-ID for image request: %s", strings.TrimSpace(c.cfg.ClientID))
-		} else if isImageRequest {
-			log.Printf("[GigaChat] Image request detected but ClientID empty: cfg.ClientID='%s'", c.cfg.ClientID)
+		// Добавляем X-Client-ID для всех API запросов (LLM и image)
+		if (isLLMRequest || isImageRequest) && c.cfg.ClientID != "" {
+			clientID := c.cfg.ClientID
+			req.Header.Set("X-Client-ID", clientID)
+			log.Printf("[GigaChat] Set X-Client-ID: '%s' (length: %d)", clientID, len(clientID))
+		} else if (isLLMRequest || isImageRequest) && c.cfg.ClientID == "" {
+			log.Printf("[GigaChat] Request detected but ClientID empty: cfg.ClientID='%s'", c.cfg.ClientID)
 		}
 
-		// Логируем заголовки для диагностики
-		log.Printf("[GigaChat] Headers: Accept=%s, Content-Type=%s, X-Client-ID=%s",
+		// Логируем заголовки для диагностики (без раскрытия токена)
+		authPresent := req.Header.Get("Authorization") != ""
+		xClientID := req.Header.Get("X-Client-ID")
+		log.Printf("[GigaChat] Headers: Accept=%s, Content-Type=%s, Authorization present=%v, X-Client-ID='%s'",
 			req.Header.Get("Accept"),
 			req.Header.Get("Content-Type"),
-			req.Header.Get("X-Client-ID"))
+			authPresent,
+			xClientID)
 
 		// Increment request counter
 		atomic.AddInt64(&c.requestCount, 1)
 
-		resp, err := c.client.Do(req)
+		// Выбираем клиента в зависимости от типа запроса
+		httpClient := c.client
+		if isImageRequest {
+			httpClient = c.imageClient
+			log.Printf("[GigaChat] Using imageClient with extended timeout for image request")
+		}
+
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			atomic.AddInt64(&c.errorCount, 1)
 			log.Printf("[GigaChat] Network error for %s %s: %v", method, url, err)
@@ -549,7 +666,13 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 				req.Header.Set("X-Client-ID", strings.TrimSpace(c.cfg.ClientID))
 			}
 
-			resp, err = c.client.Do(req)
+			// Выбираем клиента в зависимости от типа запроса для повторного запроса
+			retryClient := c.client
+			if isImageRequest {
+				retryClient = c.imageClient
+			}
+
+			resp, err = retryClient.Do(req)
 			if err != nil {
 				lastErr = err
 				continue
@@ -568,6 +691,8 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 
 			// Для 403 ошибок НЕ обновляем токен, так как это проблема прав доступа
 			// 403 = Forbidden, что означает недостаточные права для данного ClientID/токена
+			log.Printf("[GigaChat] 403 Forbidden details: URL=%s, ClientID='%s', X-Client-ID='%s', Authorization present=%v",
+				url, c.cfg.ClientID, req.Header.Get("X-Client-ID"), req.Header.Get("Authorization") != "")
 			lastErr = fmt.Errorf("gigachat error status 403: Permission denied - check ClientID permissions, X-Client-ID, and API access rights. Response: %s", string(data))
 			break
 		}
@@ -632,12 +757,17 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 		// Логируем успешные ответы
 		log.Printf("[GigaChat] Success response: %d for %s %s", resp.StatusCode, method, url)
 
+		// Record success for circuit breaker
+		c.circuitBreakerRecordSuccess()
+
 		// Успешный ответ или 401 (уже обработан)
 		return resp, nil
 	}
 
 	// Если все попытки исчерпаны
 	if lastErr != nil {
+		// Record failure for circuit breaker
+		c.circuitBreakerRecordFailure()
 		return nil, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 	}
 	return nil, fmt.Errorf("failed after %d retries: unknown error", maxRetries)

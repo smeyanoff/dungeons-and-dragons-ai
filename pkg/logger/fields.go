@@ -69,6 +69,11 @@ func Duration(key string, value time.Duration) zap.Field {
 	return zap.Duration(key, value)
 }
 
+// Time создает поле типа time.Time
+func Time(key string, value time.Time) zap.Field {
+	return zap.Time(key, value)
+}
+
 // Any создает поле произвольного типа
 func Any(key string, value interface{}) zap.Field {
 	return zap.Any(key, value)

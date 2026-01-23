@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -222,21 +223,20 @@ func (r *LLMLogRepository) GetStats(ctx context.Context, from, to time.Time) (*L
 	}
 
 	// Среднее время выполнения
-	// TODO: Fix AVG calculation with NULL values - currently returns error when no data
-	// var avgDuration []float64
-	// err = r.db.WithContext(ctx).
-	// 	Model(&llm_log.LLMLog{}).
-	// 	Where("created_at >= ? AND created_at <= ?", from, to).
-	// 	Pluck("AVG(duration_ms)", &avgDuration).Error
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to get average duration: %w", err)
-	// }
-	// if len(avgDuration) > 0 && avgDuration[0] > 0 {
-	// 	stats.AverageDurationMs = int64(avgDuration[0])
-	// } else {
-	// 	stats.AverageDurationMs = 0
-	// }
-	stats.AverageDurationMs = 0 // Temporary fix
+	var avgDuration sql.NullFloat64
+	err = r.db.WithContext(ctx).
+		Model(&llm_log.LLMLog{}).
+		Where("created_at >= ? AND created_at <= ? AND duration_ms IS NOT NULL", from, to).
+		Select("AVG(duration_ms)").
+		Scan(&avgDuration).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get average duration: %w", err)
+	}
+	if avgDuration.Valid {
+		stats.AverageDurationMs = int64(avgDuration.Float64)
+	} else {
+		stats.AverageDurationMs = 0
+	}
 
 	// Общее количество использованных токенов
 	var totalTokens int64

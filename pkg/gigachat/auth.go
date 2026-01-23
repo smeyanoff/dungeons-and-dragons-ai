@@ -23,12 +23,12 @@ type TokenResponse struct {
 }
 
 type authClient struct {
-	cfg               Config
-	token             *TokenResponse
-	lastTokenRefresh  time.Time
-	mu                sync.RWMutex
-	client            *http.Client
-	rateLimiter       *rate.Limiter // Rate limiter for auth requests
+	cfg              Config
+	token            *TokenResponse
+	lastTokenRefresh time.Time
+	mu               sync.RWMutex
+	client           *http.Client
+	rateLimiter      *rate.Limiter // Rate limiter for auth requests
 }
 
 func newAuthClient(cfg Config) *authClient {
@@ -143,8 +143,18 @@ func (a *authClient) getToken(ctx context.Context) (string, error) {
 	authHeader := clientSecret
 
 	// Логируем информацию для диагностики (без самих credentials)
-	log.Printf("GigaChat auth: ClientID length=%d, ClientSecret (auth key) length=%d",
-		len(clientID), len(authHeader))
+	log.Printf("GigaChat auth: ClientID length=%d, ClientSecret (auth key) length=%d, Scope='%s'",
+		len(clientID), len(authHeader), scope)
+	clientIDPreview := clientID
+	if len(clientID) > 10 {
+		clientIDPreview = clientID[:10] + "..."
+	}
+	authHeaderPreview := authHeader
+	if len(authHeader) > 10 {
+		authHeaderPreview = authHeader[:10] + "..."
+	}
+	log.Printf("GigaChat auth: ClientID starts with: %s", clientIDPreview)
+	log.Printf("GigaChat auth: ClientSecret starts with: %s", authHeaderPreview)
 
 	// Пытаемся получить токен с retry механизмом
 	token, err := a.getTokenWithRetry(ctx, clientID, authHeader, scope)
@@ -262,9 +272,16 @@ func (a *authClient) requestToken(ctx context.Context, clientID, authHeader, sco
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("RqUID", rqUID) // Обязательный заголовок - уникальный идентификатор запроса в формате UUID v4
 
+	// X-Client-ID может требоваться для всех запросов
+	if a.cfg.ClientID != "" {
+		req.Header.Set("X-Client-ID", a.cfg.ClientID)
+		log.Printf("[GigaChat Auth] Set X-Client-ID for token request: %s", a.cfg.ClientID)
+	}
+
 	// Логируем детали запроса для диагностики (без credentials)
 	log.Printf("GigaChat auth request: Method=%s, URL=%s, Scope=%s, RqUID=%s, Content-Type=%s, Authorization header present=%v",
 		req.Method, req.URL.String(), scope, rqUID, req.Header.Get("Content-Type"), req.Header.Get("Authorization") != "")
+	log.Printf("GigaChat auth: Using scope '%s' - ensure it matches your GigaChat plan (PERS/CORP/B2B)", scope)
 
 	// Apply rate limiter before making the request
 	authRateLimiterTokens := a.rateLimiter.Tokens()

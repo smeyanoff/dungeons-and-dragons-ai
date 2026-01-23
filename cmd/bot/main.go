@@ -159,10 +159,10 @@ func main() {
 		APIBaseURL:       getEnv("GIGACHAT_API_URL", "https://gigachat.devices.sberbank.ru/api/v1"),
 		ClientID:         gigachatClientID,
 		ClientSecret:     gigachatClientSecret,
-		Scope:            getEnv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
-		ConcurrencyLimit: 1, // Ограничиваем до 1 одновременного запроса
-		RPSLimit:         3.0, // Ограничиваем до 3 запросов в секунду для баланса между DDoS защитой и token freshness
-		RateBurst:        2,   // Burst до 2 запросов
+		Scope:            getEnv("GIGACHAT_SCOPE", "GIGACHAT_API_CORP"),
+		ConcurrencyLimit: 1, // Ограничиваем до 1 одновременного запроса для стабильности
+		RPSLimit:         5.0, // Увеличиваем до 5 RPS для генерации контента
+		RateBurst:        3,   // Burst до 3 запросов для сложных операций
 	}
 
 	// Валидация GigaChat credentials
@@ -508,7 +508,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err = telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
+	bot, err = telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, playerRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
 	if err != nil {
 		logger.Error("Failed to create bot - continuing without Telegram bot",
 			logger.ErrorField(err),

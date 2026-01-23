@@ -156,7 +156,7 @@ func (c *Character) AddExperience(amount int) (leveledUp bool, err error) {
 	c.Experience += amount
 
 	// Проверяем, нужно ли повысить уровень
-	requiredXP := getRequiredXPForLevel(c.Level + 1)
+	requiredXP := GetRequiredXPForLevel(c.Level + 1)
 	if c.Experience >= requiredXP {
 		return c.levelUp()
 	}
@@ -216,8 +216,8 @@ func (c *Character) improveAbilityScore() {
 	}
 }
 
-// getRequiredXPForLevel возвращает требуемый опыт для уровня
-func getRequiredXPForLevel(level int) int {
+// GetRequiredXPForLevel возвращает требуемый опыт для уровня
+func GetRequiredXPForLevel(level int) int {
 	// Стандартная таблица опыта D&D 5e (упрощенная)
 	xpTable := map[int]int{
 		1:  0,
@@ -280,7 +280,7 @@ func calculateHPGain(class Class, stats Stats) int {
 
 // GetExperienceToNextLevel возвращает опыт, необходимый для следующего уровня
 func (c *Character) GetExperienceToNextLevel() int {
-	requiredXP := getRequiredXPForLevel(c.Level + 1)
+	requiredXP := GetRequiredXPForLevel(c.Level + 1)
 	return requiredXP - c.Experience
 }
 

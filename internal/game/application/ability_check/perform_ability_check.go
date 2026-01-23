@@ -81,12 +81,18 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 		return nil, fmt.Errorf("no pending ability check")
 	}
 
+	// Проверяем cooldown для типа способности
+	const cooldownDuration = 30 * time.Second // 30 секунд cooldown
+	ability := gs.PendingAbilityCheckAbility
+	if onCooldown, remainingTime := gs.IsAbilityOnCooldown(ability, cooldownDuration); onCooldown {
+		return nil, fmt.Errorf("проверка способности '%s' на cooldown. Осталось: %.0f сек", ability, remainingTime.Seconds())
+	}
+
 	player := gs.GetFirstPlayer()
 	if player == nil {
 		return nil, fmt.Errorf("player not found")
 	}
 
-	ability := gs.PendingAbilityCheckAbility
 	baseDC := gs.PendingAbilityCheckDC
 
 	// Применяем адаптивную сложность
@@ -151,6 +157,9 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 			)
 		}
 	}
+
+	// Устанавливаем cooldown для типа способности
+	gs.SetAbilityCooldown(ability)
 
 	gs.ClearPendingAbilityCheck()
 	if err := uc.sessionRepo.Save(ctx, gs); err != nil {

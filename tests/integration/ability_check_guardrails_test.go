@@ -337,7 +337,8 @@ func TestAbilityCheck_Guardrails_Cooldown(t *testing.T) {
 		GameSessionID: gs.ID,
 		AuthorType:    event.AuthorTypeDM,
 		// Важно: чтобы hasResult было false (иначе попадём в already_checked).
-		Content:   "dm: wisdom",
+		// Но для cooldown нужен checkContext - слова "проверка", "d20" или "бросок"
+		Content:   "dm проверка wisdom d20",
 		CreatedAt: time.Now().Add(-30 * time.Second),
 	}
 	if err := cfg.eventRepo.Save(ctx, evt); err != nil {

@@ -142,7 +142,14 @@ func (c *Client) GenerateImage(ctx context.Context, model string, systemPrompt s
 
 	log.Printf("[GigaChat] Request body: %s", string(reqBodyBytes))
 
-	url := fmt.Sprintf("%s/chat/completions", c.cfg.APIBaseURL)
+	apiURL := c.cfg.APIBaseURL
+	// Fix incorrect URL if it points to auth endpoint
+	if strings.Contains(apiURL, ":9443") && !strings.Contains(apiURL, "/api/") {
+		apiURL = strings.Replace(apiURL, ":9443", ":9443/api/v1", 1)
+		log.Printf("[GigaChat] Fixed API URL from auth endpoint to API endpoint: %s", apiURL)
+	}
+
+	url := fmt.Sprintf("%s/chat/completions", apiURL)
 
 	// Используем doRequestWithClient с imageClient для автоматического retry при 429 ошибках
 	resp, err := c.doRequestWithClient(ctx, c.imageClient, http.MethodPost, url, reqBodyBytes)

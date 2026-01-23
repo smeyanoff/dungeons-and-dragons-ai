@@ -18,6 +18,7 @@ import (
 	diceapp "dungeons-and-dragons-ai/internal/game/application/dice"
 	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
+	sessionapp "dungeons-and-dragons-ai/internal/game/application/session"
 	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
@@ -310,6 +311,7 @@ func NewHandleActionUseCase(
 func (uc *HandleActionUseCase) Execute(
 	ctx context.Context,
 	chatID int64,
+	tgUserID int64,
 	playerMessage string,
 ) (string, error) {
 	// Получаем сессию с таймаутом для БД
@@ -328,10 +330,32 @@ func (uc *HandleActionUseCase) Execute(
 		return "Игра завершена. Используйте /newgame для начала новой игры.", nil
 	}
 
+	// Проверяем истекшие сессионные цели
+	sessionGoalsUC := sessionapp.NewManageSessionGoalsUseCase(uc.sessionRepo)
+	if err := sessionGoalsUC.CheckSessionExpiredGoals(ctx, chatID); err != nil {
+		logger.Warn("Failed to check expired session goals",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+		)
+		// Продолжаем выполнение, не прерывая игру
+	}
+
 	// Проверяем наличие персонажа перед обработкой действий
-	player := gs.GetFirstPlayer()
+	player := gs.FindPlayerByTgUserID(tgUserID)
 	if player == nil {
+		if gs.IsCooperative {
+			return "Ваш персонаж не найден в этой сессии. Используйте /join для присоединения к cooperative игре.", nil
+		}
 		return "Персонаж не создан. Используйте /createcharacter для создания персонажа.", nil
+	}
+
+	// В cooperative режиме проверяем, является ли ход этого игрока
+	if gs.IsCooperative && !gs.IsPlayerTurn(tgUserID) {
+		activePlayer := gs.GetActivePlayer()
+		if activePlayer != nil {
+			return fmt.Sprintf("Сейчас не ваш ход. Ожидаем действия от %s.", activePlayer.Name), nil
+		}
+		return "Сейчас не ваш ход. Подождите, пока другой игрок завершит свой ход.", nil
 	}
 
 	// Добавляем контекст с chat_id и tg_user_id для мониторинга LLM запросов
@@ -765,6 +789,17 @@ func (uc *HandleActionUseCase) Execute(
 		}
 	}
 
+	// В cooperative режиме переключаем ход к следующему игроку после успешного действия
+	if gs.IsCooperative {
+		gs.NextPlayerTurn()
+		if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+			logger.Warn("Failed to switch player turn in cooperative mode",
+				logger.ErrorField(err),
+				logger.Uint("session_id", gs.ID),
+			)
+		}
+	}
+
 	return response, nil
 }
 
@@ -905,6 +940,9 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		}
 	}
 
+	// Обновляем прогресс сессионных целей
+	uc.updateSessionGoalsProgress(ctx, gs, analysis)
+
 	// Возвращаем модифицированный response с маркерами изображений и сообщение о начале боя
 	return modifiedResponse, combatStartMessage
 }
@@ -995,7 +1033,7 @@ func (uc *HandleActionUseCase) generateEnemyTurn(
 		logger.String("enemy_name", enemyName),
 	)
 
-	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
+	llmCtx, llmCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer llmCancel()
 
 	enemyResponse, _, err := uc.generateWithToolsLoop(llmCtx, enemyTurnPrompt, toolRegistry, gs)
@@ -2521,4 +2559,37 @@ func (uc *HandleActionUseCase) handleTimeChange(ctx context.Context, gs *session
 	)
 
 	return response, nil
+}
+
+// updateSessionGoalsProgress обновляет прогресс сессионных целей на основе анализа ответа DM
+func (uc *HandleActionUseCase) updateSessionGoalsProgress(
+	ctx context.Context,
+	gs *session.GameSession,
+	analysis *dm_analyzer.DMResponseAnalysis,
+) {
+	// Обновляем прогресс исследования локаций
+	if analysis.LocationVisited != nil && analysis.LocationVisited.IsFirstVisit {
+		logger.Info("Location visited - updating exploration goal progress",
+			logger.Uint("session_id", gs.ID),
+			logger.String("location", analysis.LocationVisited.Name),
+		)
+		gs.UpdateGoalProgress(session.GoalTypeExploration, 1)
+	}
+
+	// Обновляем прогресс получения опыта
+	if analysis.ExperienceGained > 0 {
+		logger.Info("Experience gained - updating experience goal progress",
+			logger.Uint("session_id", gs.ID),
+			logger.Int("experience", analysis.ExperienceGained),
+		)
+		gs.UpdateGoalProgress(session.GoalTypeExperience, analysis.ExperienceGained)
+	}
+
+	// Сохраняем обновленный прогресс целей
+	if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+		logger.Warn("Failed to save session goals progress",
+			logger.ErrorField(err),
+			logger.Uint("session_id", gs.ID),
+		)
+	}
 }

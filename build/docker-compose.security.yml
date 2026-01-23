@@ -14,11 +14,7 @@ services:
     volumes:
       - ..:/app
       - trivy-cache:/root/.cache/
-    entrypoint: ["/bin/sh", "-c"]
-    command: >
-      trivy filesystem --scanners vuln,config,secret --skip-dirs data
-      --format json --output trivy-report.json . 2>/dev/null || true &&
-      trivy filesystem --scanners vuln,config,secret --skip-dirs data . 2>/dev/null || true
+    command: ["sh", "-c", "trivy fs --format json . > trivy-report.json 2>/dev/null || true"]
   semgrep:
     image: semgrep/semgrep:latest
     working_dir: /app
@@ -28,7 +24,7 @@ services:
 
   # Snyk - сканирование зависимостей на уязвимости
   snyk:
-    image: snyk/snyk:go
+    image: snyk/snyk:alpine
     working_dir: /app
     volumes:
       - ..:/app
@@ -44,8 +40,7 @@ services:
     working_dir: /app
     volumes:
       - ..:/app
-    entrypoint: ["sh", "-c"]
-    command: ["trufflehog filesystem /app --json > trufflehog-report.json 2>/dev/null || true"]
+    command: ["trufflehog", "filesystem", "/app", "--json", "--output", "trufflehog-report.json"]
 
 volumes:
   trivy-cache:

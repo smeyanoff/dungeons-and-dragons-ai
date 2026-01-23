@@ -12,6 +12,7 @@ import (
 
 	jsonrepair "dungeons-and-dragons-ai/internal/game/application/jsonrepair"
 	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
+	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
@@ -59,7 +60,7 @@ type GeneratedImage struct {
 	ImagePath  string `json:"image_path"`  // Путь к изображению (может быть пустым если не скачано)
 	FileID     string `json:"file_id"`     // File ID для повторных попыток скачивания
 	EntityName string `json:"entity_name"` // Название сущности (предмет, локация, NPC)
-	Downloaded bool   `json:"downloaded"` // Удалось ли скачать изображение
+	Downloaded bool   `json:"downloaded"`  // Удалось ли скачать изображение
 }
 
 // Enemy представляет врага в бою
@@ -113,28 +114,28 @@ type InventoryRepository interface {
 }
 
 type AnalyzeDMResponseUseCase struct {
-	llm                     domain.LLM
-	combatRepo              CombatRepository
-	questRepo               QuestRepository
-	inventoryRepo           InventoryRepository
-	sessionID               uint
-	chatID                  int64 // ChatID для отправки уведомлений
-	worldID                 uint
-	characterID             uint                      // ID персонажа игрока
-	playerID                uint                      // ID игрока (для проверки достижений)
-	combatStartMessage      string                    // Сообщение о порядке ходов при начале боя
-	checkAchievementsUC     AchievementChecker        // Опциональная зависимость для проверки достижений
-	notificationService     NotificationService       // Опциональная зависимость для отправки уведомлений
-	imageGenerationService  ImageGenerationService    // Опциональная зависимость для автоматической генерации изображений
-	userID                  int64                     // ID пользователя для генерации изображений (Telegram User ID)
-	checkDailyProgressUC    DailyQuestProgressChecker // Опциональная зависимость для отслеживания ежедневных заданий
-	tgUserID                int64                     // Telegram User ID для отслеживания ежедневных заданий
-	generateLocationEventUC LocationEventGenerator    // Опциональная зависимость для генерации событий локаций
-	sessionRepo             SessionRepository         // Репозиторий сессий для поиска локаций
-	eventRepo               StoryEventRepository      // Репозиторий для записи событий истории
-	indexDocUC              RAGIndexer                // Индексатор RAG для событий
-	imagesGeneratedInSession int                      // Счетчик изображений, сгенерированных в этой сессии
-	maxImagesPerSession     int                      // Максимальное количество изображений за сессию
+	llm                      domain.LLM
+	combatRepo               CombatRepository
+	questRepo                QuestRepository
+	inventoryRepo            InventoryRepository
+	sessionID                uint
+	chatID                   int64 // ChatID для отправки уведомлений
+	worldID                  uint
+	characterID              uint                      // ID персонажа игрока
+	playerID                 uint                      // ID игрока (для проверки достижений)
+	combatStartMessage       string                    // Сообщение о порядке ходов при начале боя
+	checkAchievementsUC      AchievementChecker        // Опциональная зависимость для проверки достижений
+	notificationService      NotificationService       // Опциональная зависимость для отправки уведомлений
+	imageGenerationService   ImageGenerationService    // Опциональная зависимость для автоматической генерации изображений
+	userID                   int64                     // ID пользователя для генерации изображений (Telegram User ID)
+	checkDailyProgressUC     DailyQuestProgressChecker // Опциональная зависимость для отслеживания ежедневных заданий
+	tgUserID                 int64                     // Telegram User ID для отслеживания ежедневных заданий
+	generateLocationEventUC  LocationEventGenerator    // Опциональная зависимость для генерации событий локаций
+	sessionRepo              SessionRepository         // Репозиторий сессий для поиска локаций
+	eventRepo                StoryEventRepository      // Репозиторий для записи событий истории
+	indexDocUC               RAGIndexer                // Индексатор RAG для событий
+	imagesGeneratedInSession int                       // Счетчик изображений, сгенерированных в этой сессии
+	maxImagesPerSession      int                       // Максимальное количество изображений за сессию
 }
 
 // SessionRepository интерфейс для доступа к сессии (для поиска локаций)
@@ -144,10 +145,10 @@ type SessionRepository interface {
 
 // SessionSnapshot — упрощенная структура сессии (для доступа к миру и локациям)
 type SessionSnapshot struct {
-	ID               uint
-	World            WorldSnapshot
-	CurrentLocation  *LocationInfo  // Текущая локация персонажа
-	Character        *CharacterInfo // Информация о персонаже
+	ID              uint
+	World           WorldSnapshot
+	CurrentLocation *LocationInfo  // Текущая локация персонажа
+	Character       *CharacterInfo // Информация о персонаже
 }
 
 // WorldSnapshot — упрощенная структура мира (для доступа к локациям)
@@ -268,8 +269,8 @@ func NewAnalyzeDMResponseUseCase(
 		worldID:                  worldID,
 		characterID:              characterID,
 		playerID:                 playerID,
-		imagesGeneratedInSession: 0,     // Начинаем с 0 изображений
-		maxImagesPerSession:      3,     // Максимум 3 изображения за сессию
+		imagesGeneratedInSession: 0, // Начинаем с 0 изображений
+		maxImagesPerSession:      3, // Максимум 3 изображения за сессию
 	}
 }
 
@@ -360,7 +361,64 @@ func (uc *AnalyzeDMResponseUseCase) Execute(
 // validateCombatAnalysis проверяет корректность анализа боя с строгими проверками
 func validateCombatAnalysis(analysis *DMResponseAnalysis) (*DMResponseAnalysis, error) {
 	// Строгая валидация всех полей анализа
-	return validateAnalysisStrict(analysis)
+	validatedAnalysis, err := validateAnalysisStrict(analysis)
+	if err != nil {
+		return validatedAnalysis, err
+	}
+
+	// Дополнительная валидация полей боя
+	if validatedAnalysis.CombatDetected {
+		// Проверяем, что у всех врагов есть валидные характеристики
+		for i, enemy := range validatedAnalysis.Enemies {
+			if enemy.Name == "" {
+				log.Printf("[DM Analyzer] Enemy %d has empty name, this is invalid for combat", i)
+				validatedAnalysis.CombatDetected = false
+				validatedAnalysis.Enemies = nil
+				break
+			}
+
+			// Проверяем HP
+			if enemy.HP == nil {
+				defaultHP := 15
+				log.Printf("[DM Analyzer] Enemy '%s' has null HP, setting default %d", enemy.Name, defaultHP)
+				enemy.HP = &defaultHP
+			} else if *enemy.HP <= 0 {
+				defaultHP := 15
+				log.Printf("[DM Analyzer] Enemy '%s' has invalid HP %d, setting default %d", enemy.Name, *enemy.HP, defaultHP)
+				enemy.HP = &defaultHP
+			}
+
+			// Проверяем AC
+			if enemy.AC == nil {
+				defaultAC := 13
+				log.Printf("[DM Analyzer] Enemy '%s' has null AC, setting default %d", enemy.Name, defaultAC)
+				enemy.AC = &defaultAC
+			} else if *enemy.AC <= 0 {
+				defaultAC := 13
+				log.Printf("[DM Analyzer] Enemy '%s' has invalid AC %d, setting default %d", enemy.Name, *enemy.AC, defaultAC)
+				enemy.AC = &defaultAC
+			}
+
+			// Проверяем AttackBonus
+			if enemy.AttackBonus == nil {
+				defaultBonus := 3
+				log.Printf("[DM Analyzer] Enemy '%s' has null attack_bonus, setting default %d", enemy.Name, defaultBonus)
+				enemy.AttackBonus = &defaultBonus
+			}
+
+			// Обновляем врага в массиве
+			validatedAnalysis.Enemies[i] = enemy
+		}
+
+		// Если после валидации не осталось валидных врагов, отключаем бой
+		if len(validatedAnalysis.Enemies) == 0 {
+			log.Printf("[DM Analyzer] No valid enemies remain after validation, disabling combat")
+			validatedAnalysis.CombatDetected = false
+			validatedAnalysis.Enemies = nil
+		}
+	}
+
+	return validatedAnalysis, nil
 }
 
 // validateAnalysisStrict выполняет полную валидацию анализа с fallback логикой
@@ -388,7 +446,7 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 		// Возвращаем анализ как есть, но логируем для отладки
 	}
 
-	// Валидируем боевую ситуацию
+	// Валидируем боевую ситуацию с дополнительными проверками
 	if analysis.CombatDetected {
 		validEnemies, hasValidEnemies := validateEnemiesStrict(analysis.Enemies)
 		if !hasValidEnemies {
@@ -397,6 +455,18 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 			analysis.Enemies = nil
 		} else {
 			analysis.Enemies = validEnemies
+			// Дополнительная проверка: убеждаемся что у всех врагов есть имена и характеристики
+			validEnemyCount := 0
+			for _, enemy := range analysis.Enemies {
+				if enemy.Name != "" && enemy.HP != nil && *enemy.HP > 0 && enemy.AC != nil && *enemy.AC > 0 && enemy.AttackBonus != nil {
+					validEnemyCount++
+				}
+			}
+			if validEnemyCount == 0 {
+				log.Printf("[DM Analyzer] Combat detected but no enemies have complete stats, disabling combat")
+				analysis.CombatDetected = false
+				analysis.Enemies = nil
+			}
 		}
 	}
 
@@ -457,6 +527,48 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 	}
 
 	return analysis, nil
+}
+
+// validateJSONSchemaStrict выполняет строгую валидацию JSON схемы перед отправкой в LLM
+func validateJSONSchemaStrict(prompt string) error {
+	// Проверяем наличие всех обязательных полей в промпте
+	requiredFields := []string{
+		"combat_detected",
+		"enemies",
+		"quest_completed",
+		"quest_failed",
+		"quest_title",
+		"experience_gained",
+		"experience_reason",
+		"items_received",
+		"location_visited",
+		"npc_met",
+		"generated_images",
+	}
+
+	for _, field := range requiredFields {
+		fieldPattern := fmt.Sprintf(`"%s":`, field)
+		if !strings.Contains(prompt, fieldPattern) {
+			return fmt.Errorf("missing required field in prompt: %s", field)
+		}
+	}
+
+	// Проверяем наличие критических инструкций
+	criticalInstructions := []string{
+		"ТОЛЬКО валидный JSON",
+		"без текста до/после",
+		"Все скобки и массивы ДОЛЖНЫ быть закрыты",
+		"НЕ возвращай пустой JSON",
+		"generated_images",
+	}
+
+	for _, instruction := range criticalInstructions {
+		if !strings.Contains(prompt, instruction) {
+			return fmt.Errorf("missing critical instruction in prompt: %s", instruction)
+		}
+	}
+
+	return nil
 }
 
 // validateEnemiesStrict выполняет строгую валидацию врагов
@@ -630,12 +742,18 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 		return fallbackAnalysisFromResponse(dmResponse), nil
 	}
 
+	// Дополнительная strict валидация JSON схемы перед отправкой
+	if err := validateJSONSchemaStrict(prompt); err != nil {
+		log.Printf("[DM Analyzer] JSON schema validation failed: %v", err)
+		return fallbackAnalysisFromResponse(dmResponse), nil
+	}
+
 	// Увеличен таймаут для анализа DM ответов
 	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second) // Увеличиваем таймаут до 90 секунд
 	defer llmCancel()
 
 	// Устанавливаем лимит токенов для предотвращения усечения JSON
-	maxTokens := 4096 // Уменьшенный лимит токенов для стабильности
+	maxTokens := 8192 // Увеличенный лимит токенов для полного JSON ответа
 	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
@@ -1000,7 +1118,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 			SystemPrompt:    systemPrompt,
 			UserPrompt:      userPrompt,
 			Type:            "item",
-			EntityID:        0, // Пока нет привязки к ID предмета в БД
+			EntityID:        0,         // Пока нет привязки к ID предмета в БД
 			EntityName:      item.Name, // Используем имя предмета для кэширования
 			ForceRegenerate: false,
 			UserID:          uc.userID,
@@ -1072,7 +1190,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 		SystemPrompt:    systemPrompt,
 		UserPrompt:      userPrompt,
 		Type:            "location",
-		EntityID:        0, // Пока нет привязки к ID локации в БД
+		EntityID:        0,             // Пока нет привязки к ID локации в БД
 		EntityName:      location.Name, // Используем имя локации для кэширования
 		ForceRegenerate: false,
 		UserID:          uc.userID,
@@ -1137,7 +1255,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 		SystemPrompt:    systemPrompt,
 		UserPrompt:      userPrompt,
 		Type:            "npc",
-		EntityID:        0, // Пока нет привязки к ID NPC в БД
+		EntityID:        0,        // Пока нет привязки к ID NPC в БД
 		EntityName:      npc.Name, // Используем имя NPC для кэширования
 		ForceRegenerate: false,
 		UserID:          uc.userID,
@@ -1202,6 +1320,23 @@ func (uc *AnalyzeDMResponseUseCase) handleCombatStart(
 		CharacterID: &uc.characterID,
 		CreatedAt:   time.Now(),
 	}
+
+	// Устанавливаем базовую информацию о персонаже для правильного отображения
+	// Character будет загружен GORM автоматически при первом обращении
+	if uc.sessionRepo != nil {
+		session, err := uc.sessionRepo.GetByChatID(ctx, uc.chatID)
+		if err == nil && session != nil && session.Character != nil {
+			// Создаем Character с базовой информацией
+			playerParticipant.Character = &character.Character{
+				ID:    session.Character.ID,
+				Name:  session.Character.Name,
+				Class: character.Class(session.Character.Class),
+				Level: session.Character.Level,
+				Race:  character.Race(session.Character.Race),
+			}
+		}
+	}
+
 	newCombat.Participants = append(newCombat.Participants, playerParticipant)
 
 	// TODO: Добавить активных компаньонов игрока в бой
@@ -1527,12 +1662,36 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
 - Устанавливай combat_detected=true ТОЛЬКО если в ответе DM явно описан НАЧАВШИЙСЯ бой с врагами
 - Ключевые признаки боя: "нападает", "атакует", "бросается", "бьет", "стреляет", "заклинание", "удар", "рана", "ранение", "инициатива", "ход боя", "инициатива", "ранение", "рана"
 - ДОПОЛНИТЕЛЬНЫЕ ПРИЗНАКИ БОЯ: "бросок атаки", "бросок на инициативу", "выстрел", "заклинание", "магия", "волшебство", "драка", "потасовка", "схватка", "побоище"
+- РАСШИРЕННЫЕ ПРИЗНАКИ БОЯ: "спасбросок", "спас-бросок", "урон", "повреждение", "кровь", "оглушение", "паралич", "отравление", "слепота", "страх", "ужас", "смерть", "убийство"
 - ПРИМЕРЫ, КОГДА combat_detected=true:
   * "Внезапно на вас нападает орк с топором!"
   * "Гоблин бросается на вас с кинжалом, инициатива!"
   * "Вы получаете ранение от стрелы!"
   * "Раздаётся боевой клич, начинается бой!"
   * "Враг наносит удар мечом, бросайте спасбросок!"
+  * "Огромный тролль замахивается дубиной и атакует!"
+  * "Из темноты выбегают волки и бросаются на вас!"
+  * "Стражник обнажает меч и кричит: 'Стоять!'"
+  * "Вас поражает молния от волшебника!"
+  * "Медведь ревет и идёт в атаку!"
+  * "Вы слышите боевой клич - начинается битва!"
+  * "Гоблин атакует вас ржавым кинжалом!"
+  * "Орк замахивается боевым топором и бросается вперёд!"
+  * "Волки окружают вас, рыча и скаля зубы!"
+  * "Из засады выскакивают разбойники с арбалетами!"
+  * "Мумия оживает и тянет к вам свои бинты!"
+  * "Призрак стонет и пытается вас коснуться ледяной рукой!"
+  * "Вампир шипит и раскрывает свои клыки!"
+  * "Оборотень воет и прыгает на вас с когтями!"
+  * "Стражник обнажает меч и становится в боевую стойку!"
+  * "Воин замахивается булавой и кричит боевой клич!"
+  * "Лучник натягивает тетиву и целится в вас!"
+  * "Маг начинает читать заклинание огненного шара!"
+- ПРИМЕРЫ, КОГДА combat_detected=false:
+  * "Впереди вы видите охрану у ворот" (только упоминание)
+  * "Вы вспоминаете, как сражались с драконом" (воспоминания)
+  * "Возможно, там будут монстры" (потенциальная угроза)
+  * "Вы готовитесь к бою, проверяя оружие" (подготовка)
 - НЕ устанавливай true если: только упоминание о потенциальной угрозе, планирование боя, воспоминания о прошлом бое
 - Если combat_detected=true, ОБЯЗАТЕЛЬНО укажи хотя бы одного врага в массиве enemies
 - Для каждого врага ОБЯЗАТЕЛЬНО укажи hp, ac и attack_bonus (только числа!)
@@ -1567,9 +1726,16 @@ NPC (npc_met):
 - ВСЕГДА возвращай ПОЛНЫЙ JSON со ВСЕМИ полями (даже если значения по умолчанию)
 - Верни ТОЛЬКО валидный JSON, без текста до/после, без markdown, без комментариев
 - Все строки в кавычках, числа без кавычек, булевы true/false
-- Все скобки и массивы ДОЛЖНЫ быть закрыты
+- Все скобки и массивы ДОЛЖНЫ быть закрыты - это критично!
+- Массивы enemies, items_received, generated_images ДОЛЖНЫ быть закрыты ]
+- Объекты location_visited, npc_met ДОЛЖНЫ быть закрыты }
 - НЕ возвращай пустой JSON {} или неполный JSON
+- JSON ДОЛЖЕН быть полным и завершённым - проверь все скобки перед отправкой
 - Если сомневаешься - используй значения по умолчанию (false, 0, "", [], null)
+- ОБЯЗАТЕЛЬНО включи поле "generated_images": [] в конце
+- ЕСЛИ combat_detected=true, ТО ОБЯЗАТЕЛЬНО укажи хотя бы одного врага в enemies с полными характеристиками (name, hp, ac, attack_bonus)
+- НЕ устанавливай combat_detected=true без enemies массива
+- ПРОВЕРЬ: все массивы [], все объекты {}, все поля заполнены
 
 Пример правильного ответа:
 %s%s`, dmResponse, skeleton, criticalFooter)
@@ -1627,28 +1793,75 @@ func extractEnemiesFromText(dmResponse string) []Enemy {
 	lower := strings.ToLower(dmResponse)
 	var enemies []Enemy
 
-	// Список известных врагов для поиска
+	// Расширенный список известных врагов для поиска
 	enemyTypes := map[string]struct{ hp, ac, attackBonus int }{
-		"гоблин":     {hp: 10, ac: 15, attackBonus: 4},
-		"орк":        {hp: 20, ac: 13, attackBonus: 5},
-		"тролль":     {hp: 40, ac: 15, attackBonus: 7},
-		"дракон":     {hp: 80, ac: 18, attackBonus: 8},
-		"скелет":     {hp: 13, ac: 15, attackBonus: 4},
-		"зомби":      {hp: 22, ac: 12, attackBonus: 3},
-		"волк":       {hp: 11, ac: 13, attackBonus: 4},
-		"медведь":    {hp: 34, ac: 13, attackBonus: 6},
-		"паук":       {hp: 16, ac: 13, attackBonus: 4},
-		"призрак":    {hp: 25, ac: 13, attackBonus: 5},
-		"вампир":     {hp: 60, ac: 16, attackBonus: 7},
-		"ведьма":     {hp: 30, ac: 13, attackBonus: 5},
-		"маг":        {hp: 25, ac: 13, attackBonus: 5},
-		"воин":       {hp: 35, ac: 16, attackBonus: 5},
-		"рыцарь":     {hp: 45, ac: 18, attackBonus: 6},
-		"варвар":     {hp: 50, ac: 14, attackBonus: 6},
-		"лучник":     {hp: 25, ac: 14, attackBonus: 5},
-		"разбойник":  {hp: 28, ac: 14, attackBonus: 5},
-		"страж":      {hp: 30, ac: 16, attackBonus: 4},
-		"охранник":   {hp: 25, ac: 15, attackBonus: 4},
+		// Маленькие гуманоиды
+		"гоблин":    {hp: 10, ac: 15, attackBonus: 4},
+		"кобольд":   {hp: 5, ac: 12, attackBonus: 2},
+		"хобгоблин": {hp: 11, ac: 18, attackBonus: 3},
+
+		// Средние гуманоиды
+		"орк":     {hp: 20, ac: 13, attackBonus: 5},
+		"полуорк": {hp: 18, ac: 12, attackBonus: 4},
+		"огр":     {hp: 35, ac: 11, attackBonus: 6},
+
+		// Большие существа
+		"тролль":  {hp: 40, ac: 15, attackBonus: 7},
+		"гигант":  {hp: 50, ac: 13, attackBonus: 8},
+		"великан": {hp: 55, ac: 14, attackBonus: 8},
+
+		// Нежить
+		"скелет":  {hp: 13, ac: 15, attackBonus: 4},
+		"зомби":   {hp: 22, ac: 12, attackBonus: 3},
+		"призрак": {hp: 25, ac: 13, attackBonus: 5},
+		"вампир":  {hp: 60, ac: 16, attackBonus: 7},
+		"ли Lich": {hp: 70, ac: 15, attackBonus: 9},
+		"смерть":  {hp: 100, ac: 20, attackBonus: 10},
+
+		// Звери
+		"волк":             {hp: 11, ac: 13, attackBonus: 4},
+		"медведь":          {hp: 34, ac: 13, attackBonus: 6},
+		"паук":             {hp: 16, ac: 13, attackBonus: 4},
+		"паук гигантский":  {hp: 26, ac: 14, attackBonus: 6},
+		"крыса":            {hp: 1, ac: 10, attackBonus: 0},
+		"крыса гигантская": {hp: 7, ac: 12, attackBonus: 1},
+
+		// Драконы и рептилии
+		"дракон":          {hp: 80, ac: 18, attackBonus: 8},
+		"дракончик":       {hp: 16, ac: 13, attackBonus: 4},
+		"змея":            {hp: 2, ac: 13, attackBonus: 2},
+		"змея гигантская": {hp: 11, ac: 14, attackBonus: 4},
+
+		// Элементали и демоны
+		"элементаль": {hp: 30, ac: 15, attackBonus: 5},
+		"демон":      {hp: 45, ac: 15, attackBonus: 7},
+		"дьявол":     {hp: 50, ac: 16, attackBonus: 8},
+		"ангел":      {hp: 65, ac: 17, attackBonus: 8},
+
+		// Гуманоидные враги
+		"воин":      {hp: 35, ac: 16, attackBonus: 5},
+		"рыцарь":    {hp: 45, ac: 18, attackBonus: 6},
+		"варвар":    {hp: 50, ac: 14, attackBonus: 6},
+		"лучник":    {hp: 25, ac: 14, attackBonus: 5},
+		"разбойник": {hp: 28, ac: 14, attackBonus: 5},
+		"страж":     {hp: 30, ac: 16, attackBonus: 4},
+		"охранник":  {hp: 25, ac: 15, attackBonus: 4},
+		"солдат":    {hp: 22, ac: 16, attackBonus: 4},
+
+		// Магические существа
+		"ведьма":    {hp: 30, ac: 13, attackBonus: 5},
+		"маг":       {hp: 25, ac: 13, attackBonus: 5},
+		"волшебник": {hp: 27, ac: 12, attackBonus: 5},
+		"некромант": {hp: 33, ac: 12, attackBonus: 5},
+		"фея":       {hp: 14, ac: 15, attackBonus: 4},
+
+		// Мифические существа
+		"минотавр": {hp: 42, ac: 14, attackBonus: 6},
+		"гаргулья": {hp: 38, ac: 15, attackBonus: 4},
+		"голем":    {hp: 60, ac: 16, attackBonus: 4},
+		"горилла":  {hp: 19, ac: 12, attackBonus: 5},
+		"тигр":     {hp: 37, ac: 12, attackBonus: 6},
+		"лев":      {hp: 26, ac: 12, attackBonus: 5},
 	}
 
 	// Ищем упоминания врагов в тексте
@@ -1703,22 +1916,194 @@ func countEnemyMentions(text, enemyName string) int {
 	enemyLower := strings.ToLower(enemyName)
 	count := strings.Count(lower, enemyLower)
 
-	// Проверяем множественное число для некоторых врагов
+	// Расширенные правила для множественного числа и синонимов
 	switch enemyLower {
 	case "гоблин":
 		count += strings.Count(lower, "гоблины")
 		count += strings.Count(lower, "гоблина")
+		count += strings.Count(lower, "гоблинов")
+	case "кобольд":
+		count += strings.Count(lower, "кобольды")
+		count += strings.Count(lower, "кобольда")
+		count += strings.Count(lower, "кобольдов")
+	case "хобгоблин":
+		count += strings.Count(lower, "хобгоблины")
+		count += strings.Count(lower, "хобгоблина")
+		count += strings.Count(lower, "хобгоблинов")
 	case "орк":
 		count += strings.Count(lower, "орки")
 		count += strings.Count(lower, "орка")
+		count += strings.Count(lower, "орков")
+	case "полуорк":
+		count += strings.Count(lower, "полуорки")
+		count += strings.Count(lower, "полуорка")
+		count += strings.Count(lower, "полуорков")
+	case "огр":
+		count += strings.Count(lower, "огры")
+		count += strings.Count(lower, "огра")
+		count += strings.Count(lower, "огров")
+	case "тролль":
+		count += strings.Count(lower, "тролли")
+		count += strings.Count(lower, "троля")
+		count += strings.Count(lower, "троллей")
+	case "гигант":
+		count += strings.Count(lower, "гиганты")
+		count += strings.Count(lower, "гиганта")
+		count += strings.Count(lower, "гигантов")
+	case "великан":
+		count += strings.Count(lower, "великаны")
+		count += strings.Count(lower, "великана")
+		count += strings.Count(lower, "великанов")
 	case "скелет":
 		count += strings.Count(lower, "скелеты")
 		count += strings.Count(lower, "скелетов")
+		count += strings.Count(lower, "скелета")
 	case "зомби":
 		count += strings.Count(lower, "зомби")
+		count += strings.Count(lower, "зомби")
+	case "призрак":
+		count += strings.Count(lower, "призраки")
+		count += strings.Count(lower, "призрака")
+		count += strings.Count(lower, "призраков")
+	case "вампир":
+		count += strings.Count(lower, "вампиры")
+		count += strings.Count(lower, "вампира")
+		count += strings.Count(lower, "вампиров")
+	case "ли Lich":
+		count += strings.Count(lower, "личи")
+		count += strings.Count(lower, "лича")
 	case "волк":
 		count += strings.Count(lower, "волки")
 		count += strings.Count(lower, "волков")
+		count += strings.Count(lower, "волка")
+	case "медведь":
+		count += strings.Count(lower, "медведи")
+		count += strings.Count(lower, "медведя")
+		count += strings.Count(lower, "медведей")
+	case "паук":
+		count += strings.Count(lower, "пауки")
+		count += strings.Count(lower, "паука")
+		count += strings.Count(lower, "пауков")
+	case "паук гигантский":
+		count += strings.Count(lower, "пауки гигантские")
+		count += strings.Count(lower, "паука гигантского")
+		count += strings.Count(lower, "пауков гигантских")
+	case "крыса":
+		count += strings.Count(lower, "крысы")
+		count += strings.Count(lower, "крысу")
+		count += strings.Count(lower, "крыс")
+	case "крыса гигантская":
+		count += strings.Count(lower, "крысы гигантские")
+		count += strings.Count(lower, "крысу гигантскую")
+		count += strings.Count(lower, "крыс гигантских")
+	case "дракон":
+		count += strings.Count(lower, "драконы")
+		count += strings.Count(lower, "дракона")
+		count += strings.Count(lower, "драконов")
+	case "дракончик":
+		count += strings.Count(lower, "дракончики")
+		count += strings.Count(lower, "дракончика")
+		count += strings.Count(lower, "дракончиков")
+	case "змея":
+		count += strings.Count(lower, "змеи")
+		count += strings.Count(lower, "змею")
+		count += strings.Count(lower, "змей")
+	case "змея гигантская":
+		count += strings.Count(lower, "змеи гигантские")
+		count += strings.Count(lower, "змею гигантскую")
+		count += strings.Count(lower, "змей гигантских")
+	case "элементаль":
+		count += strings.Count(lower, "элементали")
+		count += strings.Count(lower, "элементаля")
+		count += strings.Count(lower, "элементалей")
+	case "демон":
+		count += strings.Count(lower, "демоны")
+		count += strings.Count(lower, "демона")
+		count += strings.Count(lower, "демонов")
+	case "дьявол":
+		count += strings.Count(lower, "дьяволы")
+		count += strings.Count(lower, "дьявола")
+		count += strings.Count(lower, "дьяволов")
+	case "ангел":
+		count += strings.Count(lower, "ангелы")
+		count += strings.Count(lower, "ангела")
+		count += strings.Count(lower, "ангелов")
+	case "воин":
+		count += strings.Count(lower, "воины")
+		count += strings.Count(lower, "воина")
+		count += strings.Count(lower, "воинов")
+	case "рыцарь":
+		count += strings.Count(lower, "рыцари")
+		count += strings.Count(lower, "рыцаря")
+		count += strings.Count(lower, "рыцарей")
+	case "варвар":
+		count += strings.Count(lower, "варвары")
+		count += strings.Count(lower, "варвара")
+		count += strings.Count(lower, "варваров")
+	case "лучник":
+		count += strings.Count(lower, "лучники")
+		count += strings.Count(lower, "лучника")
+		count += strings.Count(lower, "лучников")
+	case "разбойник":
+		count += strings.Count(lower, "разбойники")
+		count += strings.Count(lower, "разбойника")
+		count += strings.Count(lower, "разбойников")
+	case "страж":
+		count += strings.Count(lower, "стражи")
+		count += strings.Count(lower, "стража")
+		count += strings.Count(lower, "стражей")
+	case "охранник":
+		count += strings.Count(lower, "охранники")
+		count += strings.Count(lower, "охранника")
+		count += strings.Count(lower, "охранников")
+	case "солдат":
+		count += strings.Count(lower, "солдаты")
+		count += strings.Count(lower, "солдата")
+		count += strings.Count(lower, "солдатов")
+	case "ведьма":
+		count += strings.Count(lower, "ведьмы")
+		count += strings.Count(lower, "ведьму")
+		count += strings.Count(lower, "ведьм")
+	case "маг":
+		count += strings.Count(lower, "маги")
+		count += strings.Count(lower, "мага")
+		count += strings.Count(lower, "магов")
+	case "волшебник":
+		count += strings.Count(lower, "волшебники")
+		count += strings.Count(lower, "волшебника")
+		count += strings.Count(lower, "волшебников")
+	case "некромант":
+		count += strings.Count(lower, "некроманты")
+		count += strings.Count(lower, "некроманта")
+		count += strings.Count(lower, "некромантов")
+	case "фея":
+		count += strings.Count(lower, "феи")
+		count += strings.Count(lower, "фею")
+		count += strings.Count(lower, "фей")
+	case "минотавр":
+		count += strings.Count(lower, "минотавры")
+		count += strings.Count(lower, "минотавра")
+		count += strings.Count(lower, "минотавров")
+	case "гаргулья":
+		count += strings.Count(lower, "гаргульи")
+		count += strings.Count(lower, "гаргулью")
+		count += strings.Count(lower, "гаргулий")
+	case "голем":
+		count += strings.Count(lower, "големы")
+		count += strings.Count(lower, "глема")
+		count += strings.Count(lower, "големов")
+	case "горилла":
+		count += strings.Count(lower, "гориллы")
+		count += strings.Count(lower, "гориллу")
+		count += strings.Count(lower, "горилл")
+	case "тигр":
+		count += strings.Count(lower, "тигры")
+		count += strings.Count(lower, "тигра")
+		count += strings.Count(lower, "тигров")
+	case "лев":
+		count += strings.Count(lower, "львы")
+		count += strings.Count(lower, "льва")
+		count += strings.Count(lower, "львов")
 	}
 
 	return count
@@ -1765,9 +2150,57 @@ func validateAnalysisPromptStructure(prompt string) error {
 func detectsCombatMarker(dmResponse string) bool {
 	lower := strings.ToLower(dmResponse)
 	markers := []string{
+		// Основные маркеры боя
 		"бой", "сражен", "битва", "атака", "атакует", "нападает",
 		"враг", "противник", "монстр", "инициатив", "удар",
 		"ранение", "рана", "инициатива",
+
+		// Дополнительные маркеры боя (русские)
+		"схватка", "потасовка", "драка", "побоище", "столкновение",
+		"бросок атаки", "бросок на инициативу", "выстрел", "заклинание",
+		"магия", "волшебство", "стреляет", "бьет", "режет", "колет",
+		"спасбросок", "спас-бросок", "защита", "блок", "уклонение",
+		"парирование", "контратака", "добивание", "финальный удар",
+
+		// Маркеры повреждений и эффектов
+		"урон", "повреждение", "травма", "кровь", "падение",
+		"оглушение", "паралич", "отравление", "слепота", "страх",
+		"ужас", "смерть", "убийство", "убивает", "умирает",
+
+		// Маркеры оружия и действий
+		"меч", "топор", "лук", "арбалет", "копье", "щит",
+		"броня", "доспех", "шлем", "стрела", "болт", "яд",
+		"огонь", "лед", "электричество", "кислота", "ядовитый",
+
+		// Расширенные русские маркеры боя
+		"гоблин атакует", "орк нападает", "дракон бросается", "волк прыгает",
+		"медведь ревет", "тролль замахивается", "скелет поднимается", "зомби подходит",
+		"паук плетет паутину", "змей шипит", "летучая мышь пищит", "призрак стонет",
+		"вампир кусает", "оборотень воет", "ведьма колдует", "маг читает заклинание",
+		"воин замахивается", "лучник натягивает тетиву", "рыцарь встает на защиту",
+		"варвар кричит", "плут крадется", "жрец молится", "следопыт выслеживает",
+		"некромант воскрешает", "иллюзионист обманывает", "алхимик бросает бомбу",
+		"стрелок целится", "охотник подстерегает", "стражник обнажает меч",
+		"капитан отдает приказ", "солдат строится в линию", "командир планирует атаку",
+		"военачальник руководит", "генерал командует армией", "полководец планирует битву",
+		"разбойник подстерегает", "бандит нападает", "пират грабит", "мародер рыщет",
+		"охранник преграждает путь", "сторож караулит", "часовой замечает",
+		"патруль идет", "дозорный осматривает", "разведчик докладывает",
+
+		// Маркеры конкретных действий в бою
+		"бросается в атаку", "переходит в наступление", "открывает огонь",
+		"начинает бой", "стартует битва", "завязывается сражение",
+		"врывается в комнату", "выбегает из засады", "выходит из тени",
+		"появляется внезапно", "нападает со спины", "бьет в спину",
+		"атакует с фланга", "обходит с тыла", "окружает со всех сторон",
+		"заводит в ловушку", "заманивает в капкан", "ставит силки",
+		"натравливает собак", "спускает собак", "выпускает монстров",
+		"вызывает демонов", "призывает духов", "заклинает элементалей",
+
+		// Английские маркеры (на случай смешанного текста)
+		"combat", "battle", "fight", "attack", "enemy", "monster",
+		"initiative", "hit", "damage", "wound", "kill", "die",
+		"sword", "axe", "bow", "crossbow", "spear", "shield",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
@@ -1959,7 +2392,6 @@ func tryRepairTruncatedJSONForDMAnalysis(jsonStr string, isDMAnalysis bool) stri
 		return "{}"
 	}
 
-
 	repaired := jsonrepair.Repair(jsonStr)
 	if json.Valid([]byte(repaired)) {
 		log.Printf("[DM Analyzer] jsonrepair.Repair succeeded")
@@ -1999,6 +2431,18 @@ func tryRepairTruncatedJSONForDMAnalysis(jsonStr string, isDMAnalysis bool) stri
 				// Обрывается в начале объекта врага
 				log.Printf("[DM Analyzer] Detected truncation in enemy object")
 				jsonStr += `"Unknown","hp":15,"ac":13,"attack_bonus":3}],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"enemies":[`) && strings.HasSuffix(jsonStr, `,"name":`) {
+				// Обрывается после запятой в объекте врага
+				log.Printf("[DM Analyzer] Detected truncation after enemy name comma")
+				jsonStr += `"Unknown","hp":15,"ac":13,"attack_bonus":3}],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"enemies":[`) && strings.HasSuffix(jsonStr, `,"hp":`) {
+				// Обрывается после hp
+				log.Printf("[DM Analyzer] Detected truncation after enemy hp")
+				jsonStr += `15,"ac":13,"attack_bonus":3}],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"enemies":[`) && strings.HasSuffix(jsonStr, `,"ac":`) {
+				// Обрывается после ac
+				log.Printf("[DM Analyzer] Detected truncation after enemy ac")
+				jsonStr += `13,"attack_bonus":3}],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
 			}
 		} else if strings.Contains(jsonStr, `"npc_met":`) && !strings.Contains(jsonStr, `"generated_images"`) {
 			log.Printf("[DM Analyzer] Detected truncation at npc_met field")
@@ -2018,6 +2462,64 @@ func tryRepairTruncatedJSONForDMAnalysis(jsonStr string, isDMAnalysis bool) stri
 		} else if !strings.Contains(jsonStr, `"generated_images"`) {
 			// JSON не содержит generated_images, добавляем завершение
 			jsonStr += `,"generated_images":[]}`
+		} else if strings.Contains(jsonStr, `"combat_detected":true`) && !strings.Contains(jsonStr, `"enemies":[`) {
+			// Бой обнаружен, но нет массива врагов - добавляем базового врага
+			log.Printf("[DM Analyzer] Detected truncated JSON: combat_detected=true but no enemies array")
+			jsonStr += `,"enemies":[{"name":"Неизвестный противник","hp":15,"ac":13,"attack_bonus":3}],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+		} else if strings.Contains(jsonStr, `"enemies":[`) && strings.HasSuffix(jsonStr, `"enemies":[`) {
+			// Массив врагов пустой, добавляем базового врага
+			log.Printf("[DM Analyzer] Detected truncated JSON: empty enemies array")
+			jsonStr += `{"name":"Неизвестный противник","hp":15,"ac":13,"attack_bonus":3}],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+		} else if strings.Contains(jsonStr, `"items_received":[`) && !strings.Contains(jsonStr, `"location_visited"`) {
+			// JSON обрывается в массиве предметов
+			if strings.HasSuffix(jsonStr, `"items_received":[`) {
+				log.Printf("[DM Analyzer] Detected truncation at items_received array start")
+				jsonStr += `],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"items_received":[`) && strings.HasSuffix(jsonStr, `{"name":`) {
+				// Обрывается в начале объекта предмета
+				log.Printf("[DM Analyzer] Detected truncation in item object")
+				jsonStr += `"Unknown","description":"","weight":0,"quantity":1,"type":"misc"}],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"items_received":[`) && strings.HasSuffix(jsonStr, `,"description":`) {
+				// Обрывается после description
+				log.Printf("[DM Analyzer] Detected truncation after item description")
+				jsonStr += `"","weight":0,"quantity":1,"type":"misc"}],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"items_received":[`) && strings.HasSuffix(jsonStr, `,"weight":`) {
+				// Обрывается после weight
+				log.Printf("[DM Analyzer] Detected truncation after item weight")
+				jsonStr += `0,"quantity":1,"type":"misc"}],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"items_received":[`) && strings.HasSuffix(jsonStr, `,"quantity":`) {
+				// Обрывается после quantity
+				log.Printf("[DM Analyzer] Detected truncation after item quantity")
+				jsonStr += `1,"type":"misc"}],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.Contains(jsonStr, `"items_received":[`) && strings.HasSuffix(jsonStr, `,"type":`) {
+				// Обрывается после type
+				log.Printf("[DM Analyzer] Detected truncation after item type")
+				jsonStr += `"misc"}],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			}
+		} else if strings.Contains(jsonStr, `"experience_reason":`) && !strings.Contains(jsonStr, `"items_received"`) {
+			// JSON обрывается на experience_reason
+			if strings.HasSuffix(jsonStr, `"experience_reason":`) {
+				jsonStr += `"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.HasSuffix(jsonStr, `"experience_reason":"`) {
+				jsonStr += `","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			}
+		} else if strings.Contains(jsonStr, `"quest_title":`) && !strings.Contains(jsonStr, `"experience_gained"`) {
+			// JSON обрывается на quest_title
+			if strings.HasSuffix(jsonStr, `"quest_title":`) {
+				jsonStr += `"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			} else if strings.HasSuffix(jsonStr, `"quest_title":"`) {
+				jsonStr += `","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			}
+		} else if strings.Contains(jsonStr, `"quest_failed":`) && !strings.Contains(jsonStr, `"quest_title"`) {
+			// JSON обрывается на quest_failed
+			if strings.HasSuffix(jsonStr, `"quest_failed":`) {
+				jsonStr += `false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			}
+		} else if strings.Contains(jsonStr, `"quest_completed":`) && !strings.Contains(jsonStr, `"quest_failed"`) {
+			// JSON обрывается на quest_completed
+			if strings.HasSuffix(jsonStr, `"quest_completed":`) {
+				jsonStr += `false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+			}
 		}
 	}
 
@@ -2161,43 +2663,43 @@ func tryRepairDMResponseJSON(jsonStr string) string {
 
 	// Расширенные правила восстановления для обрезанных значений
 	repairRules := map[string]string{
-		`"combat_detected":`:          `"combat_detected":false`,
-		`"enemies":`:                  `"enemies":[]`,
-		`"quest_completed":`:          `"quest_completed":false`,
-		`"quest_failed":`:             `"quest_failed":false`,
-		`"quest_title":`:              `"quest_title":""`,
-		`"experience_gained":`:        `"experience_gained":0`,
-		`"experience_reason":`:        `"experience_reason":""`,
-		`"items_received":`:           `"items_received":[]`,
-		`"location_visited":`:         `"location_visited":null`,
-		`"npc_met":`:                  `"npc_met":null`,
-		`"generated_images":`:         `"generated_images":[]`,
+		`"combat_detected":`:   `"combat_detected":false`,
+		`"enemies":`:           `"enemies":[]`,
+		`"quest_completed":`:   `"quest_completed":false`,
+		`"quest_failed":`:      `"quest_failed":false`,
+		`"quest_title":`:       `"quest_title":""`,
+		`"experience_gained":`: `"experience_gained":0`,
+		`"experience_reason":`: `"experience_reason":""`,
+		`"items_received":`:    `"items_received":[]`,
+		`"location_visited":`:  `"location_visited":null`,
+		`"npc_met":`:           `"npc_met":null`,
+		`"generated_images":`:  `"generated_images":[]`,
 	}
 
 	// Специальные правила для восстановления обрезанных значений (типа "npc_met":n → "npc_met":null)
 	truncationPatterns := map[string]map[string]string{
 		`"npc_met":`: {
-			"n":    "null",      // "npc_met":n → "npc_met":null
-			"nu":   "null",      // "npc_met":nu → "npc_met":null
-			"nul":  "null",      // "npc_met":nul → "npc_met":null
-			"{":    `{"name":"","description":"","is_first_meeting":false}`, // "npc_met":{ → "npc_met":{...}
-			`{"n`:  `{"name":"","description":"","is_first_meeting":false}`, // "npc_met":{"n → "npc_met":{...}
+			"n":   "null",                                                  // "npc_met":n → "npc_met":null
+			"nu":  "null",                                                  // "npc_met":nu → "npc_met":null
+			"nul": "null",                                                  // "npc_met":nul → "npc_met":null
+			"{":   `{"name":"","description":"","is_first_meeting":false}`, // "npc_met":{ → "npc_met":{...}
+			`{"n`: `{"name":"","description":"","is_first_meeting":false}`, // "npc_met":{"n → "npc_met":{...}
 		},
 		`"location_visited":`: {
-			"n":    "null",      // "location_visited":n → "location_visited":null
-			"nu":   "null",      // "location_visited":nu → "location_visited":null
-			"nul":  "null",      // "location_visited":nul → "location_visited":null
-			"{":    `{"name":"","description":"","is_first_visit":false}`, // "location_visited":{ → "location_visited":{...}
-			`{"n`:  `{"name":"","description":"","is_first_visit":false}`, // "location_visited":{"n → "location_visited":{...}
+			"n":   "null",                                                // "location_visited":n → "location_visited":null
+			"nu":  "null",                                                // "location_visited":nu → "location_visited":null
+			"nul": "null",                                                // "location_visited":nul → "location_visited":null
+			"{":   `{"name":"","description":"","is_first_visit":false}`, // "location_visited":{ → "location_visited":{...}
+			`{"n`: `{"name":"","description":"","is_first_visit":false}`, // "location_visited":{"n → "location_visited":{...}
 		},
 		`"combat_detected":`: {
-			"f":    "false",     // "combat_detected":f → "combat_detected":false
-			"fa":   "false",     // "combat_detected":fa → "combat_detected":false
-			"fal":  "false",     // "combat_detected":fal → "combat_detected":false
-			"fals": "false",     // "combat_detected":fals → "combat_detected":false
-			"t":    "true",      // "combat_detected":t → "combat_detected":true
-			"tr":   "true",      // "combat_detected":tr → "combat_detected":true
-			"tru":  "true",      // "combat_detected":tru → "combat_detected":true
+			"f":    "false", // "combat_detected":f → "combat_detected":false
+			"fa":   "false", // "combat_detected":fa → "combat_detected":false
+			"fal":  "false", // "combat_detected":fal → "combat_detected":false
+			"fals": "false", // "combat_detected":fals → "combat_detected":false
+			"t":    "true",  // "combat_detected":t → "combat_detected":true
+			"tr":   "true",  // "combat_detected":tr → "combat_detected":true
+			"tru":  "true",  // "combat_detected":tru → "combat_detected":true
 		},
 		`"quest_completed":`: {
 			"f":    "false",
@@ -2218,20 +2720,20 @@ func tryRepairDMResponseJSON(jsonStr string) string {
 			"tru":  "true",
 		},
 		`"experience_gained":`: {
-			"0": "0",           // "experience_gained":0 → "experience_gained":0
-			"1": "10",          // "experience_gained":1 → "experience_gained":10 (предполагаем продолжение)
+			"0": "0",  // "experience_gained":0 → "experience_gained":0
+			"1": "10", // "experience_gained":1 → "experience_gained":10 (предполагаем продолжение)
 			"2": "20",
 			"3": "30",
 			"4": "40",
 			"5": "50",
 		},
 		`"quest_title":`: {
-			`"`:    `""`,       // "quest_title":" → "quest_title":""
-			`""`:   `""`,       // "quest_title":"" → "quest_title":""
+			`"`:  `""`, // "quest_title":" → "quest_title":""
+			`""`: `""`, // "quest_title":"" → "quest_title":""
 		},
 		`"experience_reason":`: {
-			`"`:    `""`,       // "experience_reason":" → "experience_reason":""
-			`""`:   `""`,       // "experience_reason":"" → "experience_reason":""
+			`"`:  `""`, // "experience_reason":" → "experience_reason":""
+			`""`: `""`, // "experience_reason":"" → "experience_reason":""
 		},
 	}
 
@@ -2276,7 +2778,7 @@ func tryRepairDMResponseJSON(jsonStr string) string {
 				}
 
 				// Проверяем на незавершенные булевы значения
-				if (partialKey == `"combat_detected":` || partialKey == `"quest_completed":` || partialKey == `"quest_failed":`) {
+				if partialKey == `"combat_detected":` || partialKey == `"quest_completed":` || partialKey == `"quest_failed":` {
 					if strings.HasPrefix(afterKey, "fal") && !strings.Contains(afterKey, "false") {
 						beforeValue := jsonStr[:keyPos+len(partialKey)]
 						log.Printf("[DM Analyzer] Boolean value incomplete, completing to 'false'")
@@ -2306,7 +2808,7 @@ func tryRepairDMResponseJSON(jsonStr string) string {
 				}
 
 				// Проверяем на незавершенные строковые значения
-				if (partialKey == `"quest_title":` || partialKey == `"experience_reason":`) {
+				if partialKey == `"quest_title":` || partialKey == `"experience_reason":` {
 					if strings.HasPrefix(afterKey, `"`) && !strings.Contains(afterKey, `",`) && !strings.HasSuffix(afterKey, `"}`) {
 						beforeValue := jsonStr[:keyPos+len(partialKey)]
 						log.Printf("[DM Analyzer] String value incomplete, completing with empty string")
@@ -2431,7 +2933,6 @@ func buildLocationEventStory(ev *world.WorldEvent, fallbackDescription string) s
 	return strings.Join(parts, "\n")
 }
 
-
 // findLocationIDByName ищет локацию по имени в мире и возвращает её ID
 func (uc *AnalyzeDMResponseUseCase) findLocationIDByName(ctx context.Context, locationName string) uint {
 	if uc.sessionRepo == nil || locationName == "" {
@@ -2486,4 +2987,3 @@ func looksLikeTruncatedJSON(jsonStr string) bool {
 
 	return false
 }
-

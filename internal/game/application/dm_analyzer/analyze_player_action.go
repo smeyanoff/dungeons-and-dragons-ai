@@ -100,7 +100,7 @@ func (uc *AnalyzePlayerActionUseCase) Execute(
 	prompt := buildPlayerActionAnalysisPrompt(playerMessage, gameContext, recentEvents)
 
 	// Вызываем LLM для анализа с увеличенными лимитами
-	llmCtx, llmCancel := context.WithTimeout(ctx, 30*time.Second)
+	llmCtx, llmCancel := context.WithTimeout(ctx, 60*time.Second)
 	defer llmCancel()
 
 	maxTokens := 12000 // Увеличиваем лимит токенов для анализа действий игрока

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net/http"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -24,6 +26,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	questapp "dungeons-and-dragons-ai/internal/game/application/quest"
 	ratingapp "dungeons-and-dragons-ai/internal/game/application/rating"
+	sessionapp "dungeons-and-dragons-ai/internal/game/application/session"
 	spellapp "dungeons-and-dragons-ai/internal/game/application/spell"
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
@@ -36,6 +39,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/subscription"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
+	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 	"dungeons-and-dragons-ai/pkg/logger"
 
@@ -76,6 +80,7 @@ type Bot struct {
 	updateRatingUC        *ratingapp.UpdateRatingUseCase
 	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase
 	sessionRepo           session.Repository
+	playerRepo            *persistence.PlayerRepository
 	combatRepo            CombatRepository
 	feedbackRepo          FeedbackRepository
 	eventRepo             EventRepository      // Для сохранения результатов бросков в историю
@@ -151,6 +156,7 @@ func NewBot(
 	updateRatingUC *ratingapp.UpdateRatingUseCase,
 	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase,
 	sessionRepo session.Repository,
+	playerRepo *persistence.PlayerRepository,
 	combatRepo CombatRepository,
 	feedbackRepo FeedbackRepository,
 	eventRepo EventRepository,
@@ -159,6 +165,22 @@ func NewBot(
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
+	}
+
+	// Configure HTTP client for better connection pooling and stability
+	if httpClient, ok := api.Client.(*http.Client); ok {
+		if httpClient.Transport == nil {
+			transport := &http.Transport{
+				MaxIdleConns:        100,
+				IdleConnTimeout:     90 * time.Second,
+				MaxIdleConnsPerHost: 10,
+				ResponseHeaderTimeout: 30 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+				DisableKeepAlives: false,
+			}
+			httpClient.Transport = transport
+		}
+		httpClient.Timeout = 60 * time.Second // Consistent with polling timeout
 	}
 
 	return newBotWithAPI(
@@ -186,6 +208,7 @@ func NewBot(
 		updateRatingUC,
 		performAbilityCheckUC,
 		sessionRepo,
+		playerRepo,
 		combatRepo,
 		feedbackRepo,
 		eventRepo,
@@ -225,6 +248,7 @@ func NewBotWithAPIEndpoint(
 	updateRatingUC *ratingapp.UpdateRatingUseCase,
 	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase,
 	sessionRepo session.Repository,
+	playerRepo *persistence.PlayerRepository,
 	combatRepo CombatRepository,
 	feedbackRepo FeedbackRepository,
 	eventRepo EventRepository,
@@ -260,6 +284,7 @@ func NewBotWithAPIEndpoint(
 		updateRatingUC,
 		performAbilityCheckUC,
 		sessionRepo,
+		playerRepo,
 		combatRepo,
 		feedbackRepo,
 		eventRepo,
@@ -292,6 +317,7 @@ func newBotWithAPI(
 	updateRatingUC *ratingapp.UpdateRatingUseCase,
 	performAbilityCheckUC *abilitycheck.PerformAbilityCheckUseCase,
 	sessionRepo session.Repository,
+	playerRepo *persistence.PlayerRepository,
 	combatRepo CombatRepository,
 	feedbackRepo FeedbackRepository,
 	eventRepo EventRepository,
@@ -322,12 +348,16 @@ func newBotWithAPI(
 		updateRatingUC:        updateRatingUC,
 		performAbilityCheckUC: performAbilityCheckUC,
 		sessionRepo:           sessionRepo,
+		playerRepo:            playerRepo,
 		combatRepo:            combatRepo,
 		feedbackRepo:          feedbackRepo,
 		eventRepo:             eventRepo,
 		indexDocUC:            indexDocUC,
 		feedbackState:         make(map[int64]*FeedbackDialogState),
 	}
+
+	// Настраиваем HTTP клиент с connection pooling для улучшения стабильности polling
+	bot.configureHTTPClient()
 
 	// Настраиваем Bot Commands Menu для отображения команд в интерфейсе Telegram
 	if err := bot.setupBotCommands(); err != nil {
@@ -410,14 +440,15 @@ func (b *Bot) Start(ctx context.Context) error {
 	)
 
 	updateConfig := tgbotapi.NewUpdate(0)
-	updateConfig.Timeout = 30 // Уменьшаем timeout для более частого polling и меньшего риска EOF
+	updateConfig.Timeout = 60 // Увеличиваем timeout для стабильности и уменьшения EOF ошибок
 
 	offset := 0
 	backoff := 1 * time.Second
-	const maxBackoff = 30 * time.Second
-	const logInterval = 30 * time.Second
+	const maxBackoff = 120 * time.Second // Увеличиваем максимальный backoff для лучшей стабильности
+	const logInterval = 60 * time.Second  // Увеличиваем интервал логирования
 	lastPollLog := time.Time{}
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	consecutiveErrors := 0 // Счетчик последовательных ошибок
 
 	for {
 		select {
@@ -432,42 +463,110 @@ func (b *Bot) Start(ctx context.Context) error {
 		updateConfig.Offset = offset
 		updates, err := b.api.GetUpdates(updateConfig)
 		if err != nil {
+			consecutiveErrors++
 			errStr := err.Error()
 
-			// Специальная обработка для EOF ошибок - уменьшаем backoff
+			// Классифицируем тип ошибки для лучшей обработки
 			isEOFError := strings.Contains(errStr, "unexpected EOF")
+			isTimeoutError := strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded")
+			isNetworkError := strings.Contains(errStr, "connection") || strings.Contains(errStr, "network") ||
+				strings.Contains(errStr, "reset") || strings.Contains(errStr, "broken pipe")
+			isRateLimitError := strings.Contains(errStr, "429") || strings.Contains(errStr, "Too Many Requests")
+
+			// Вычисляем backoff в зависимости от типа ошибки
+			var currentBackoff time.Duration
+			var backoffMultiplier float64
+
 			if isEOFError {
-				// Для EOF ошибок используем меньший backoff и логируем чаще
-				if shouldLogPollError(&lastPollLog, 10*time.Second) { // Логируем EOF чаще
+				// EOF ошибки: быстрый recovery, так как соединение разорвано
+				currentBackoff = time.Duration(float64(backoff) * 0.3) // Используем 30% от текущего backoff
+				if currentBackoff < 2*time.Second {
+					currentBackoff = 2 * time.Second
+				}
+				backoffMultiplier = 1.2 // Медленный рост для EOF
+
+				if shouldLogPollError(&lastPollLog, 15*time.Second) { // Логируем EOF чаще
 					logger.Warn("Telegram polling EOF error (connection interrupted)",
 						logger.ErrorField(sanitizeTelegramError(err)),
-						logger.String("backoff", backoff.String()),
+						logger.String("backoff", currentBackoff.String()),
+						logger.Int("consecutive_errors", consecutiveErrors),
 					)
 				}
-				// EOF часто происходит из-за network issues, используем меньший backoff
-				eofBackoff := backoff / 2
-				if eofBackoff < 1*time.Second {
-					eofBackoff = 1 * time.Second
+			} else if isTimeoutError {
+				// Timeout ошибки: умеренный backoff
+				currentBackoff = backoff
+				backoffMultiplier = 1.5
+
+				if shouldLogPollError(&lastPollLog, 30*time.Second) {
+					logger.Warn("Telegram polling timeout error",
+						logger.ErrorField(sanitizeTelegramError(err)),
+						logger.String("backoff", currentBackoff.String()),
+						logger.Int("consecutive_errors", consecutiveErrors),
+					)
 				}
-				sleepWithJitter(ctx, eofBackoff, rng)
-				// Увеличиваем backoff медленнее для EOF
-				backoff = time.Duration(float64(backoff) * 1.5)
+			} else if isNetworkError {
+				// Network ошибки: быстрый recovery с exponential backoff
+				currentBackoff = backoff
+				backoffMultiplier = 2.0
+
+				if shouldLogPollError(&lastPollLog, 20*time.Second) {
+					logger.Warn("Telegram polling network error",
+						logger.ErrorField(sanitizeTelegramError(err)),
+						logger.String("backoff", currentBackoff.String()),
+						logger.Int("consecutive_errors", consecutiveErrors),
+					)
+				}
+			} else if isRateLimitError {
+				// Rate limit ошибки: значительный backoff
+				currentBackoff = time.Duration(float64(backoff) * 3) // Увеличиваем backoff в 3 раза
+				backoffMultiplier = 2.5
+
+				if shouldLogPollError(&lastPollLog, 10*time.Second) {
+					logger.Warn("Telegram polling rate limit error",
+						logger.ErrorField(sanitizeTelegramError(err)),
+						logger.String("backoff", currentBackoff.String()),
+						logger.Int("consecutive_errors", consecutiveErrors),
+					)
+				}
 			} else {
-				// Обычная логика для других ошибок
+				// Другие ошибки: стандартный exponential backoff
+				currentBackoff = backoff
+				backoffMultiplier = 2.0
+
 				if shouldLogPollError(&lastPollLog, logInterval) {
 					logger.Warn("Telegram polling error",
 						logger.ErrorField(sanitizeTelegramError(err)),
+						logger.String("backoff", currentBackoff.String()),
+						logger.Int("consecutive_errors", consecutiveErrors),
 					)
 				}
-				sleepWithJitter(ctx, backoff, rng)
-				backoff *= 2
 			}
 
+			// Применяем jitter для предотвращения thundering herd
+			sleepWithJitter(ctx, currentBackoff, rng)
+
+			// Обновляем backoff с учетом типа ошибки
+			backoff = time.Duration(float64(backoff) * backoffMultiplier)
+
+			// Ограничиваем backoff максимальным значением
 			if backoff > maxBackoff {
 				backoff = maxBackoff
 			}
+
+			// Сбрасываем счетчик ошибок при достижении максимального backoff
+			if backoff >= maxBackoff && consecutiveErrors > 10 {
+				logger.Warn("Telegram polling reached maximum backoff, resetting error counter",
+					logger.Int("consecutive_errors", consecutiveErrors),
+				)
+				consecutiveErrors = 0
+			}
+
 			continue
 		}
+
+		// Успешное получение обновлений - сбрасываем backoff и счетчики ошибок
+		backoff = 1 * time.Second
+		consecutiveErrors = 0
 
 		backoff = 1 * time.Second
 		for _, update := range updates {
@@ -526,6 +625,42 @@ func sleepWithJitter(ctx context.Context, base time.Duration, rng *rand.Rand) {
 	select {
 	case <-ctx.Done():
 	case <-time.After(sleep):
+	}
+}
+
+// getMapKeys возвращает ключи map[string]interface{} для логирования
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// configureHTTPClient настраивает HTTP клиент с connection pooling для улучшения стабильности polling
+func (b *Bot) configureHTTPClient() {
+	// Создаем HTTP transport с настройками connection pooling
+	transport := &http.Transport{
+		MaxIdleConns:        100,              // Максимальное количество idle соединений
+		MaxIdleConnsPerHost: 10,               // Максимальное количество idle соединений на хост
+		MaxConnsPerHost:     20,               // Максимальное количество соединений на хост
+		IdleConnTimeout:     90 * time.Second, // Таймаут для idle соединений
+		DisableKeepAlives:   false,            // Включаем keep-alive для connection pooling
+	}
+
+	// Создаем HTTP клиент с настроенным transport
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   120 * time.Second, // Общий таймаут для HTTP запросов
+	}
+
+	// Настраиваем BotAPI для использования нашего HTTP клиента
+	// Проверяем, есть ли возможность установить HTTP клиент в tgbotapi.BotAPI
+	if httpClientField := reflect.ValueOf(b.api).Elem().FieldByName("Client"); httpClientField.IsValid() && httpClientField.CanSet() {
+		httpClientField.Set(reflect.ValueOf(httpClient))
+		logger.Info("Configured HTTP client with connection pooling for Telegram Bot API")
+	} else {
+		logger.Warn("Unable to configure custom HTTP client - tgbotapi.BotAPI may not support client injection")
 	}
 }
 
@@ -646,7 +781,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 		logger.Int64("user_id", int64(userID)),
 		logger.Int("message_length", len(text)),
 	)
-	return b.handlePlayerAction(ctx, chatID, text)
+	return b.handlePlayerAction(ctx, chatID, int64(userID), text)
 }
 
 // isKnownCommand проверяет, является ли строка известной командой
@@ -677,6 +812,10 @@ func (b *Bot) isKnownCommand(command string) bool {
 		"pickup":          true,
 		"battlefield":     true,
 		"abilities":       true,
+		"cooperative":     true,
+		"join":            true,
+		"leave":           true,
+		"coopstatus":      true,
 	}
 	return knownCommands[strings.ToLower(command)]
 }
@@ -749,6 +888,16 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleAbilities(ctx, chatID, args)
 	case "wait_until", "time":
 		return b.handleWaitUntil(ctx, chatID, args)
+	case "progress":
+		return b.handleProgress(ctx, chatID, tgUserID)
+	case "cooperative":
+		return b.handleCooperative(ctx, chatID, tgUserID, args)
+	case "join":
+		return b.handleJoin(ctx, chatID, tgUserID)
+	case "leave":
+		return b.handleLeave(ctx, chatID, tgUserID)
+	case "coopstatus":
+		return b.handleCoopStatus(ctx, chatID)
 	default:
 		msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Используйте /help для списка команд")
 		return b.sendMessage(msg)
@@ -772,6 +921,7 @@ func (b *Bot) handleHelp(ctx context.Context, chatID int64) error {
 👤 Персонаж:
 /createcharacter - создать персонажа (интерактивно или через команду)
 /character - посмотреть информацию о персонаже
+/progress - посмотреть прогресс и статистику персонажа
 
 🎒 Инвентарь и предметы:
 /inventory - посмотреть инвентарь
@@ -933,6 +1083,16 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) err
 		logger.Uint("session_id", gs.ID),
 	)
 
+	// Генерируем цели для сессии
+	gs.GenerateSessionGoals()
+	if err := b.sessionRepo.Save(ctx, gs); err != nil {
+		logger.Error("Failed to save session goals",
+			logger.ErrorField(err),
+			logger.Int64("chat_id", chatID),
+		)
+		// Не возвращаем ошибку, продолжаем игру без целей
+	}
+
 	// Инициализируем текущую локацию (по умолчанию первая локация мира)
 	// Это нужно для /map и навигации по кнопкам
 	if gs.CurrentLocationID == nil && len(gs.World.Locations) > 0 {
@@ -1024,7 +1184,7 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) err
 	return b.sendLongMessage(chatID, welcomeText)
 }
 
-func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, text string) error {
+func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, tgUserID int64, text string) error {
 	// Отправляем индикатор печати
 	actionMsg := tgbotapi.NewMessage(chatID, "🤔 Думаю...")
 	sentMsg, err := b.api.Send(actionMsg)
@@ -1042,9 +1202,10 @@ func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, text string)
 	// Получаем ответ от DM
 	logger.Debug("Processing player action",
 		logger.Int64("chat_id", chatID),
+		logger.Int64("tg_user_id", tgUserID),
 		logger.Int("message_length", len(text)),
 	)
-	response, err := b.handleActionUC.Execute(ctx, chatID, text)
+	response, err := b.handleActionUC.Execute(ctx, chatID, tgUserID, text)
 
 	if err != nil {
 		logger.Error("Failed to handle player action",
@@ -1585,7 +1746,40 @@ func (b *Bot) tryHandleManualAbilityCheck(ctx context.Context, chatID int64, tex
 
 	// Автоматически продолжаем повествование после проверки (если DM доступен)
 	if b.handleActionUC != nil {
-		return true, b.handlePlayerAction(ctx, chatID, "[Продолжение после проверки навыка]")
+		// Получаем контекст проверки из сессии
+		gs, _ := b.sessionRepo.GetByChatID(ctx, chatID)
+		reason := ""
+		stakes := ""
+		if gs != nil {
+			reason = gs.PendingAbilityCheckReason
+			stakes = gs.PendingAbilityCheckStakes
+		}
+
+		var continueMessage string
+		if result.Success {
+			if reason != "" && stakes != "" {
+				continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s успешно %s. Теперь опиши положительные последствия: %s",
+					result.CharacterName, reason, stakes)
+			} else {
+				continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s прошел проверку %s (DC %d, результат %d). Продолжи историю с положительными последствиями.",
+					result.CharacterName, result.Ability, result.DC, result.Total)
+			}
+		} else {
+			if reason != "" && stakes != "" {
+				continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s не смог %s. Теперь опиши негативные последствия: %s",
+					result.CharacterName, reason, stakes)
+			} else {
+				continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s провалил проверку %s (DC %d, результат %d). Продолжи историю с негативными последствиями.",
+					result.CharacterName, result.Ability, result.DC, result.Total)
+			}
+		}
+
+		// Для автоматических продолжений используем tgUserID первого игрока
+		systemTgUserID := int64(0)
+		if gs.GetFirstPlayer() != nil {
+			systemTgUserID = gs.GetFirstPlayer().TgUserID
+		}
+		return true, b.handlePlayerAction(ctx, chatID, systemTgUserID, continueMessage)
 	}
 	return true, nil
 }
@@ -1802,10 +1996,40 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 
 				// Автоматически продолжаем повествование после проверки (если DM доступен)
 				if b.handleActionUC != nil {
-				continueMessage := fmt.Sprintf("[Продолжение после проверки навыка: %v (DC %d, результат %d%s)]",
-					result.Success, result.DC, result.Total,
-					map[bool]string{true: " - УСПЕХ", false: " - ПРОВАЛ"}[result.Success])
-					return b.handlePlayerAction(ctx, chatID, continueMessage)
+					// Получаем контекст проверки из сессии
+					gs, _ := b.sessionRepo.GetByChatID(ctx, chatID)
+					reason := ""
+					stakes := ""
+					if gs != nil {
+						reason = gs.PendingAbilityCheckReason
+						stakes = gs.PendingAbilityCheckStakes
+					}
+
+					var continueMessage string
+					if result.Success {
+						if reason != "" && stakes != "" {
+							continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s успешно %s. Теперь опиши положительные последствия: %s",
+								result.CharacterName, reason, stakes)
+						} else {
+							continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s прошел проверку %s (DC %d, результат %d). Продолжи историю с положительными последствиями.",
+								result.CharacterName, result.Ability, result.DC, result.Total)
+						}
+					} else {
+						if reason != "" && stakes != "" {
+							continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s не смог %s. Теперь опиши негативные последствия: %s",
+								result.CharacterName, reason, stakes)
+						} else {
+							continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s провалил проверку %s (DC %d, результат %d). Продолжи историю с негативными последствиями.",
+								result.CharacterName, result.Ability, result.DC, result.Total)
+						}
+					}
+
+					// Для автоматических продолжений используем tgUserID первого игрока
+					systemTgUserID := int64(0)
+					if gs.GetFirstPlayer() != nil {
+						systemTgUserID = gs.GetFirstPlayer().TgUserID
+					}
+					return b.handlePlayerAction(ctx, chatID, systemTgUserID, continueMessage)
 				}
 				return nil
 			}
@@ -1824,10 +2048,40 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 
 				// Автоматически продолжаем повествование после проверки (если DM доступен)
 				if b.handleActionUC != nil {
-				continueMessage := fmt.Sprintf("[Продолжение после проверки навыка: %v (DC %d, результат %d%s)]",
-					result.Success, result.DC, result.Total,
-					map[bool]string{true: " - УСПЕХ", false: " - ПРОВАЛ"}[result.Success])
-					return b.handlePlayerAction(ctx, chatID, continueMessage)
+					// Получаем контекст проверки из сессии
+					gs, _ := b.sessionRepo.GetByChatID(ctx, chatID)
+					reason := ""
+					stakes := ""
+					if gs != nil {
+						reason = gs.PendingAbilityCheckReason
+						stakes = gs.PendingAbilityCheckStakes
+					}
+
+					var continueMessage string
+					if result.Success {
+						if reason != "" && stakes != "" {
+							continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s успешно %s. Теперь опиши положительные последствия: %s",
+								result.CharacterName, reason, stakes)
+						} else {
+							continueMessage = fmt.Sprintf("✅ УСПЕХ проверки! %s прошел проверку %s (DC %d, результат %d). Продолжи историю с положительными последствиями.",
+								result.CharacterName, result.Ability, result.DC, result.Total)
+						}
+					} else {
+						if reason != "" && stakes != "" {
+							continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s не смог %s. Теперь опиши негативные последствия: %s",
+								result.CharacterName, reason, stakes)
+						} else {
+							continueMessage = fmt.Sprintf("❌ ПРОВАЛ проверки! %s провалил проверку %s (DC %d, результат %d). Продолжи историю с негативными последствиями.",
+								result.CharacterName, result.Ability, result.DC, result.Total)
+						}
+					}
+
+					// Для автоматических продолжений используем tgUserID первого игрока
+					systemTgUserID := int64(0)
+					if gs.GetFirstPlayer() != nil {
+						systemTgUserID = gs.GetFirstPlayer().TgUserID
+					}
+					return b.handlePlayerAction(ctx, chatID, systemTgUserID, continueMessage)
 				}
 				return nil
 			}
@@ -2791,17 +3045,46 @@ func (b *Bot) handleBattlefield(ctx context.Context, chatID int64, args string) 
 	// Извлекаем визуализацию из результата tool
 	resultMap, ok := result.(map[string]interface{})
 	if !ok {
+		logger.Error("Invalid battlefield tool result format",
+			logger.String("result_type", fmt.Sprintf("%T", result)),
+			logger.Uint("session_id", gs.ID),
+		)
 		errorMsg := tgbotapi.NewMessage(chatID, "Ошибка: неверный формат результата")
 		return b.sendMessage(errorMsg)
 	}
 
+	// Логируем результат для отладки
+	logger.Debug("Battlefield tool result",
+		logger.Int64("chat_id", chatID),
+		logger.Uint("session_id", gs.ID),
+		logger.String("format", format),
+		logger.Any("result_keys", getMapKeys(resultMap)),
+	)
+
 	battlefieldView, ok := resultMap["battlefield"].(string)
-	if !ok || battlefieldView == "" {
+	if !ok {
+		logger.Error("Battlefield field not found in tool result",
+			logger.Int64("chat_id", chatID),
+			logger.Uint("session_id", gs.ID),
+			logger.Any("result_keys", getMapKeys(resultMap)),
+		)
+		errorMsg := tgbotapi.NewMessage(chatID, "Ошибка: поле battlefield не найдено")
+		return b.sendMessage(errorMsg)
+	}
+
+	if battlefieldView == "" {
+		logger.Error("Battlefield view is empty",
+			logger.Int64("chat_id", chatID),
+			logger.Uint("session_id", gs.ID),
+			logger.String("format", format),
+			logger.Int("participants", len(activeCombat.Participants)),
+			logger.String("combat_state", string(activeCombat.State)),
+		)
 		// Если нет поля боя, проверяем сообщение
 		if msg, ok := resultMap["message"].(string); ok {
 			return b.sendLongMessage(chatID, msg)
 		}
-		errorMsg := tgbotapi.NewMessage(chatID, "Не удалось получить визуализацию поля боя")
+		errorMsg := tgbotapi.NewMessage(chatID, "Не удалось получить визуализацию поля боя (пустой результат)")
 		return b.sendMessage(errorMsg)
 	}
 
@@ -3855,4 +4138,307 @@ func (b *Bot) handleWaitUntil(ctx context.Context, chatID int64, args string) er
 
 	msg := tgbotapi.NewMessage(chatID, text)
 	return b.sendMessage(msg)
+}
+
+func (b *Bot) handleProgress(ctx context.Context, chatID int64, tgUserID int64) error {
+	// Получаем сессию
+	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+
+	if gs == nil {
+		msg := tgbotapi.NewMessage(chatID, "Игра не начата. Используйте /newgame для начала новой игры.")
+		return b.sendMessage(msg)
+	}
+
+	// Ищем игрока по TgUserID
+	player := gs.FindPlayerByTgUserID(tgUserID)
+	if player == nil {
+		// Fallback: используем первого игрока для обратной совместимости
+		player = gs.GetFirstPlayer()
+		if player == nil {
+			msg := tgbotapi.NewMessage(chatID, "Персонаж не создан. Используйте /createcharacter для создания персонажа.")
+			return b.sendMessage(msg)
+		}
+	}
+	char := player.Character
+
+	// Рассчитываем опыт до следующего уровня
+	expToNext := char.GetExperienceToNextLevel()
+
+	// Рассчитываем процент успеха в сессии
+	var successRate float64
+	if gs.SessionChecksCount > 0 {
+		successRate = float64(gs.SessionSuccessCount) / float64(gs.SessionChecksCount) * 100
+	}
+
+	// Определяем текущую локацию
+	locationName := "Неизвестная локация"
+	if gs.CurrentLocationID != nil {
+		// Ищем локацию в массиве Locations мира
+		for _, loc := range gs.World.Locations {
+			if loc.ID == *gs.CurrentLocationID {
+				locationName = loc.Name
+				break
+			}
+		}
+	}
+
+	// Создаем визуальный прогресс-бар для опыта
+	expProgress := ""
+	currentLevelMin := character.GetRequiredXPForLevel(char.Level)
+	nextLevelMin := character.GetRequiredXPForLevel(char.Level + 1)
+	if nextLevelMin > currentLevelMin {
+		expRange := nextLevelMin - currentLevelMin
+		currentInLevel := char.Experience - currentLevelMin
+		if currentInLevel < 0 {
+			currentInLevel = 0
+		}
+		progressPercent := float64(currentInLevel) / float64(expRange)
+		if progressPercent > 1 {
+			progressPercent = 1
+		}
+
+		// Создаем прогресс-бар из 10 символов
+		filled := int(progressPercent * 10)
+		for i := 0; i < 10; i++ {
+			if i < filled {
+				expProgress += "█"
+			} else {
+				expProgress += "░"
+			}
+		}
+	}
+
+	// Создаем визуальный прогресс-бар для здоровья
+	hpProgress := ""
+	if char.MaxHP > 0 {
+		hpPercent := float64(char.HP) / float64(char.MaxHP)
+		if hpPercent < 0 {
+			hpPercent = 0
+		}
+
+		// Создаем прогресс-бар из 10 символов
+		filled := int(hpPercent * 10)
+		for i := 0; i < 10; i++ {
+			if i < filled {
+				if hpPercent > 0.6 {
+					hpProgress += "🟢" // Зеленый для хорошего здоровья
+				} else if hpPercent > 0.3 {
+					hpProgress += "🟡" // Желтый для среднего здоровья
+				} else {
+					hpProgress += "🔴" // Красный для низкого здоровья
+				}
+			} else {
+				hpProgress += "⚫"
+			}
+		}
+	}
+
+	progressText := fmt.Sprintf(`📊 **Прогресс персонажа: %s**
+
+🏆 **Уровень и опыт:**
+└ Уровень: %d
+└ Опыт: %d / %d (%d до следующего уровня)
+└ Прогресс: %s (%.1f%%)
+
+❤️ **Здоровье:**
+└ HP: %d / %d
+└ Статус: %s
+└ Прогресс: %s
+
+🎯 **Статистика сессии:**
+└ Проверки: %d всего (%d успехов, %d провалов)
+└ Процент успеха: %.1f%%
+└ Модификатор сложности: %+d
+└ Текущая локация: %s
+
+📅 Сессия начата: %s`,
+		char.Name,
+		char.Level,
+		char.Experience,
+		nextLevelMin,
+		expToNext,
+		expProgress,
+		float64(char.Experience-currentLevelMin)/float64(nextLevelMin-currentLevelMin)*100,
+		char.HP,
+		char.MaxHP,
+		char.Status,
+		hpProgress,
+		gs.SessionChecksCount,
+		gs.SessionSuccessCount,
+		gs.SessionFailureCount,
+		successRate,
+		gs.SessionDifficultyMod,
+		locationName,
+		gs.CreatedAt.Format("02.01.2006 15:04"),
+	)
+
+	// Добавляем информацию о сессионных целях
+	goalsText := "\n🎯 **Цели сессии:**\n"
+	activeGoals := gs.GetActiveGoals()
+	completedGoals := gs.GetCompletedGoals()
+
+	if len(activeGoals) == 0 && len(completedGoals) == 0 {
+		goalsText += "Цели для этой сессии еще не сгенерированы."
+	} else {
+		for _, goal := range activeGoals {
+			progressPercent := float64(goal.CurrentValue) / float64(goal.TargetValue) * 100
+			timeInfo := ""
+			if goal.TimeLimit != nil {
+				timeLeft := time.Until(*goal.TimeLimit)
+				if timeLeft > 0 {
+					hours := int(timeLeft.Hours())
+					minutes := int(timeLeft.Minutes()) % 60
+					timeInfo = fmt.Sprintf(" ⏰ %dh %dm", hours, minutes)
+				} else {
+					timeInfo = " ⏰ истекло"
+				}
+			}
+			goalsText += fmt.Sprintf("└ %s: %d/%d (%.1f%%)%s\n", goal.Description, goal.CurrentValue, goal.TargetValue, progressPercent, timeInfo)
+		}
+		for _, goal := range completedGoals {
+			goalsText += fmt.Sprintf("✅ %s: %d/%d (завершена)\n", goal.Description, goal.CurrentValue, goal.TargetValue)
+		}
+	}
+
+	progressText += goalsText
+
+	// Добавляем информацию о cooldown проверок способностей
+	cooldownText := "\n⏰ **Cooldown проверок способностей:**\n"
+	const cooldownDuration = 30 * time.Second
+	hasActiveCooldowns := false
+
+	gs.InitializeCooldowns()
+	for abilityType, cooldownTime := range gs.AbilityCooldowns {
+		if cooldownTime != nil {
+			if onCooldown, remainingTime := gs.IsAbilityOnCooldown(abilityType, cooldownDuration); onCooldown {
+				abilityName := getAbilityDisplayName(abilityType)
+				cooldownText += fmt.Sprintf("└ %s: %.0f сек\n", abilityName, remainingTime.Seconds())
+				hasActiveCooldowns = true
+			}
+		}
+	}
+
+	if !hasActiveCooldowns {
+		cooldownText += "Все проверки доступны"
+	}
+
+	progressText += cooldownText
+
+	msg := tgbotapi.NewMessage(chatID, progressText)
+	msg.ParseMode = tgbotapi.ModeMarkdown
+	return b.sendMessage(msg)
+}
+
+// handleCooperative обрабатывает команду /cooperative
+func (b *Bot) handleCooperative(ctx context.Context, chatID int64, tgUserID int64, args string) error {
+	// Парсим аргументы: /cooperative <max_players>
+	maxPlayers := 2 // По умолчанию 2 игрока
+	if args != "" {
+		if parsed, err := strconv.Atoi(args); err == nil && parsed >= 2 && parsed <= 3 {
+			maxPlayers = parsed
+		}
+	}
+
+	playerRepoAdapter := &playerRepoAdapter{repo: b.playerRepo}
+	cooperativeUC := sessionapp.NewManageCooperativeUseCase(b.sessionRepo, playerRepoAdapter)
+	err := cooperativeUC.EnableCooperativeMode(ctx, sessionapp.EnableCooperativeRequest{
+		ChatID:     chatID,
+		MaxPlayers: maxPlayers,
+	})
+
+	if err != nil {
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка включения cooperative режима: %v", err))
+		return b.sendMessage(msg)
+	}
+
+	msg := tgbotapi.NewMessage(chatID,
+		fmt.Sprintf("🎮 Cooperative режим включен!\nМаксимум игроков: %d\n\nДругие игроки могут присоединиться командой /join", maxPlayers))
+	return b.sendMessage(msg)
+}
+
+// handleJoin обрабатывает команду /join
+func (b *Bot) handleJoin(ctx context.Context, chatID int64, tgUserID int64) error {
+	playerRepoAdapter := &playerRepoAdapter{repo: b.playerRepo}
+	cooperativeUC := sessionapp.NewManageCooperativeUseCase(b.sessionRepo, playerRepoAdapter)
+	err := cooperativeUC.JoinCooperativeSession(ctx, sessionapp.JoinCooperativeSessionRequest{
+		ChatID:   chatID,
+		TgUserID: tgUserID,
+	})
+
+	if err != nil {
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка присоединения к игре: %v", err))
+		return b.sendMessage(msg)
+	}
+
+	msg := tgbotapi.NewMessage(chatID, "✅ Вы успешно присоединились к cooperative игре!")
+	return b.sendMessage(msg)
+}
+
+// handleLeave обрабатывает команду /leave
+func (b *Bot) handleLeave(ctx context.Context, chatID int64, tgUserID int64) error {
+	msg := tgbotapi.NewMessage(chatID, "Функция выхода из cooperative игры пока не реализована. Используйте /endgame для завершения всей сессии.")
+	return b.sendMessage(msg)
+}
+
+// handleCoopStatus обрабатывает команду /coopstatus
+func (b *Bot) handleCoopStatus(ctx context.Context, chatID int64) error {
+	cooperativeUC := sessionapp.NewManageCooperativeUseCase(b.sessionRepo, nil)
+	status, err := cooperativeUC.GetCooperativeStatus(ctx, chatID)
+	if err != nil {
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка получения статуса: %v", err))
+		return b.sendMessage(msg)
+	}
+
+	var text string
+	if status.IsCooperative {
+		text = fmt.Sprintf("🎮 **Cooperative режим активен**\nИгроков: %d/%d\n\n", status.CurrentPlayers, status.MaxPlayers)
+		for _, player := range status.Players {
+			activeMark := ""
+			if player.IsActive {
+				activeMark = " 👈"
+			}
+			text += fmt.Sprintf("• Игрок %d%s\n", player.ID, activeMark)
+		}
+	} else {
+		text = "🎮 Cooperative режим отключен\nИспользуйте /cooperative для включения"
+	}
+
+	msg := tgbotapi.NewMessage(chatID, text)
+	return b.sendMessage(msg)
+}
+
+// playerRepoAdapter адаптирует persistence.PlayerRepository к sessionapp.PlayerRepository
+type playerRepoAdapter struct {
+	repo *persistence.PlayerRepository
+}
+
+func (a *playerRepoAdapter) GetByTgUserID(ctx context.Context, tgUserID int64) (*player.Player, error) {
+	return a.repo.GetByTgUserID(ctx, tgUserID)
+}
+
+func (a *playerRepoAdapter) Save(ctx context.Context, p *player.Player) error {
+	return a.repo.Save(ctx, p)
+}
+
+// getAbilityDisplayName возвращает читаемое название способности
+func getAbilityDisplayName(abilityType string) string {
+	switch abilityType {
+	case "strength":
+		return "Сила (STR)"
+	case "dexterity":
+		return "Ловкость (DEX)"
+	case "constitution":
+		return "Телосложение (CON)"
+	case "intelligence":
+		return "Интеллект (INT)"
+	case "wisdom":
+		return "Мудрость (WIS)"
+	case "charisma":
+		return "Харизма (CHA)"
+	default:
+		return abilityType
+	}
 }
