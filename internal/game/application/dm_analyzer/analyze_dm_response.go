@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
+	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/llm/domain"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
@@ -132,15 +135,22 @@ type AnalyzeDMResponseUseCase struct {
 	tgUserID                 int64                     // Telegram User ID для отслеживания ежедневных заданий
 	generateLocationEventUC  LocationEventGenerator    // Опциональная зависимость для генерации событий локаций
 	sessionRepo              SessionRepository         // Репозиторий сессий для поиска локаций
+	fullSessionRepo          FullSessionRepository     // Репозиторий для доступа к полной сессии (для pending проверок)
 	eventRepo                StoryEventRepository      // Репозиторий для записи событий истории
 	indexDocUC               RAGIndexer                // Индексатор RAG для событий
 	imagesGeneratedInSession int                       // Счетчик изображений, сгенерированных в этой сессии
 	maxImagesPerSession      int                       // Максимальное количество изображений за сессию
+	autoGenerateImages       bool                      // Включить/отключить автоматическую генерацию изображений
 }
 
 // SessionRepository интерфейс для доступа к сессии (для поиска локаций)
 type SessionRepository interface {
 	GetByChatID(ctx context.Context, chatID int64) (*SessionSnapshot, error)
+}
+
+type FullSessionRepository interface {
+	GetByChatID(ctx context.Context, chatID int64) (*session.GameSession, error)
+	Save(ctx context.Context, session *session.GameSession) error
 }
 
 // SessionSnapshot — упрощенная структура сессии (для доступа к миру и локациям)
@@ -258,6 +268,7 @@ func NewAnalyzeDMResponseUseCase(
 	worldID uint,
 	characterID uint,
 	playerID uint, // Добавлен playerID для проверки достижений
+	autoGenerateImages bool, // Включить/отключить автоматическую генерацию изображений
 ) *AnalyzeDMResponseUseCase {
 	return &AnalyzeDMResponseUseCase{
 		llm:                      llm,
@@ -269,14 +280,26 @@ func NewAnalyzeDMResponseUseCase(
 		worldID:                  worldID,
 		characterID:              characterID,
 		playerID:                 playerID,
-		imagesGeneratedInSession: 0, // Начинаем с 0 изображений
-		maxImagesPerSession:      3, // Максимум 3 изображения за сессию
+		imagesGeneratedInSession: 0,                  // Начинаем с 0 изображений
+		maxImagesPerSession:      3,                  // Максимум 3 изображения за сессию
+		autoGenerateImages:       autoGenerateImages, // Настройка автоматической генерации
 	}
 }
 
 // SetCheckAchievementsUseCase устанавливает AchievementChecker для проверки достижений
 func (uc *AnalyzeDMResponseUseCase) SetCheckAchievementsUseCase(checkAchievementsUC AchievementChecker) {
 	uc.checkAchievementsUC = checkAchievementsUC
+}
+
+// SetAutoGenerateImages включает или отключает автоматическую генерацию изображений
+func (uc *AnalyzeDMResponseUseCase) SetAutoGenerateImages(enabled bool) {
+	uc.autoGenerateImages = enabled
+	log.Printf("[DM Analyzer] Auto-generate images set to: %v", enabled)
+}
+
+// SetFullSessionRepository устанавливает репозиторий для доступа к полной сессии
+func (uc *AnalyzeDMResponseUseCase) SetFullSessionRepository(repo FullSessionRepository) {
+	uc.fullSessionRepo = repo
 }
 
 // SetNotificationService устанавливает NotificationService для отправки уведомлений
@@ -341,6 +364,12 @@ func (uc *AnalyzeDMResponseUseCase) Execute(
 		log.Printf("Failed to analyze DM response with LLM: %v", err)
 		// Возвращаем пустой анализ, но не прерываем выполнение
 		return &DMResponseAnalysis{}, nil
+	}
+
+	// Распознаем естественные запросы проверок в ответе DM
+	if err := uc.recognizeNaturalAbilityChecks(ctx, dmResponse, analysis); err != nil {
+		log.Printf("Failed to recognize natural ability checks: %v", err)
+		// Логируем ошибку, но не прерываем выполнение
 	}
 
 	// Обрабатываем обнаруженные события
@@ -1163,7 +1192,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 	ctx context.Context,
 	location Location,
 ) *GeneratedImage {
-	if uc.imageGenerationService == nil || uc.userID == 0 {
+	if uc.imageGenerationService == nil || uc.userID == 0 || !uc.autoGenerateImages {
 		return nil
 	}
 
@@ -1177,13 +1206,40 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 	imgCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 
-	// Формируем промпт для генерации изображения локации
-	systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные, атмосферные изображения локаций и окружающей среды в стиле классического фэнтези-арта."
+	// Получаем информацию о мире для более детального контекста
+	var worldContext string
+	// TODO: Добавить получение информации о мире через WorldRepository
 
-	userPrompt := location.Name
+	// Формируем детализированный системный промпт для генерации изображения локации
+	systemPrompt := `Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные, атмосферные и захватывающие изображения локаций в стиле классического фэнтези-арта.
+
+Стиль: цифровая живопись, высокая детализация, реалистичные текстуры, драматическое освещение, богатая цветовая палитра, элементы готического и классического фэнтези-арта.
+
+Техники: глубокая перспектива, детальные архитектурные элементы, атмосферные эффекты (туман, световые лучи, частицы), богатые текстуры (камень, дерево, ткань), эмоциональная атмосфера.
+
+Избегай: современные элементы, низкое качество, плоские изображения, чрезмерная стилизация.`
+
+	// Формируем детализированный пользовательский промпт с контекстом
+	userPrompt := fmt.Sprintf("Локация: %s", location.Name)
+
 	if location.Description != "" {
-		userPrompt = fmt.Sprintf("%s, %s", location.Name, location.Description)
+		userPrompt += fmt.Sprintf("\nОписание: %s", location.Description)
 	}
+
+	if worldContext != "" {
+		userPrompt += fmt.Sprintf("\nКонтекст мира: %s", worldContext)
+	}
+
+	// Добавляем атмосферу и детали на основе типа локации
+	locationTypeDetails := getLocationTypeDetails(location.Name, location.Description)
+	if locationTypeDetails != "" {
+		userPrompt += fmt.Sprintf("\nДетали визуализации: %s", locationTypeDetails)
+	}
+
+	// Добавляем текущую ситуацию/время суток (базовые настройки)
+	// TODO: Добавить анализ последнего ответа DM для определения времени суток и погоды
+
+	log.Printf("[DM Analyzer] Generated detailed location prompt: %s", userPrompt)
 
 	// Генерируем изображение
 	req := GenerateImageRequest{
@@ -1228,7 +1284,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 	ctx context.Context,
 	npc NPC,
 ) *GeneratedImage {
-	if uc.imageGenerationService == nil || uc.userID == 0 {
+	if uc.imageGenerationService == nil || uc.userID == 0 || !uc.autoGenerateImages {
 		return nil
 	}
 
@@ -1242,13 +1298,48 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 	imgCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 
-	// Формируем промпт для генерации изображения NPC
-	systemPrompt := "Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные изображения персонажей и NPC в стиле классического фэнтези-арта."
+	// Получаем информацию о мире для более детального контекста
+	var worldContext string
+	// TODO: Добавить получение информации о мире через WorldRepository
 
-	userPrompt := npc.Name
+	// Получаем текущую локацию для контекста
+	var locationContext string
+	// TODO: Добавить получение текущей локации
+
+	// Формируем детализированный системный промпт для генерации изображения NPC
+	systemPrompt := `Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай детализированные, выразительные портреты персонажей и NPC в стиле классического фэнтези-арта.
+
+Стиль: цифровая живопись, реалистичные лица и выражения, богатые костюмы, детальные аксессуары, драматическое освещение, глубокие эмоции, элементы готического и ренессансного искусства.
+
+Техники: детальная проработка черт лица, текстуры тканей и материалов, выразительные позы, богатые цветовые палитры, атмосферное освещение, профессиональный портретный стиль.
+
+Избегай: карикатурность, современная одежда, низкое качество, чрезмерная стилизация.`
+
+	// Формируем детализированный пользовательский промпт с контекстом
+	userPrompt := fmt.Sprintf("Персонаж: %s", npc.Name)
+
 	if npc.Description != "" {
-		userPrompt = fmt.Sprintf("%s, %s", npc.Name, npc.Description)
+		userPrompt += fmt.Sprintf("\nОписание: %s", npc.Description)
 	}
+
+	if worldContext != "" {
+		userPrompt += fmt.Sprintf("\nМир: %s", worldContext)
+	}
+
+	if locationContext != "" {
+		userPrompt += fmt.Sprintf("\nТекущая локация: %s", locationContext)
+	}
+
+	// Добавляем детали на основе типа NPC
+	npcTypeDetails := getNPCTypeDetails(npc.Name, npc.Description)
+	if npcTypeDetails != "" {
+		userPrompt += fmt.Sprintf("\nДетали внешности: %s", npcTypeDetails)
+	}
+
+	// Добавляем текущую ситуацию/эмоциональное состояние (базовые настройки)
+	// TODO: Добавить анализ последнего ответа DM для определения эмоционального состояния NPC
+
+	log.Printf("[DM Analyzer] Generated detailed NPC prompt: %s", userPrompt)
 
 	// Генерируем изображение
 	req := GenerateImageRequest{
@@ -2986,4 +3077,314 @@ func looksLikeTruncatedJSON(jsonStr string) bool {
 	}
 
 	return false
+}
+
+// getLocationTypeDetails возвращает дополнительные детали визуализации на основе типа локации
+func getLocationTypeDetails(name, description string) string {
+	nameLower := strings.ToLower(name)
+	descLower := strings.ToLower(description)
+
+	// Леса и природные зоны
+	if strings.Contains(nameLower, "лес") || strings.Contains(descLower, "лес") {
+		if strings.Contains(nameLower, "древн") || strings.Contains(descLower, "древн") {
+			return "древний мистический лес, огромные вековые деревья с магическими рунами, густой туман у корней, таинственный зеленоватый свет, скрытые тропы, атмосфера древней магии"
+		} else if strings.Contains(nameLower, "эльф") || strings.Contains(descLower, "эльф") {
+			return "таинственный эльфийский лес, стройные серебристые деревья, мягкий мох, солнечные лучи сквозь листву, гармония природы, элегантные формы, спокойная атмосфера"
+		} else {
+			return "густой лес, разнообразные деревья, подлесок, лесная подстилка, естественное освещение, дикая природа, звуки леса"
+		}
+	}
+
+	// Горы и скалы
+	if strings.Contains(nameLower, "гор") || strings.Contains(descLower, "гор") {
+		return "величественные горы, острые пики, скалистые склоны, каменные уступы, глубокие ущелья, драматическое освещение, ощущение мощи природы"
+	}
+
+	// Замки и крепости
+	if strings.Contains(nameLower, "замок") || strings.Contains(nameLower, "крепост") || strings.Contains(descLower, "замок") {
+		if strings.Contains(nameLower, "древн") || strings.Contains(descLower, "разрушен") {
+			return "древний разрушенный замок, каменные руины, плющ на стенах, обвалившиеся башни, таинственная атмосфера, следы былого величия"
+		} else {
+			return "могучий средневековый замок, высокие башни, толстые стены, бойницы, подъемный мост, флаги, атмосфера силы и защиты"
+		}
+	}
+
+	// Подземелья и пещеры
+	if strings.Contains(nameLower, "пещер") || strings.Contains(nameLower, "подзем") || strings.Contains(descLower, "пещер") {
+		return "темная пещера, неровные стены, сталактиты и сталагмиты, факелы или магический свет, влажность, атмосфера тайны и опасности"
+	}
+
+	// Храмы и святыни
+	if strings.Contains(nameLower, "храм") || strings.Contains(nameLower, "свят") || strings.Contains(descLower, "храм") {
+		return "величественный храм, высокие колонны, священные символы, алтарь, витражи или магические окна, атмосфера святости и спокойствия"
+	}
+
+	// Деревни и города
+	if strings.Contains(nameLower, "деревн") || strings.Contains(descLower, "деревн") {
+		return "уютная деревня, деревянные дома, соломенные крыши, тропинки, заборы, домашние животные, атмосфера спокойствия и повседневности"
+	}
+
+	if strings.Contains(nameLower, "город") || strings.Contains(descLower, "город") {
+		return "средневековый город, каменные здания, узкие улочки, рынок, жители, атмосфера жизни и торговли"
+	}
+
+	// Пустыни и степи
+	if strings.Contains(nameLower, "пустын") || strings.Contains(descLower, "пустын") {
+		return "пустынная местность, песчаные дюны, палящее солнце, редкая растительность, ощущение простора и суровости"
+	}
+
+	// Озера и реки
+	if strings.Contains(nameLower, "озер") || strings.Contains(nameLower, "рек") || strings.Contains(descLower, "озер") {
+		return "спокойное озеро или река, отражающаяся вода, береговая линия, растительность, атмосфера мира и красоты природы"
+	}
+
+	return "фэнтези локация, атмосферное освещение, детализированная среда, богатые текстуры, классический стиль фэнтези-арта"
+}
+
+// getNPCTypeDetails возвращает дополнительные детали внешности на основе типа NPC
+func getNPCTypeDetails(name, description string) string {
+	nameLower := strings.ToLower(name)
+	descLower := strings.ToLower(description)
+
+	// Эльфы
+	if strings.Contains(nameLower, "эльф") || strings.Contains(descLower, "эльф") {
+		if strings.Contains(nameLower, "темн") || strings.Contains(descLower, "темн") {
+			return "темный эльф (дроу), светло-серая или черная кожа, белые волосы, красные глаза, элегантные черты лица, острые уши, темная кожаная одежда с серебряными украшениями"
+		} else if strings.Contains(nameLower, "лесн") || strings.Contains(descLower, "лесн") {
+			return "лесной эльф, светлая кожа, зеленые или каштановые волосы, зеленые глаза, татуировки листьев, одежда из натуральных тканей, венок из цветов"
+		} else {
+			return "высокий эльф, бледная кожа, золотистые или серебристые волосы, яркие глаза, острые черты лица, элегантная одежда, грациозная осанка"
+		}
+	}
+
+	// Люди
+	if strings.Contains(nameLower, "человек") || strings.Contains(descLower, "человек") || (!strings.Contains(nameLower, "эльф") && !strings.Contains(nameLower, "гном") && !strings.Contains(nameLower, "орк")) {
+		// Определяем по профессии или характеристикам
+		if strings.Contains(nameLower, "воин") || strings.Contains(descLower, "воин") || strings.Contains(nameLower, "рыцар") {
+			return "сильный воин, мускулистое телосложение, шрамы, доспехи, уверенная поза, решительное выражение лица"
+		} else if strings.Contains(nameLower, "маг") || strings.Contains(descLower, "маг") || strings.Contains(nameLower, "волшебник") {
+			return "мудрый маг, длинная борода, мантия, посох, сосредоточенное выражение, магические символы на одежде"
+		} else if strings.Contains(nameLower, "торгов") || strings.Contains(descLower, "торгов") {
+			return "купец, практичная одежда, сумки с товарами, добродушное выражение, уверенная поза"
+		} else if strings.Contains(nameLower, "трактирщик") || strings.Contains(descLower, "трактир") {
+			return "трактирщик, крепкое телосложение, фартук, дружелюбное лицо, руки в муке или с кружкой"
+		} else {
+			return "обычный человек средних лет, практичная одежда, нормальное телосложение, нейтральное выражение лица"
+		}
+	}
+
+	// Гномы
+	if strings.Contains(nameLower, "гном") || strings.Contains(descLower, "гном") {
+		return "низкорослый крепкий гном, рыжая или серая борода, рабочая одежда или доспехи, инструменты, решительное выражение лица"
+	}
+
+	// Орки
+	if strings.Contains(nameLower, "орк") || strings.Contains(descLower, "орк") {
+		return "массивный орк, зеленая кожа, клыки, боевые шрамы, грубая одежда или доспехи, свирепое выражение"
+	}
+
+	// Драконы или драконьи существа
+	if strings.Contains(nameLower, "дракон") || strings.Contains(descLower, "дракон") {
+		return "величавое драконье существо, чешуя, крылья, огненные глаза, величественная поза, магическая аура"
+	}
+
+	// Некроманты или темные маги
+	if strings.Contains(nameLower, "некромант") || strings.Contains(descLower, "некромант") || strings.Contains(nameLower, "темн") {
+		return "зловещий некромант, бледная кожа, темная мантия, магические артефакты, холодный взгляд, атмосфера смерти"
+	}
+
+	// Священнослужители
+	if strings.Contains(nameLower, "жрец") || strings.Contains(nameLower, "священ") || strings.Contains(descLower, "жрец") {
+		return "благочестивый священнослужитель, символ веры, мантия, спокойное выражение лица, атмосфера святости"
+	}
+
+	// По умолчанию
+	return "персонаж фэнтези, детализированные черты лица, выразительное выражение, подходящая одежда и аксессуары, профессиональный портрет"
+}
+
+// recognizeNaturalAbilityChecks распознает естественные запросы проверок способностей в ответе DM
+// и автоматически устанавливает pending проверки
+func (uc *AnalyzeDMResponseUseCase) recognizeNaturalAbilityChecks(
+	ctx context.Context,
+	dmResponse string,
+	analysis *DMResponseAnalysis,
+) error {
+	// Проверяем доступность репозитория полной сессии
+	if uc.fullSessionRepo == nil {
+		return nil // Репозиторий не настроен, пропускаем
+	}
+
+	// Проверяем, есть ли уже pending проверка
+	gs, err := uc.fullSessionRepo.GetByChatID(ctx, uc.chatID)
+	if err != nil {
+		return fmt.Errorf("failed to get session for natural check: %w", err)
+	}
+	if gs == nil {
+		return fmt.Errorf("session not found for natural check")
+	}
+
+	if gs.HasPendingAbilityCheck() {
+		// Уже есть pending проверка, не устанавливаем новую
+		return nil
+	}
+
+	// Ищем паттерны естественных запросов проверок
+	checkRequest := uc.parseNaturalCheckRequest(dmResponse)
+	if checkRequest == nil {
+		// Нет запроса проверки в естественном языке
+		return nil
+	}
+
+	// Генерируем уникальный ID для проверки
+	checkID := fmt.Sprintf("natural_%s_%d", checkRequest.Ability, time.Now().Unix())
+
+	// Извлекаем причину и ставку из текста DM
+	reason, stakes := uc.extractCheckContext(dmResponse)
+
+	// Устанавливаем pending проверку с контекстом
+	gs.SetPendingAbilityCheckWithContext(checkID, checkRequest.Ability, checkRequest.DC, reason, stakes)
+
+	// Сохраняем сессию
+	if err := uc.fullSessionRepo.Save(ctx, gs); err != nil {
+		return fmt.Errorf("failed to save session with natural check: %w", err)
+	}
+
+	log.Printf("[DM Analyzer] Recognized natural ability check: %s DC %d (reason: %s, stakes: %s)",
+		checkRequest.Ability, checkRequest.DC, reason, stakes)
+
+	return nil
+}
+
+// NaturalCheckRequest представляет распознанный естественный запрос проверки
+type NaturalCheckRequest struct {
+	Ability string
+	DC      int
+}
+
+// parseNaturalCheckRequest анализирует текст на предмет естественных запросов проверок
+func (uc *AnalyzeDMResponseUseCase) parseNaturalCheckRequest(text string) *NaturalCheckRequest {
+	text = strings.ToLower(text)
+
+	// Паттерны для распознавания проверок
+	patterns := map[string]string{
+		// Сила
+		"проверка силы":               "strength",
+		"проверьте силу":              "strength",
+		"проверка на силу":            "strength",
+		"бросьте проверку силы":       "strength",
+		"проверка силы (str)":         "strength",
+		"сила (str)":                  "strength",
+
+		// Ловкость
+		"проверка ловкости":           "dexterity",
+		"проверьте ловкость":          "dexterity",
+		"проверка на ловкость":        "dexterity",
+		"бросьте проверку ловкости":   "dexterity",
+		"проверка ловкости (dex)":     "dexterity",
+		"ловкость (dex)":              "dexterity",
+
+		// Телосложение
+		"проверка телосложения":       "constitution",
+		"проверьте телосложение":      "constitution",
+		"проверка на телосложение":    "constitution",
+		"бросьте проверку телосложения": "constitution",
+		"проверка телосложения (con)": "constitution",
+		"телосложение (con)":          "constitution",
+
+		// Интеллект
+		"проверка интеллекта":         "intelligence",
+		"проверьте интеллект":         "intelligence",
+		"проверка на интеллект":       "intelligence",
+		"бросьте проверку интеллекта": "intelligence",
+		"проверка интеллекта (int)":   "intelligence",
+		"интеллект (int)":             "intelligence",
+
+		// Мудрость
+		"проверка мудрости":           "wisdom",
+		"проверьте мудрость":          "wisdom",
+		"проверка на мудрость":        "wisdom",
+		"бросьте проверку мудрости":   "wisdom",
+		"проверка мудрости (wis)":     "wisdom",
+		"мудрость (wis)":              "wisdom",
+		"проверка восприятия":         "wisdom", // Восприятие = мудрость
+
+		// Харизма
+		"проверка харизмы":            "charisma",
+		"проверьте харизму":           "charisma",
+		"проверка на харизму":         "charisma",
+		"бросьте проверку харизмы":    "charisma",
+		"проверка харизмы (cha)":      "charisma",
+		"харизма (cha)":               "charisma",
+	}
+
+	// Ищем совпадения с паттернами
+	for pattern, ability := range patterns {
+		if strings.Contains(text, pattern) {
+			// Извлекаем DC из текста
+			dc := uc.extractDCFromText(text)
+			if dc == 0 {
+				dc = 10 // DC по умолчанию, если не указан
+			}
+
+			return &NaturalCheckRequest{
+				Ability: ability,
+				DC:      dc,
+			}
+		}
+	}
+
+	return nil
+}
+
+// extractDCFromText извлекает значение DC из текста
+func (uc *AnalyzeDMResponseUseCase) extractDCFromText(text string) int {
+	// Ищем паттерны вроде "DC 15", "сложность 12", "dc15", "DC=10"
+	re := regexp.MustCompile(`(?:dc|сложность)\s*[:=]?\s*(\d{1,2})`)
+	matches := re.FindStringSubmatch(strings.ToLower(text))
+	if len(matches) >= 2 {
+		if dc, err := strconv.Atoi(matches[1]); err == nil && dc >= 1 && dc <= 30 {
+			return dc
+		}
+	}
+	return 0
+}
+
+// extractCheckContext извлекает причину и ставку проверки из текста DM
+func (uc *AnalyzeDMResponseUseCase) extractCheckContext(text string) (reason, stakes string) {
+	text = strings.ToLower(text)
+
+	// Ищем причину (reason) - текст после слов "чтобы", "для того чтобы"
+	if idx := strings.Index(text, "чтобы"); idx != -1 {
+		reason = strings.TrimSpace(text[idx+5:])
+		// Ограничиваем длину
+		if len(reason) > 100 {
+			reason = reason[:97] + "..."
+		}
+	} else if idx := strings.Index(text, "для того чтобы"); idx != -1 {
+		reason = strings.TrimSpace(text[idx+14:])
+		if len(reason) > 100 {
+			reason = reason[:97] + "..."
+		}
+	}
+
+	// Ищем ставку (stakes) - текст после слов "ставка", "на кону", "риск"
+	stakesKeywords := []string{"ставка", "на кону", "риск", "последствия"}
+	for _, keyword := range stakesKeywords {
+		if idx := strings.Index(text, keyword); idx != -1 {
+			// Берем текст после ключевого слова
+			stakes = strings.TrimSpace(text[idx+len(keyword):])
+			// Убираем возможные ":" или "="
+			stakes = strings.TrimPrefix(stakes, ":")
+			stakes = strings.TrimPrefix(stakes, "=")
+			stakes = strings.TrimSpace(stakes)
+
+			// Ограничиваем длину
+			if len(stakes) > 100 {
+				stakes = stakes[:97] + "..."
+			}
+			break
+		}
+	}
+
+	return reason, stakes
 }

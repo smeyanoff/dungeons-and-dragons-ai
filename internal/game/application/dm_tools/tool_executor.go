@@ -429,19 +429,19 @@ func formatToolCallMessage(toolName, attributes, jsonContent string) string {
 		return "Применяется урон"
 
 	case "get_character_stats":
-		return "Получаются характеристики персонажа"
+		return "" // Убираем техническое сообщение
 
 	case "get_inventory":
-		return "Проверяется инвентарь"
+		return "" // Убираем техническое сообщение
 
 	case "get_battlefield_status":
-		return "Проверяется статус поля боя"
+		return "" // Убираем техническое сообщение
 
 	case "get_character_abilities":
-		return "Проверяются способности персонажа"
+		return "" // Убираем техническое сообщение
 
 	default:
-		// Для неизвестных инструментов просто удаляем
+		// Для всех инструментов просто удаляем без сообщений
 		return ""
 	}
 }

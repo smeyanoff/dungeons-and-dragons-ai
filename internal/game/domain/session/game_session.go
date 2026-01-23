@@ -90,6 +90,9 @@ type GameSession struct {
 	// MapImagePath — путь к сгенерированной "красивой" карте мира (изображение)
 	MapImagePath string `gorm:"type:text"`
 
+	// Auto-generate images for locations and NPCs
+	AutoGenerateImages bool `gorm:"default:false"`
+
 	// Cooperative play fields
 	IsCooperative     bool `gorm:"default:false"` // Включает режим совместной игры
 	ActivePlayerID    *uint `gorm:"index"`        // ID активного игрока (для очередности ходов)

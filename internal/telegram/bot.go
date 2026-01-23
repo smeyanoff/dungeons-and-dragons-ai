@@ -870,6 +870,8 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleCast(ctx, chatID, tgUserID, args)
 	case "image":
 		return b.handleImage(ctx, chatID, tgUserID, args)
+	case "autoimage":
+		return b.handleToggleAutoImage(ctx, chatID, tgUserID, args)
 	case "subscribe":
 		return b.handleSubscribe(ctx, chatID, tgUserID, args)
 	case "subscription":
@@ -4421,6 +4423,49 @@ func (a *playerRepoAdapter) GetByTgUserID(ctx context.Context, tgUserID int64) (
 
 func (a *playerRepoAdapter) Save(ctx context.Context, p *player.Player) error {
 	return a.repo.Save(ctx, p)
+}
+
+// handleToggleAutoImage включает/отключает автоматическую генерацию изображений
+func (b *Bot) handleToggleAutoImage(ctx context.Context, chatID int64, tgUserID int64, args string) error {
+	// Получаем текущую сессию
+	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+
+	if gs == nil {
+		msg := tgbotapi.NewMessage(chatID, "Игра не начата. Используйте /newgame для начала новой игры.")
+		return b.sendMessage(msg)
+	}
+
+	// Получаем анализатор из контекста (если он есть в сессии)
+	// Пока что просто возвращаем сообщение о статусе
+	currentStatus := "отключена"
+	if gs.AutoGenerateImages {
+		currentStatus = "включена"
+	}
+
+	var message string
+	if args == "on" || args == "включить" {
+		gs.AutoGenerateImages = true
+		// Сохраняем изменение в БД
+		if err := b.sessionRepo.Save(ctx, gs); err != nil {
+			logger.Warn("Failed to save auto-generate images setting", logger.ErrorField(err))
+		}
+		message = "✅ Автоматическая генерация изображений включена!\n\nТеперь при посещении новых локаций и встрече с NPC будут автоматически генерироваться изображения."
+	} else if args == "off" || args == "отключить" {
+		gs.AutoGenerateImages = false
+		// Сохраняем изменение в БД
+		if err := b.sessionRepo.Save(ctx, gs); err != nil {
+			logger.Warn("Failed to save auto-generate images setting", logger.ErrorField(err))
+		}
+		message = "❌ Автоматическая генерация изображений отключена.\n\nИзображения больше не будут генерироваться автоматически."
+	} else {
+		message = fmt.Sprintf("📸 Автоматическая генерация изображений: %s\n\nКоманды:\n• /autoimage on (включить) - автоматически генерировать изображения локаций и NPC\n• /autoimage off (отключить) - отключить автоматическую генерацию\n• /image [описание] - сгенерировать изображение вручную", currentStatus)
+	}
+
+	msg := tgbotapi.NewMessage(chatID, message)
+	return b.sendMessage(msg)
 }
 
 // getAbilityDisplayName возвращает читаемое название способности

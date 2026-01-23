@@ -541,6 +541,7 @@ func TestAnalyzeDMResponseUseCase_Execute(t *testing.T) {
 				questRepo,
 				inventoryRepo,
 				1,   // sessionID
+				false, // autoGenerateImages
 				123, // chatID
 				1,   // worldID
 				1,   // characterID

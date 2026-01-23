@@ -560,7 +560,9 @@ func (uc *HandleActionUseCase) Execute(
 				}
 				_ = uc.indexDocUC.Execute(ctx, doc)
 			}
-			return checkMsg, nil
+			// Добавляем сообщение о проверке к игровому контексту, но НЕ возвращаем его сразу
+			// Игра должна продолжаться с учетом необходимости проверки
+			gameContext = gameContext + "\n\n" + checkMsg
 		}
 	}
 
@@ -827,7 +829,8 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		gs.ChatID, // Передаем chatID для отправки уведомлений
 		gs.WorldID,
 		player.CharacterID,
-		player.ID, // Передаем playerID для проверки достижений
+		player.ID,     // Передаем playerID для проверки достижений
+		gs.AutoGenerateImages, // Используем настройку из сессии
 	)
 
 	// Настраиваем проверку достижений и уведомления в AnalyzeDMResponseUseCase
@@ -871,6 +874,9 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	if uc.indexDocUC != nil {
 		analyzer.SetRAGIndexer(uc.indexDocUC)
 	}
+
+	// Настраиваем доступ к полной сессии для естественных проверок
+	analyzer.SetFullSessionRepository(uc.sessionRepo)
 
 	// Анализируем ответ DM
 	analysis, err := analyzer.Execute(ctx, dmResponse)
@@ -1078,6 +1084,23 @@ func cleanTechnicalDetails(text string) string {
 			strings.Contains(lower, "tool_result") ||
 			strings.Contains(lower, "tool_name") ||
 			strings.Contains(lower, "arguments") {
+			continue
+		}
+		// Пропускаем технические сообщения о выполнении инструментов
+		if strings.Contains(lower, "получаются характеристики") ||
+			strings.Contains(lower, "проверяется инвентарь") ||
+			strings.Contains(lower, "проверяется статус поля боя") ||
+			strings.Contains(lower, "проверяются способности") ||
+			strings.Contains(lower, "выполняется проверка") ||
+			strings.Contains(lower, "выполняется спасбросок") ||
+			strings.Contains(lower, "оценивается результат") ||
+			strings.Contains(lower, "выполняется боевая атака") ||
+			strings.Contains(lower, "враг выполняет атаку") ||
+			strings.Contains(lower, "применяется урон") ||
+			strings.Contains(lower, "выполняется") ||
+			strings.Contains(lower, "проверяется") ||
+			strings.Contains(lower, "получаются") ||
+			strings.Contains(lower, "оценивается") {
 			continue
 		}
 		// Пропускаем пустые строки после удаления технических деталей
