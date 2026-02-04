@@ -1,116 +1,176 @@
 # Задачи команды разработки (Sprint Backlog)
 
-**Последнее обновление:** 2026-01-23
-**Текущий спринт:** Январь 2026 — исправление критических ошибок и стабилизация инфраструктуры
+**Последнее обновление:** 2026-02-02
+**Текущий спринт:** Февраль 2026 — исправление критических инфраструктурных проблем
 
-**Правило приоритета:** P0 ошибки → P1 ошибки → P2 улучшения геймплея.
-**Главный фокус:** фикс GigaChat TLS timeout, стабилизация DM Analyzer и LLM контекста.
+**Правило приоритета:** P0 ошибки → P1 ошибки → P2 улучшения геймплея (монетизация не берем).
 
 ---
 
 ## 🎯 Цель спринта
 
-- **Исправление критических ошибок**: GigaChat TLS timeout, DM Analyzer JSON, LLM context deadline
-- **Стабилизация инфраструктуры**: Telegram polling, LLM timeouts
-- **Новые игровые механики**: сессионные цели, совместные приключения
+- **Исправление критических блокеров**: GigaChat TLS, Database migrations, Runtime panics
+- **Стабилизация core механик**: DM Analyzer JSON, Combat detection
+- **Улучшение тестовой инфраструктуры**
 
 ---
 
-## 🚨 Активные задачи
+## 🚨 P0 — Критические ошибки (блокеры)
 
-### P0 — Критические ошибки ✅ ВЫПОЛНЕНО
+### 1. GigaChat TLS Certificate *(БЛОКИРУЕТ ВСЕ LLM)*
+**Симптом:** `tls: failed to verify certificate: x509: certificate signed by unknown authority`
+**Влияние:** 100% LLM запросов fail → невозможно создать игру
 
-- **GigaChat API: TLS Handshake Timeout** *(КРИТИЧНО)* ✅
-  - Симптом: `net/http: TLS handshake timeout` при всех запросах к GigaChat
-  - Влияние: Невозможно создать кампанию, LLM недоступен, полный блок игрового процесса
-  - Action items:
-    - Диагностировать network connectivity к GigaChat API ✅
-    - Проверить TLS конфигурацию и certificates ✅
-    - Добавить connection pooling и keep-alive ✅
-    - Реализовать circuit breaker для API failures ✅
-  - Как проверить: Успешные запросы к GigaChat API без TLS timeout ✅
+**Action items:**
+- [x] Добавить `GIGACHAT_SKIP_TLS_VERIFY=true` или настроить сертификаты
+- [x] Добавить fallback на stub content при TLS failures
 
-- **DM Analyzer: Усеченные JSON ответы** ✅
-  - Симптом: JSON обрывается (`"items_received":[`, `"npc_met":n`), 6 retry + fallback
-  - Влияние: Location events не генерируются, бой не стартует
-  - Action items:
-    - Увеличить лимит токенов analyzer (4096 → 8192) ✅
-    - Улучшить prompt для полного JSON ответа ✅
-    - Добавить strict JSON validation перед отправкой ✅
-    - Улучшить `tryRepairTruncatedJSON` для массивов ✅
-  - Как проверить: Analyzer всегда возвращает полный валидный JSON ✅
-
-- **Combat Detection: Неправильное определение боя** ✅
-  - Симптом: `combat_detected=false` при явных атаках ("гоблин атакует")
-  - Влияние: Бой не начинается автоматически
-  - Action items:
-    - Расширить `detectsCombatMarker` русскими ключевыми словами ✅
-    - Улучшить prompt с примерами распознавания боя ✅
-    - Добавить fallback анализ для извлечения врагов ✅
-    - Улучшить `validateCombatAnalysis` для битых полей ✅
-  - Как проверить: Все combat detection тесты PASS ✅
-
-### P1 — Стабилизация инфраструктуры ✅ ВЫПОЛНЕНО
-
-- **LLM Context Deadline Exceeded** ✅
-  - Симптом: `context deadline exceeded` при генерации квестов
-  - Влияние: Невозможно создать новую игру
-  - Action items:
-    - Увеличить timeout для LLM запросов (30s → 60s) ✅
-    - Оптимизировать промпты для уменьшения токенов ✅
-    - Добавить retry с exponential backoff ✅
-    - Реализовать fallback на stub контент ✅
-  - Как проверить: Стабильная генерация квестов без deadline exceeded ✅
-
-- **Telegram Polling: EOF ошибки** ✅
-  - Симптом: `unexpected EOF` при получении обновлений от Telegram API
-  - Влияние: Прерывания в коммуникации с пользователями
-  - Action items:
-    - Увеличить timeout polling (30s → 60s) ✅
-    - Добавить exponential backoff с jitter ✅
-    - Улучшить обработку network ошибок ✅
-    - Добавить connection pooling ✅
-  - Как проверить: Стабильное polling без EOF ошибок ✅
-
-### P2 — Улучшения геймплея (новые механики) ✅ ВЫПОЛНЕНО
-
-- **Сессионные цели** ✅
-  - Цели типа "дойти до конца данжа" с таймером
-  - Мотивация на продолжение сессии
-  - Action items:
-    - Реализовать систему сессионных целей ✅
-    - Добавить таймеры и прогресс-трекинг ✅
-    - Интеграция с системой достижений ✅
-  - Как проверить: Игроки получают цели на сессию и видят прогресс ✅
-
-- **Совместные приключения (2-3 игрока)** ✅
-  - Очередь решений для нескольких игроков
-  - Повышение вовлеченности через кооператив
-  - Action items:
-    - Реализовать очередь решений для мультиплеера ✅
-    - Добавить синхронизацию состояний игроков ✅
-    - Интеграция с Telegram группами ✅
-  - Как проверить: 2-3 игрока могут совместно играть в одном приключении ✅
+**Проверка:** Успешные запросы к GigaChat API без TLS ошибок
 
 ---
 
-## ✅ СПРИНТ ЗАВЕРШЕН
+### 2. Database Migration Failure *(БЛОКИРУЕТ COOPERATIVE)*
+**Симптом:** `relation "session_goals" does not exist`
+**Влияние:** Cooperative режим и сессионные цели недоступны
 
-**Все задачи P0, P1 и P2 успешно выполнены!**
+**Action items:**
+- [x] Выполнить `go run scripts/migrate.go` для pending миграций
+- [x] Добавить database health checks при старте приложения
+- [x] Автоматизировать миграции в CI/CD pipeline
 
-### Выполненные улучшения:
-- **Критические исправления**: GigaChat TLS timeout, DM Analyzer JSON, Combat Detection
-- **Стабилизация инфраструктуры**: LLM timeouts, Telegram polling, connection pooling
-- **Новые возможности**: Сессионные цели с таймерами, cooperative режим для 2-3 игроков
-
-### Следующие шаги:
-- Обновить интеграционные тесты для совместимости с новыми API
-- Добавить мониторинг для новых метрик (circuit breaker, session goals)
-- Рассмотреть добавление новых игровых механик из PRODUCT_IDEAS.md
+**Проверка:** Все таблицы существуют, cooperative режим работает
 
 ---
 
-## 📝 Правило обновления задач
+### 3. Runtime Panics: Nil Pointer *(CRASH В PRODUCTION)*
+**Симптом:** `panic: runtime error: invalid memory address or nil pointer dereference`
+**Влияние:** Тесты падают, возможные crashes в production
 
-- Взяли задачу → **⏳ In Progress**, исполнитель, ссылка на PR.
-- Завершили → удалить из списка, обновить `CODE_REVIEW.md` (снять риск) и `PRODUCT_IDEAS.md` (документировать UX).
+**Action items:**
+- [x] Добавить nil checks в cooperative mode логике
+- [x] Defensive programming для session/player initialization
+- [x] Улучшить error handling для missing entities
+
+**Проверка:** Все тесты проходят без runtime panics
+
+---
+
+### 4. DM Analyzer: JSON Parsing *(ВЛИЯЕТ НА ГЕЙМПЛЕЙ)*
+**Симптом:** JSON обрывается (`"npc_met":n`), 6 retry + fallback
+**Влияние:** Location events не генерируются, пропуск триггеров
+
+**Action items:**
+- [x] Увеличить token limit analyzer (4096 → 8192)
+- [x] Улучшить JSON validation и repair logic
+- [x] Оптимизировать prompt для complete responses
+
+**Проверка:** Analyzer возвращает valid JSON в >95% случаев
+
+---
+
+### 5. Combat Detection: False Negatives *(ВЛИЯЕТ НА БОЙ)*
+**Симптом:** `combat_detected=false` при явных атаках ("гоблин атакует")
+**Влияние:** Бой не начинается автоматически
+
+**Action items:**
+- [x] Расширить `detectsCombatMarker` русскими ключевыми словами (атакует, нападает, бьёт)
+- [x] Улучшить prompt с примерами combat на русском
+- [x] Добавить fallback enemy extraction
+
+**Проверка:** Combat detection accuracy >95%
+
+---
+
+## ⚠️ P1 — Стабилизация инфраструктуры
+
+### 6. Test Infrastructure: Database Isolation
+**Симптом:** `record not found` при поиске sessions/players в тестах
+**Влияние:** Интеграционные тесты не работают корректно
+
+**Action items:**
+- [x] Улучшить test data setup и cleanup
+- [x] Добавить transaction isolation
+- [x] Реализовать test database fixtures
+
+**Проверка:** Все integration тесты проходят
+
+---
+
+### 7. /battlefield нестабильность
+**Симптом:** Команда не отображает информацию о бое или падает
+**Влияние:** Нет прозрачности боевой системы
+
+**Action items:**
+- [x] Добавить defensive checks для отсутствующих данных боя
+- [x] Логирование ошибок для диагностики
+
+**Проверка:** `/battlefield` корректно показывает состояние боя
+
+---
+
+### 8. DM Analyzer: Улучшение Prompt
+**Симптом:** Недостаточно качественные JSON ответы
+**Влияние:** Увеличивает retry и fallback случаи
+
+**Action items:**
+- [x] Оптимизировать JSON prompt для DM Analyzer
+- [x] Фикс GigaChat token expiry (единицы измерения)
+- [x] Валидация полей (защита от пустых enemies при combat_detected=true)
+
+**Проверка:** Стабильные полные JSON ответы
+
+---
+
+## 📋 P2 — Игровые улучшения (backlog)
+
+### Гибридный бой
+- Авто + ручные решения в бою
+- Динамический выбор тактики
+
+### Динамические квесты
+- Квесты реагируют на действия игрока
+- Ветвление сюжета
+
+### Система репутации NPC
+- Отношения с NPC влияют на квесты и диалоги
+
+---
+
+## ✅ Завершено в текущем спринте
+
+| Задача | Результат | Дата |
+|--------|-----------|------|
+| GigaChat Function Calling | Тулзы в `functions` в запросе | 2026-01 |
+| Cooldown система проверок | Guardrails: budget/cooldown/anti-trivial | 2026-01 |
+| Прогресс персонажа | Визуализация роста и статистика | 2026-01 |
+| JSON Stability Crisis | Улучшен repair + pre-validation | 2026-01 |
+| LLM Context Deadline | Увеличены timeouts (30s → 60s) | 2026-01 |
+| Image download 403 | X-Client-ID header + retry | 2026-01 |
+| GigaChat TLS Certificate | Skip TLS env + TLS fallback stub | 2026-02 |
+| Database migrations | Session goals table + health checks | 2026-02 |
+| Runtime panics | Defensive nil checks in coop flow | 2026-02 |
+| DM Analyzer JSON parsing | 8192 tokens + JSON repair/prompt | 2026-02 |
+| Combat detection | Expanded markers + prompt + fallback | 2026-02 |
+| Test infra DB isolation | Migrations + cleanup | 2026-02 |
+| /battlefield stability | Defensive checks + logging | 2026-02 |
+| DM Analyzer prompt quality | Schema validation + token expiry fix | 2026-02 |
+
+---
+
+## 📈 Ключевые метрики
+
+| Метрика | Цель | Критичность |
+|---------|------|-------------|
+| GigaChat TLS errors | 0 | P0 |
+| Migration errors | 0 | P0 |
+| Runtime panics | 0 | P0 |
+| DM Analyzer valid JSON | >95% | P1 |
+| Combat detection accuracy | >95% | P1 |
+| Checks per 100 messages | <5 | P1 |
+
+---
+
+## 📝 Workflow обновления задач
+
+1. Взяли задачу → отметить **⏳ In Progress**, добавить исполнителя
+2. Завершили → перенести в "Завершено", обновить CODE_REVIEW.md и PRODUCT_IDEAS.md

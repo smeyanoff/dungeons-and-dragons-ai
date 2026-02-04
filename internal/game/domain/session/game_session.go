@@ -13,17 +13,17 @@ import (
 
 // Companion представляет NPC компаньона в отряде игрока
 type Companion struct {
-	ID          uint   `gorm:"primaryKey"`
+	ID            uint `gorm:"primaryKey"`
 	GameSessionID uint `gorm:"index"`
-	Name        string
-	Description string
-	Class       string
-	Level       int
-	HP          int
-	MaxHP       int
-	AC          int
-	AttackBonus int
-	DamageDice  string
+	Name          string
+	Description   string
+	Class         string
+	Level         int
+	HP            int
+	MaxHP         int
+	AC            int
+	AttackBonus   int
+	DamageDice    string
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -41,11 +41,11 @@ const (
 type SessionGoalType string
 
 const (
-	GoalTypeExploration  SessionGoalType = "exploration"  // Исследовать определенное количество локаций
-	GoalTypeCombat       SessionGoalType = "combat"       // Победить определенное количество врагов
-	GoalTypeExperience   SessionGoalType = "experience"   // Получить определенное количество опыта
-	GoalTypeTimeLimit    SessionGoalType = "time_limit"   // Закончить квест за определенное время
-	GoalTypeAchievement  SessionGoalType = "achievement"  // Получить определенное достижение
+	GoalTypeExploration SessionGoalType = "exploration" // Исследовать определенное количество локаций
+	GoalTypeCombat      SessionGoalType = "combat"      // Победить определенное количество врагов
+	GoalTypeExperience  SessionGoalType = "experience"  // Получить определенное количество опыта
+	GoalTypeTimeLimit   SessionGoalType = "time_limit"  // Закончить квест за определенное время
+	GoalTypeAchievement SessionGoalType = "achievement" // Получить определенное достижение
 )
 
 type SessionGoalStatus string
@@ -59,16 +59,16 @@ const (
 
 // SessionGoal представляет цель сессии игры
 type SessionGoal struct {
-	ID          uint              `gorm:"primaryKey"`
-	GameSessionID uint            `gorm:"index"`
-	Type        SessionGoalType   `gorm:"type:varchar(32);not null"`
-	Description string            `gorm:"type:text"`
-	Status      SessionGoalStatus `gorm:"type:varchar(16);not null;default:'active'"`
+	ID            uint              `gorm:"primaryKey"`
+	GameSessionID uint              `gorm:"index"`
+	Type          SessionGoalType   `gorm:"type:varchar(32);not null"`
+	Description   string            `gorm:"type:text"`
+	Status        SessionGoalStatus `gorm:"type:varchar(16);not null;default:'active'"`
 
 	// Параметры цели
-	TargetValue   int `gorm:"default:0"`    // Целевое значение (количество локаций, опыт, etc.)
-	CurrentValue  int `gorm:"default:0"`    // Текущее значение прогресса
-	TimeLimit     *time.Time `gorm:"index"` // Ограничение по времени (опционально)
+	TargetValue  int        `gorm:"default:0"` // Целевое значение (количество локаций, опыт, etc.)
+	CurrentValue int        `gorm:"default:0"` // Текущее значение прогресса
+	TimeLimit    *time.Time `gorm:"index"`     // Ограничение по времени (опционально)
 
 	// Метаданные
 	CreatedAt time.Time
@@ -94,10 +94,10 @@ type GameSession struct {
 	AutoGenerateImages bool `gorm:"default:false"`
 
 	// Cooperative play fields
-	IsCooperative     bool `gorm:"default:false"` // Включает режим совместной игры
-	ActivePlayerID    *uint `gorm:"index"`        // ID активного игрока (для очередности ходов)
-	MaxPlayers        int  `gorm:"default:1"`     // Максимальное количество игроков (1-3)
-	PlayerTurnOrder   []uint `gorm:"-"`          // Порядок ходов игроков (в памяти, не в БД)
+	IsCooperative   bool   `gorm:"default:false"` // Включает режим совместной игры
+	ActivePlayerID  *uint  `gorm:"index"`         // ID активного игрока (для очередности ходов)
+	MaxPlayers      int    `gorm:"default:1"`     // Максимальное количество игроков (1-3)
+	PlayerTurnOrder []uint `gorm:"-"`             // Порядок ходов игроков (в памяти, не в БД)
 
 	// Pending ability check (ожидаемая проверка характеристики)
 	PendingAbilityCheckID          string `gorm:"type:varchar(64);index"`
@@ -109,10 +109,10 @@ type GameSession struct {
 	PendingAbilityCheckNotified    bool
 
 	// Adaptive difficulty statistics (адаптивная сложность)
-	SessionSuccessCount   int `gorm:"default:0"` // Количество успешных проверок в сессии
-	SessionFailureCount   int `gorm:"default:0"` // Количество провальных проверок в сессии
-	SessionChecksCount    int `gorm:"default:0"` // Общее количество проверок в сессии
-	SessionDifficultyMod  int `gorm:"default:0"` // Модификатор сложности для сессии (-2 до +2)
+	SessionSuccessCount  int `gorm:"default:0"` // Количество успешных проверок в сессии
+	SessionFailureCount  int `gorm:"default:0"` // Количество провальных проверок в сессии
+	SessionChecksCount   int `gorm:"default:0"` // Общее количество проверок в сессии
+	SessionDifficultyMod int `gorm:"default:0"` // Модификатор сложности для сессии (-2 до +2)
 
 	SessionGoals []SessionGoal `gorm:"foreignKey:GameSessionID"` // Цели текущей сессии
 
@@ -196,19 +196,19 @@ func (s *GameSession) GenerateSessionGoals() {
 			goal.TargetValue = 3 + int(time.Now().UnixNano()%3) // 3-5 локаций
 			goal.Description = fmt.Sprintf("Исследовать %d новых локаций", goal.TargetValue)
 			// Добавляем таймер для exploration целей (2-3 часа)
-			timeLimit := now.Add(time.Duration(2 + int(time.Now().UnixNano()%2)) * time.Hour)
+			timeLimit := now.Add(time.Duration(2+int(time.Now().UnixNano()%2)) * time.Hour)
 			goal.TimeLimit = &timeLimit
 		case GoalTypeCombat:
 			goal.TargetValue = 2 + int(time.Now().UnixNano()%3) // 2-4 побед в бою
 			goal.Description = fmt.Sprintf("Победить в %d боях", goal.TargetValue)
 			// Таймер для combat целей (1-2 часа)
-			timeLimit := now.Add(time.Duration(1 + int(time.Now().UnixNano()%2)) * time.Hour)
+			timeLimit := now.Add(time.Duration(1+int(time.Now().UnixNano()%2)) * time.Hour)
 			goal.TimeLimit = &timeLimit
 		case GoalTypeExperience:
 			goal.TargetValue = 500 + int(time.Now().UnixNano()%1000) // 500-1500 опыта
 			goal.Description = fmt.Sprintf("Получить %d опыта", goal.TargetValue)
 			// Таймер для experience целей (3-4 часа)
-			timeLimit := now.Add(time.Duration(3 + int(time.Now().UnixNano()%2)) * time.Hour)
+			timeLimit := now.Add(time.Duration(3+int(time.Now().UnixNano()%2)) * time.Hour)
 			goal.TimeLimit = &timeLimit
 		}
 
@@ -284,6 +284,9 @@ func (s *GameSession) DisableCooperativeMode() {
 
 // AddPlayerToSession добавляет игрока в сессию
 func (s *GameSession) AddPlayerToSession(player *player.Player) error {
+	if player == nil {
+		return fmt.Errorf("player is nil")
+	}
 	if !s.IsCooperative && len(s.Players) > 0 {
 		return fmt.Errorf("session is not in cooperative mode")
 	}

@@ -124,6 +124,12 @@ type JSONSchemaProperties map[string]JSONSchemaParam
 
 // BuildJSONSchema создает JSON Schema для параметров инструмента
 func BuildJSONSchema(properties JSONSchemaProperties, required []string) json.RawMessage {
+	if properties == nil {
+		properties = JSONSchemaProperties{}
+	}
+	if required == nil {
+		required = []string{}
+	}
 	schema := map[string]interface{}{
 		"type":       "object",
 		"properties": properties,

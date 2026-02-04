@@ -305,6 +305,8 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 			req.Header.Set("Content-Type", "application/json")
 		}
 
+		setSessionIDHeader(ctx, req)
+
 		// Добавляем X-Client-ID для всех API запросов (LLM и image)
 		if (isLLMRequest || isImageRequest) && c.cfg.ClientID != "" {
 			clientID := c.cfg.ClientID
@@ -373,6 +375,7 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 			req.Header.Set("Authorization", "Bearer "+newToken)
 			req.Header.Set("Accept", "application/json")
 			req.Header.Set("Content-Type", "application/json")
+			setSessionIDHeader(ctx, req)
 
 			// Добавляем X-Client-ID для image-related запросов
 			if isImageRequest && c.cfg.ClientID != "" {
@@ -402,6 +405,21 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 				url, c.cfg.ClientID, req.Header.Get("X-Client-ID"), req.Header.Get("Authorization") != "")
 			lastErr = fmt.Errorf("gigachat error status 403: Permission denied - check ClientID permissions, X-Client-ID, and API access rights. Response: %s", string(data))
 			break
+		}
+
+		// Если получили 5xx, пробуем повторить с задержкой
+		if resp.StatusCode >= 500 {
+			data, _ := io.ReadAll(resp.Body)
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				log.Printf("Warning: failed to close response body: %v", closeErr)
+			}
+			lastErr = fmt.Errorf("gigachat error status %d: %s", resp.StatusCode, string(data))
+			log.Printf("GigaChat: Server error %d for %s %s, attempt %d/%d. Response: %s",
+				resp.StatusCode, method, url, attempt+1, maxRetries+1, string(data))
+			if attempt < maxRetries {
+				continue
+			}
+			return nil, lastErr
 		}
 
 		// Если получили 429 Too Many Requests, пробуем повторить с задержкой
@@ -585,6 +603,8 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			req.Header.Set("Content-Type", "application/json")
 		}
 
+		setSessionIDHeader(ctx, req)
+
 		// Добавляем X-Client-ID для всех API запросов (LLM и image)
 		if (isLLMRequest || isImageRequest) && c.cfg.ClientID != "" {
 			clientID := c.cfg.ClientID
@@ -660,6 +680,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 			req.Header.Set("Authorization", "Bearer "+newToken)
 			req.Header.Set("Accept", "application/json")
 			req.Header.Set("Content-Type", "application/json")
+			setSessionIDHeader(ctx, req)
 
 			// Добавляем X-Client-ID для image-related запросов
 			if isImageRequest && c.cfg.ClientID != "" {
@@ -695,6 +716,21 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 				url, c.cfg.ClientID, req.Header.Get("X-Client-ID"), req.Header.Get("Authorization") != "")
 			lastErr = fmt.Errorf("gigachat error status 403: Permission denied - check ClientID permissions, X-Client-ID, and API access rights. Response: %s", string(data))
 			break
+		}
+
+		// Если получили 5xx, пробуем повторить с задержкой
+		if resp.StatusCode >= 500 {
+			data, _ := io.ReadAll(resp.Body)
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				log.Printf("Warning: failed to close response body: %v", closeErr)
+			}
+			lastErr = fmt.Errorf("gigachat error status %d: %s", resp.StatusCode, string(data))
+			log.Printf("GigaChat: Server error %d for %s %s, attempt %d/%d. Response: %s",
+				resp.StatusCode, method, url, attempt+1, maxRetries+1, string(data))
+			if attempt < maxRetries {
+				continue
+			}
+			return nil, lastErr
 		}
 
 		// Если получили 429 Too Many Requests, пробуем повторить с задержкой
@@ -799,4 +835,57 @@ func isTimeoutError(err error) bool {
 	return strings.Contains(errStr, "timeout") ||
 		strings.Contains(errStr, "deadline exceeded") ||
 		strings.Contains(errStr, "Client.Timeout exceeded")
+}
+
+func setSessionIDHeader(ctx context.Context, req *http.Request) {
+	sessionID, ok := sessionIDFromContext(ctx)
+	if !ok || sessionID == "" {
+		return
+	}
+	req.Header.Set("X-Session-ID", sessionID)
+	log.Printf("[GigaChat] Set X-Session-ID: '%s'", sessionID)
+}
+
+func sessionIDFromContext(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+
+	if value := ctx.Value("session_id"); value != nil {
+		switch v := value.(type) {
+		case string:
+			if v == "" {
+				return "", false
+			}
+			return v, true
+		case uint:
+			return strconv.FormatUint(uint64(v), 10), true
+		case uint64:
+			return strconv.FormatUint(v, 10), true
+		case int:
+			return strconv.FormatInt(int64(v), 10), true
+		case int64:
+			return strconv.FormatInt(v, 10), true
+		}
+	}
+
+	if value := ctx.Value("chat_id"); value != nil {
+		switch v := value.(type) {
+		case string:
+			if v == "" {
+				return "", false
+			}
+			return v, true
+		case uint:
+			return strconv.FormatUint(uint64(v), 10), true
+		case uint64:
+			return strconv.FormatUint(v, 10), true
+		case int:
+			return strconv.FormatInt(int64(v), 10), true
+		case int64:
+			return strconv.FormatInt(v, 10), true
+		}
+	}
+
+	return "", false
 }

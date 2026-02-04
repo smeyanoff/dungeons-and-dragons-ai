@@ -32,9 +32,9 @@ import (
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
-	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/feedback"
+	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/rating"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/subscription"
@@ -171,12 +171,12 @@ func NewBot(
 	if httpClient, ok := api.Client.(*http.Client); ok {
 		if httpClient.Transport == nil {
 			transport := &http.Transport{
-				MaxIdleConns:        100,
-				IdleConnTimeout:     90 * time.Second,
-				MaxIdleConnsPerHost: 10,
+				MaxIdleConns:          100,
+				IdleConnTimeout:       90 * time.Second,
+				MaxIdleConnsPerHost:   10,
 				ResponseHeaderTimeout: 30 * time.Second,
 				ExpectContinueTimeout: 1 * time.Second,
-				DisableKeepAlives: false,
+				DisableKeepAlives:     false,
 			}
 			httpClient.Transport = transport
 		}
@@ -445,7 +445,7 @@ func (b *Bot) Start(ctx context.Context) error {
 	offset := 0
 	backoff := 1 * time.Second
 	const maxBackoff = 120 * time.Second // Увеличиваем максимальный backoff для лучшей стабильности
-	const logInterval = 60 * time.Second  // Увеличиваем интервал логирования
+	const logInterval = 60 * time.Second // Увеличиваем интервал логирования
 	lastPollLog := time.Time{}
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	consecutiveErrors := 0 // Счетчик последовательных ошибок
@@ -635,6 +635,15 @@ func getMapKeys(m map[string]interface{}) []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+func isDuplicateChatIDError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate key value violates unique constraint") &&
+		strings.Contains(msg, "idx_game_sessions_chat_id")
 }
 
 // configureHTTPClient настраивает HTTP клиент с connection pooling для улучшения стабильности polling
@@ -827,7 +836,7 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 	case "help":
 		return b.handleHelp(ctx, chatID)
 	case "newgame":
-		return b.handleNewGame(ctx, chatID, args)
+		return b.handleNewGame(ctx, chatID, tgUserID, args)
 	case "endgame":
 		return b.handleEndGame(ctx, chatID)
 	case "createcharacter":
@@ -989,7 +998,7 @@ func (b *Bot) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) error {
+func (b *Bot) handleNewGame(ctx context.Context, chatID int64, tgUserID int64, theme string) error {
 	if theme == "" {
 		theme = "классическое фэнтези"
 	}
@@ -1035,7 +1044,9 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) err
 	}
 
 	// Создаём кампанию
-	world, err := b.initCampaignUC.Execute(ctx, theme)
+	llmCtx := context.WithValue(ctx, "chat_id", chatID)
+	llmCtx = context.WithValue(llmCtx, "tg_user_id", tgUserID)
+	world, err := b.initCampaignUC.Execute(llmCtx, theme)
 	if err != nil {
 		logger.Error("Failed to create campaign",
 			logger.ErrorField(err),
@@ -1066,6 +1077,30 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) err
 	}
 
 	if err := b.sessionRepo.Save(ctx, gs); err != nil {
+		if isDuplicateChatIDError(err) {
+			// На всякий случай проверяем, не существует ли активная сессия, и пробуем очистить завершенную.
+			existing, getErr := b.sessionRepo.GetByChatID(ctx, chatID)
+			if getErr == nil && existing != nil && existing.IsActive() {
+				msg := tgbotapi.NewMessage(chatID, "У вас уже есть активная игра. Используйте /endgame для завершения текущей игры перед началом новой.")
+				return b.sendMessage(msg)
+			}
+			if delErr := b.sessionRepo.Delete(ctx, chatID); delErr != nil {
+				logger.Error("Failed to delete existing session after duplicate key error",
+					logger.ErrorField(delErr),
+					logger.Int64("chat_id", chatID),
+				)
+			} else {
+				logger.Info("Deleted existing session after duplicate key error, retrying save",
+					logger.Int64("chat_id", chatID),
+				)
+				if retryErr := b.sessionRepo.Save(ctx, gs); retryErr == nil {
+					goto sessionSaved
+				} else {
+					err = retryErr
+				}
+			}
+		}
+
 		logger.Error("Failed to save game session",
 			logger.ErrorField(err),
 			logger.Int64("chat_id", chatID),
@@ -1080,6 +1115,7 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) err
 		}
 		return err
 	}
+sessionSaved:
 	logger.Info("Game session saved",
 		logger.Int64("chat_id", chatID),
 		logger.Uint("session_id", gs.ID),
@@ -1139,8 +1175,8 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, theme string) err
 			}
 		}
 
-	imgCtx, cancel := context.WithTimeout(ctx, 120*time.Second) // Увеличиваем таймаут для изображений с учетом retry
-	defer cancel()
+		imgCtx, cancel := context.WithTimeout(ctx, 120*time.Second) // Увеличиваем таймаут для изображений с учетом retry
+		defer cancel()
 		req := imageapp.GenerateImageRequest{
 			SystemPrompt:    "You are a fantasy cartographer. Create beautiful D&D-style maps with clear landmarks and readable layout. No text labels on the map itself.",
 			UserPrompt:      sb.String(),
@@ -1479,6 +1515,10 @@ func (b *Bot) handleCallbackQuery(ctx context.Context, query *tgbotapi.CallbackQ
 
 func (b *Bot) handleMapMoveCallback(ctx context.Context, query *tgbotapi.CallbackQuery, toLocationID uint) error {
 	chatID := query.Message.Chat.ID
+	tgUserID := int64(0)
+	if query.From != nil {
+		tgUserID = query.From.ID
+	}
 
 	// Отвечаем на callback, чтобы Telegram убрал "loading"
 	callback := tgbotapi.NewCallback(query.ID, "Перемещаюсь...")
@@ -1489,7 +1529,16 @@ func (b *Bot) handleMapMoveCallback(ctx context.Context, query *tgbotapi.Callbac
 		return b.editMessage(edit, chatID, "Навигация по карте временно недоступна.")
 	}
 
-	resp, err := b.moveToLocationUC.Execute(ctx, mapapp.MoveToLocationRequest{
+	gsForContext, _ := b.sessionRepo.GetByChatID(ctx, chatID)
+	ctxWithIDs := context.WithValue(ctx, "chat_id", chatID)
+	if tgUserID != 0 {
+		ctxWithIDs = context.WithValue(ctxWithIDs, "tg_user_id", tgUserID)
+	}
+	if gsForContext != nil {
+		ctxWithIDs = context.WithValue(ctxWithIDs, "session_id", gsForContext.ID)
+	}
+
+	resp, err := b.moveToLocationUC.Execute(ctxWithIDs, mapapp.MoveToLocationRequest{
 		ChatID:       chatID,
 		ToLocationID: &toLocationID,
 	})
@@ -2011,7 +2060,7 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					if result.Success {
 						if reason != "" && stakes != "" {
 							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s успешно %s (DC %d, бросок %d). Опиши положительные последствия: %s",
-								result.CharacterName, reason, stakes)
+								result.CharacterName, reason, result.DC, result.Total, stakes)
 						} else {
 							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s прошел проверку %s (DC %d, бросок %d). Продолжи историю с положительными последствиями.",
 								result.CharacterName, result.Ability, result.DC, result.Total)
@@ -2019,7 +2068,7 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					} else {
 						if reason != "" && stakes != "" {
 							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s не смог %s (DC %d, бросок %d). Опиши негативные последствия: %s",
-								result.CharacterName, reason, stakes)
+								result.CharacterName, reason, result.DC, result.Total, stakes)
 						} else {
 							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s провалил проверку %s (DC %d, бросок %d). Продолжи историю с негативными последствиями.",
 								result.CharacterName, result.Ability, result.DC, result.Total)
@@ -2063,7 +2112,7 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					if result.Success {
 						if reason != "" && stakes != "" {
 							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s успешно %s (DC %d, бросок %d). Опиши положительные последствия: %s",
-								result.CharacterName, reason, stakes)
+								result.CharacterName, reason, result.DC, result.Total, stakes)
 						} else {
 							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s прошел проверку %s (DC %d, бросок %d). Продолжи историю с положительными последствиями.",
 								result.CharacterName, result.Ability, result.DC, result.Total)
@@ -2071,7 +2120,7 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					} else {
 						if reason != "" && stakes != "" {
 							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s не смог %s (DC %d, бросок %d). Опиши негативные последствия: %s",
-								result.CharacterName, reason, stakes)
+								result.CharacterName, reason, result.DC, result.Total, stakes)
 						} else {
 							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s провалил проверку %s (DC %d, бросок %d). Продолжи историю с негативными последствиями.",
 								result.CharacterName, result.Ability, result.DC, result.Total)
@@ -2978,6 +3027,16 @@ func (b *Bot) handleAttack(ctx context.Context, chatID int64, action string) err
 
 // handleBattlefield обрабатывает команду /battlefield для отображения поля боя
 func (b *Bot) handleBattlefield(ctx context.Context, chatID int64, args string) error {
+	if b.sessionRepo == nil {
+		logger.Error("Session repository is not initialized for battlefield")
+		errorMsg := tgbotapi.NewMessage(chatID, "Ошибка: репозиторий сессий недоступен")
+		return b.sendMessage(errorMsg)
+	}
+	if b.combatRepo == nil {
+		logger.Error("Combat repository is not initialized for battlefield")
+		errorMsg := tgbotapi.NewMessage(chatID, "Ошибка: боевая система недоступна")
+		return b.sendMessage(errorMsg)
+	}
 	// Получаем сессию
 	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
 	if err != nil {

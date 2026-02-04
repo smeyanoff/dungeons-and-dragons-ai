@@ -96,66 +96,6 @@ func GenerateLocationsPromptStrict(worldTheme, mainQuestTitle string) string {
 }`, worldTheme, mainQuestTitle)
 }
 
-// GenerateLocationPredefinedChecksPrompt создает промпт для генерации предопределенных проверок для локации
-func GenerateLocationPredefinedChecksPrompt(locationName, locationDescription string) string {
-	return fmt.Sprintf(`Ты — Dungeon Master в D&D. Создай предопределенные проверки навыков для локации.
-
-Локация: %s
-Описание: %s
-
-Создай 1-3 предопределенные проверки (проверки характеристик, которые игрок может выполнить в этой локации).
-
-ВАЖНО:
-- Ответь ТОЛЬКО валидным JSON без markdown блоков
-- Убедись, что JSON полностью закрыт
-
-Формат ответа:
-
-{
-  "predefined_checks": [
-    {
-      "ability": "wisdom|dexterity|strength|constitution|intelligence|charisma",
-      "dc": 12,
-      "description": "Проверка Восприятия (DC 12) - заметить скрытую дверь",
-      "location_hint": "на стене в восточной части зала"
-    }
-  ]
-}
-
-Примеры предопределенных проверок:
-- Проверка Восприятия (Wisdom) DC 12 - заметить скрытую дверь
-- Проверка Ловкости (Dexterity) DC 15 - пройти по узкому мосту
-- Проверка Силы (Strength) DC 14 - поднять камень, блокирующий проход
-- Проверка Интеллекта (Intelligence) DC 13 - разгадать древнюю загадку на стене`, locationName, locationDescription)
-}
-
-// GenerateLocationPredefinedChecksPromptStrict создает более строгий промпт для retry
-func GenerateLocationPredefinedChecksPromptStrict(locationName, locationDescription string) string {
-	return fmt.Sprintf(`Ты — Dungeon Master в D&D. ВАЖНО: Ответь ТОЛЬКО валидным JSON без markdown и комментариев.
-
-Создай 1-2 предопределенные проверки навыков для локации.
-Локация: %s
-Описание: %s
-
-Ответ ТОЛЬКО в JSON:
-{
-  "predefined_checks": [
-    {
-      "ability": "wisdom|dexterity|strength|constitution|intelligence|charisma",
-      "dc": 12,
-      "description": "короткое описание проверки",
-      "location_hint": "конкретное место в локации"
-    }
-  ]
-}
-
-Требования:
-- ability и dc обязательны
-- dc в диапазоне 8-20
-- description короткая (до 120 символов)
-- location_hint обязателен`, locationName, locationDescription)
-}
-
 // GenerateLocationNPCsPrompt создает промпт для генерации NPC локации
 func GenerateLocationNPCsPrompt(locationName, locationDescription string) string {
 	return fmt.Sprintf(`Ты — Dungeon Master в D&D. Создай NPC для локации.

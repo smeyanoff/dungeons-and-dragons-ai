@@ -464,7 +464,7 @@ func (uc *HandleActionUseCase) Execute(
 		strings.Contains(playerMessage, "❌ ПРОВАЛ проверки")
 
 	if !isSystemMessage && uc.analyzePlayerActionUC != nil {
-		analysisCtx, analysisCancel := context.WithTimeout(ctx, 10*time.Second)
+		analysisCtx, analysisCancel := context.WithTimeout(llmCtx, 10*time.Second)
 		defer analysisCancel()
 		analysis, err := uc.analyzePlayerActionUC.Execute(analysisCtx, gs, playerMessage, gameContext)
 		if err != nil {
@@ -533,7 +533,7 @@ func (uc *HandleActionUseCase) Execute(
 	}
 
 	// Если анализатор решил, что нужна проверка навыка — создаем pending check СИСТЕМОЙ
-	// и возвращаем игроку текстовую подсказку. LLM-DM не участвует и не должен просить /roll.
+	// и сразу возвращаем игроку текстовую подсказку. LLM-DM не участвует и не должен просить /roll.
 	if actionAnalysis != nil && actionAnalysis.NeedsAbilityCheck && actionAnalysis.AbilityCheck != nil && !actionAnalysis.SimpleAction {
 		checkMsg, handled, err := uc.createAbilityCheckFromAnalyzer(ctx, gs, actionAnalysis.AbilityCheck)
 		if err != nil {
@@ -564,9 +564,9 @@ func (uc *HandleActionUseCase) Execute(
 				}
 				_ = uc.indexDocUC.Execute(ctx, doc)
 			}
-			// Добавляем сообщение о проверке к игровому контексту, но НЕ возвращаем его сразу
-			// Игра должна продолжаться с учетом необходимости проверки
-			gameContext = gameContext + "\n\n" + checkMsg
+			// Критично для UX: игрок должен увидеть prompt до продолжения истории.
+			// Дальнейшая генерация DM-ответа откладывается до выполнения /roll.
+			return sanitizePlayerFacingResponse(checkMsg), nil
 		}
 	}
 
@@ -628,7 +628,7 @@ func (uc *HandleActionUseCase) Execute(
 			logger.Uint("session_id", gs.ID),
 			logger.Int("prompt_length", len(prompt)),
 		)
-		llmCtx, llmCancel := context.WithTimeout(ctx, 60*time.Second)
+		llmCtx, llmCancel := context.WithTimeout(llmCtx, 60*time.Second)
 		defer llmCancel()
 		startTime := time.Now()
 
@@ -734,7 +734,7 @@ func (uc *HandleActionUseCase) Execute(
 
 	// Анализируем ответ DM для автоматического определения боевых ситуаций, квестов и опыта
 	// Получаем модифицированный response с маркерами изображений и сообщение о начале боя
-	modifiedResponse, combatStartMessage := uc.analyzeDMResponse(ctx, gs, response)
+	modifiedResponse, combatStartMessage := uc.analyzeDMResponse(llmCtx, gs, response)
 
 	// Используем модифицированный response (с маркерами изображений)
 	response = modifiedResponse

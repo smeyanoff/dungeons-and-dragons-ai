@@ -37,21 +37,8 @@ func NewInitCampaignUseCase(llm domain.LLM, worldRepo WorldRepository) *InitCamp
 }
 
 const (
-	// Важно: в GigaChat без явного max_tokens сервер может применять небольшой дефолт,
-	// из-за чего JSON часто "обрезается" (особенно locations/connections).
-	// Эти лимиты задают ВЕРХНЮЮ границу ответа; модель может остановиться раньше.
-	//
-	// Можно переопределить через env:
-	// - INIT_CAMPAIGN_MAX_TOKENS_MAIN_QUEST
-	// - INIT_CAMPAIGN_MAX_TOKENS_LOCATIONS
-	// - INIT_CAMPAIGN_MAX_TOKENS_NPCS
-	// - INIT_CAMPAIGN_MAX_TOKENS_CHECKS
-	// - INIT_CAMPAIGN_MAX_TOKENS_CONNECTIONS
-	defaultMaxTokensMainQuest   = 1500
-	defaultMaxTokensLocations   = 3500
-	defaultMaxTokensNPCs        = 2200
-	defaultMaxTokensChecks      = 2400
-	defaultMaxTokensConnections = 5000
+// Важно: при генерации мира не задаем max_tokens, чтобы не провоцировать
+// остановки модели и обрезанные JSON ответы.
 )
 
 func getEnvInt(name string, defaultValue int) int {
@@ -82,21 +69,7 @@ func (uc *InitCampaignUseCase) Execute(
 		return nil, fmt.Errorf("failed to generate locations: %w", err)
 	}
 
-	// Шаг 3: Генерация предопределенных проверок для каждой локации
-	for i := range locations {
-		checks, err := uc.generateLocationPredefinedChecks(ctx, locations[i].Name, locations[i].Description)
-		if err != nil {
-			logger.Warn("Failed to generate predefined checks for location",
-				logger.String("location", locations[i].Name),
-				logger.ErrorField(err),
-			)
-			// Продолжаем без проверок для этой локации
-		} else {
-			locations[i].PredefinedChecks = checks
-		}
-	}
-
-	// Шаг 4: Генерация деталей для каждой локации (NPC)
+	// Шаг 3: Генерация деталей для каждой локации (NPC)
 	for i := range locations {
 		npcs, err := uc.generateLocationNPCs(ctx, locations[i].Name, locations[i].Description)
 		if err != nil {
@@ -110,7 +83,7 @@ func (uc *InitCampaignUseCase) Execute(
 		}
 	}
 
-	// Шаг 5: Генерация связей между локациями
+	// Шаг 4: Генерация связей между локациями
 	connections, err := uc.generateConnections(ctx, locations)
 	if err != nil {
 		logger.Warn("Failed to generate connections",
@@ -171,17 +144,14 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer llmCancel()
 
-	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
-	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_MAIN_QUEST", defaultMaxTokensMainQuest)
 	logger.Info("Generating main quest",
 		logger.Int("attempt", attempt),
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokens),
 		logger.Duration("timeout", 90*time.Second),
 	)
 
 	startTime := time.Now()
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	duration := time.Since(startTime)
 
 	if err != nil {
@@ -198,9 +168,6 @@ func (uc *InitCampaignUseCase) generateMainQuestWithRetry(ctx context.Context, w
 		logger.Duration("duration", duration),
 		logger.Int("response_length", len(raw)),
 	)
-	if err != nil {
-		return nil, fmt.Errorf("LLM error: %w", err)
-	}
 
 	cleaned := cleanJSONResponse(raw)
 	if !json.Valid([]byte(cleaned)) {
@@ -283,13 +250,10 @@ func (uc *InitCampaignUseCase) generateLocationsWithRetry(ctx context.Context, w
 	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer llmCancel()
 
-	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
-	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_LOCATIONS", defaultMaxTokensLocations)
 	logger.Debug("Generating locations",
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokens),
 	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -375,14 +339,11 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 	llmCtx, llmCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer llmCancel()
 
-	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
-	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_NPCS", defaultMaxTokensNPCs)
 	logger.Debug("Generating NPCs for location",
 		logger.String("location_name", locationName),
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokens),
 	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -428,83 +389,6 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 	return response.NPCs, nil
 }
 
-// generateLocationPredefinedChecks генерирует предопределенные проверки для локации
-func (uc *InitCampaignUseCase) generateLocationPredefinedChecks(ctx context.Context, locationName, locationDescription string) ([]PredefinedCheckDTO, error) {
-	return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, 0)
-}
-
-// generateLocationPredefinedChecksWithRetry генерирует предопределенные проверки для локации с retry механизмом
-func (uc *InitCampaignUseCase) generateLocationPredefinedChecksWithRetry(ctx context.Context, locationName, locationDescription string, attempt int) ([]PredefinedCheckDTO, error) {
-	const maxRetries = 1 // Уменьшаем количество retry для ужесточения контрактов
-	if attempt > maxRetries {
-		logger.Warn("Failed to generate valid predefined checks, using empty fallback",
-			logger.Int("attempts", maxRetries+1),
-			logger.String("location", locationName),
-		)
-		return []PredefinedCheckDTO{}, nil
-	}
-
-	prompt := GenerateLocationPredefinedChecksPrompt(locationName, locationDescription)
-	if attempt > 0 {
-		prompt = GenerateLocationPredefinedChecksPromptStrict(locationName, locationDescription)
-	}
-
-	llmCtx, llmCancel := context.WithTimeout(ctx, 20*time.Second)
-	defer llmCancel()
-
-	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
-	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_CHECKS", defaultMaxTokensChecks)
-	logger.Debug("Generating predefined checks",
-		logger.String("location_name", locationName),
-		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokens),
-	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
-	if err != nil {
-		return nil, fmt.Errorf("LLM error: %w", err)
-	}
-
-	cleaned := cleanJSONResponse(raw)
-	if !json.Valid([]byte(cleaned)) {
-		// Для ужесточения контрактов: repair только на первой попытке и только для потенциально truncated JSON
-		if attempt == 0 && looksLikeTruncatedJSON(cleaned) {
-			logger.Warn("LLM response for predefined checks looks like truncated JSON, attempting minimal repair",
-				logger.Int("attempt", attempt),
-				logger.String("location", locationName),
-			)
-			cleaned = tryRepairTruncatedJSON(cleaned)
-			if !json.Valid([]byte(cleaned)) {
-				logger.Warn("Failed to repair truncated JSON for predefined checks, will retry with stricter prompt",
-					logger.Int("attempt", attempt),
-				)
-				return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, attempt+1)
-			} else {
-				logger.Info("Successfully repaired truncated JSON for predefined checks",
-					logger.Int("attempt", attempt),
-				)
-			}
-		} else {
-			logger.Warn("LLM response for predefined checks is not valid JSON, retrying with stricter prompt",
-				logger.Int("attempt", attempt),
-			)
-			return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, attempt+1)
-		}
-	}
-
-	var response struct {
-		PredefinedChecks []PredefinedCheckDTO `json:"predefined_checks"`
-	}
-	if err := decodeStrictJSON(cleaned, &response); err != nil {
-		logger.Warn("Failed to parse predefined checks JSON",
-			logger.Int("attempt", attempt),
-			logger.ErrorField(err),
-		)
-		return uc.generateLocationPredefinedChecksWithRetry(ctx, locationName, locationDescription, attempt+1)
-	}
-
-	return response.PredefinedChecks, nil
-}
-
 // generateConnections генерирует связи между локациями
 func (uc *InitCampaignUseCase) generateConnections(ctx context.Context, locations []LocationDTO) (map[string][]ConnectionDTO, error) {
 	return uc.generateConnectionsWithRetry(ctx, locations, 0)
@@ -528,13 +412,10 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer llmCancel()
 
-	// Явно поднимаем max_tokens, чтобы избежать обрезания JSON дефолтами провайдера.
-	maxTokens := getEnvInt("INIT_CAMPAIGN_MAX_TOKENS_CONNECTIONS", defaultMaxTokensConnections)
 	logger.Debug("Generating location connections",
 		logger.Int("prompt_length", len(prompt)),
-		logger.Int("max_tokens", maxTokens),
 	)
-	raw, err := uc.llm.GenerateWithMaxTokens(llmCtx, prompt, maxTokens)
+	raw, err := uc.llm.Generate(llmCtx, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("LLM error: %w", err)
 	}
@@ -610,29 +491,8 @@ func (uc *InitCampaignUseCase) buildWorld(
 			loc.AddNPC(npc.New(npcDTO.Name, npcDTO.Role))
 		}
 
-		// Конвертируем предопределенные проверки из DTO в world.PredefinedCheck
-		var predefinedChecks []world.PredefinedCheck
-		for _, checkDTO := range locDTO.PredefinedChecks {
-			predefinedChecks = append(predefinedChecks, world.PredefinedCheck{
-				Ability:      checkDTO.Ability,
-				DC:           checkDTO.DC,
-				Description:  checkDTO.Description,
-				LocationHint: checkDTO.LocationHint,
-			})
-		}
-
-		// Конвертируем NPCs из location.NPC в world.NPC
-		var worldNPCs []world.NPC
-		for _, npc := range loc.NPCs {
-			worldNPCs = append(worldNPCs, world.NPC{
-				Name:        npc.Name,
-				Role:        npc.Role,
-				Personality: "",
-			})
-		}
-
-		// Используем новый метод AddLocationWithChecks для добавления локации с проверками
-		w.AddLocationWithChecks(locDTO.Name, locDTO.Description, worldNPCs, predefinedChecks)
+		// Добавляем локацию без предопределенных проверок
+		w.AddLocation(loc)
 	}
 
 	// 4️⃣ сохраняем мир (чтобы получить ID для локаций)

@@ -680,6 +680,16 @@ func (t *GetBattlefieldStatusTool) Execute(ctx context.Context, args map[string]
 		logger.Uint("session_id", t.sessionID),
 	)
 
+	if t.combatRepo == nil {
+		logger.Error("GetBattlefieldStatusTool: combat repository is nil",
+			logger.Uint("session_id", t.sessionID),
+		)
+		return map[string]interface{}{
+			"active":  false,
+			"message": "Боевая система недоступна.",
+		}, nil
+	}
+
 	// Получаем формат (по умолчанию "table")
 	format := "table"
 	if formatStr, ok := args["format"].(string); ok && formatStr != "" {
@@ -703,6 +713,15 @@ func (t *GetBattlefieldStatusTool) Execute(ctx context.Context, args map[string]
 		return map[string]interface{}{
 			"active":  false,
 			"message": "Нет активного боя.",
+		}, nil
+	}
+	if len(activeCombat.Participants) == 0 {
+		logger.Warn("GetBattlefieldStatusTool: active combat has no participants",
+			logger.Uint("session_id", t.sessionID),
+		)
+		return map[string]interface{}{
+			"active":  true,
+			"message": "Нет участников в активном бою.",
 		}, nil
 	}
 

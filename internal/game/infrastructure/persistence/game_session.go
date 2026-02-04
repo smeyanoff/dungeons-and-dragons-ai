@@ -138,6 +138,12 @@ func (r *GameSessionRepository) Delete(
 			return fmt.Errorf("failed to delete players: %w", err)
 		}
 
+		// Удаляем связанные цели сессии (hard delete)
+		if err := tx.Unscoped().Where("game_session_id = ?", gs.ID).
+			Delete(&session.SessionGoal{}).Error; err != nil {
+			return fmt.Errorf("failed to delete session goals: %w", err)
+		}
+
 		// Теперь удаляем саму сессию (hard delete)
 		// Используем Unscoped().Delete() для физического удаления записи
 		// Это необходимо, чтобы избежать duplicate key при создании новой сессии

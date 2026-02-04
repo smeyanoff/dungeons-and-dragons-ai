@@ -153,16 +153,25 @@ func main() {
 	}
 	logger.Info("Database migrations completed")
 
+	// Проверка состояния базы после миграций
+	if err := validateDatabaseSchema(db); err != nil {
+		logger.Fatal("Database schema health check failed",
+			logger.ErrorField(err),
+		)
+	}
+
 	// Инициализация GigaChat
+	skipTLSVerify := getEnv("GIGACHAT_SKIP_TLS_VERIFY", "false") == "true"
 	gigachatCfg := gigachat.Config{
 		AuthBaseURL:      getEnv("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443"),
 		APIBaseURL:       getEnv("GIGACHAT_API_URL", "https://gigachat.devices.sberbank.ru/api/v1"),
 		ClientID:         gigachatClientID,
 		ClientSecret:     gigachatClientSecret,
 		Scope:            getEnv("GIGACHAT_SCOPE", "GIGACHAT_API_CORP"),
-		ConcurrencyLimit: 1, // Ограничиваем до 1 одновременного запроса для стабильности
+		ConcurrencyLimit: 1,   // Ограничиваем до 1 одновременного запроса для стабильности
 		RPSLimit:         5.0, // Увеличиваем до 5 RPS для генерации контента
 		RateBurst:        3,   // Burst до 3 запросов для сложных операций
+		SkipTLSVerify:    skipTLSVerify,
 	}
 
 	// Валидация GigaChat credentials
@@ -193,6 +202,7 @@ func main() {
 		logger.String("scope", gigachatScope),
 		logger.String("model", gigachatModel),
 		logger.String("clientID", maskClientID(gigachatCfg.ClientID)),
+		logger.Bool("skip_tls_verify", gigachatCfg.SkipTLSVerify),
 		logger.Float64("rps_limit", gigachatCfg.RPSLimit),
 		logger.Int("rate_burst", gigachatCfg.RateBurst),
 		logger.Int("concurrency_limit", gigachatCfg.ConcurrencyLimit),
@@ -685,6 +695,7 @@ func initDB(dsn string) (*gorm.DB, error) {
 func runMigrations(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&session.GameSession{},
+		&session.SessionGoal{},
 		&world.World{},
 		&world.Location{},
 		&world.LocationConnection{},
@@ -714,6 +725,27 @@ func runMigrations(db *gorm.DB) error {
 		&spell.CharacterSpell{},
 		&subscription.Subscription{},
 	)
+}
+
+func validateDatabaseSchema(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("db is nil")
+	}
+
+	requiredTables := []interface{}{
+		&session.GameSession{},
+		&session.SessionGoal{},
+		&player.Player{},
+		&world.World{},
+		&quest.Quest{},
+	}
+
+	for _, table := range requiredTables {
+		if !db.Migrator().HasTable(table) {
+			return fmt.Errorf("required table missing for %T", table)
+		}
+	}
+	return nil
 }
 
 func getEnv(key, defaultValue string) string {

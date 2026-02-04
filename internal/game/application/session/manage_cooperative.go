@@ -35,6 +35,9 @@ type EnableCooperativeRequest struct {
 
 // EnableCooperativeMode включает cooperative режим для сессии
 func (uc *ManageCooperativeUseCase) EnableCooperativeMode(ctx context.Context, req EnableCooperativeRequest) error {
+	if uc.sessionRepo == nil {
+		return fmt.Errorf("session repository is not initialized")
+	}
 	gs, err := uc.sessionRepo.GetByChatID(ctx, req.ChatID)
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
@@ -74,6 +77,12 @@ type JoinCooperativeSessionRequest struct {
 
 // JoinCooperativeSession присоединяет игрока к cooperative сессии
 func (uc *ManageCooperativeUseCase) JoinCooperativeSession(ctx context.Context, req JoinCooperativeSessionRequest) error {
+	if uc.sessionRepo == nil {
+		return fmt.Errorf("session repository is not initialized")
+	}
+	if uc.playerRepo == nil {
+		return fmt.Errorf("player repository is not initialized")
+	}
 	gs, err := uc.sessionRepo.GetByChatID(ctx, req.ChatID)
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
@@ -143,6 +152,9 @@ type PlayerDTO struct {
 
 // GetCooperativeStatus получает статус cooperative сессии
 func (uc *ManageCooperativeUseCase) GetCooperativeStatus(ctx context.Context, chatID int64) (*GetCooperativeStatusResponse, error) {
+	if uc.sessionRepo == nil {
+		return nil, fmt.Errorf("session repository is not initialized")
+	}
 	gs, err := uc.sessionRepo.GetByChatID(ctx, chatID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session: %w", err)

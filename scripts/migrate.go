@@ -42,6 +42,7 @@ func main() {
 
 	err = db.AutoMigrate(
 		&session.GameSession{},
+		&session.SessionGoal{},
 		&world.World{},
 		&world.Location{},
 		&world.LocationConnection{},

@@ -519,20 +519,8 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 						jsonBytes, _ := json.Marshal(response)
 						return string(jsonBytes), nil
 					}
-					// Call 3-4: Predefined checks for each location (added in newer campaign generation flow)
-					if callCount == 3 || callCount == 4 {
-						response := struct {
-							PredefinedChecks []PredefinedCheckDTO `json:"predefined_checks"`
-						}{
-							PredefinedChecks: []PredefinedCheckDTO{
-								{Ability: "wisdom", DC: 12, Description: "Test check", LocationHint: "Near the entrance"},
-							},
-						}
-						jsonBytes, _ := json.Marshal(response)
-						return string(jsonBytes), nil
-					}
-					// Call 5-6: NPCs for each location
-					if callCount == 5 {
+					// Call 3-4: NPCs for each location
+					if callCount == 3 {
 						response := struct {
 							NPCs []NPCDTO `json:"npcs"`
 						}{
@@ -541,7 +529,7 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 						jsonBytes, _ := json.Marshal(response)
 						return string(jsonBytes), nil
 					}
-					if callCount == 6 {
+					if callCount == 4 {
 						response := struct {
 							NPCs []NPCDTO `json:"npcs"`
 						}{
@@ -550,8 +538,8 @@ func TestInitCampaignUseCase_Execute(t *testing.T) {
 						jsonBytes, _ := json.Marshal(response)
 						return string(jsonBytes), nil
 					}
-					// Call 7: Connections
-					if callCount == 7 {
+					// Call 5: Connections
+					if callCount == 5 {
 						response := struct {
 							Connections map[string][]ConnectionDTO `json:"connections"`
 						}{

@@ -28,11 +28,25 @@ import (
 	subscriptionapp "dungeons-and-dragons-ai/internal/game/application/subscription"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
+	"dungeons-and-dragons-ai/internal/game/domain/achievement"
+	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	"dungeons-and-dragons-ai/internal/game/domain/event"
+	"dungeons-and-dragons-ai/internal/game/domain/feedback"
+	"dungeons-and-dragons-ai/internal/game/domain/inventory"
+	"dungeons-and-dragons-ai/internal/game/domain/item"
+	llmlogdomain "dungeons-and-dragons-ai/internal/game/domain/llm_log"
+	"dungeons-and-dragons-ai/internal/game/domain/player"
+	"dungeons-and-dragons-ai/internal/game/domain/quest"
+	"dungeons-and-dragons-ai/internal/game/domain/rating"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/spell"
+	"dungeons-and-dragons-ai/internal/game/domain/subscription"
 	worlddomain "dungeons-and-dragons-ai/internal/game/domain/world"
 	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
 	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
+	llmdomain "dungeons-and-dragons-ai/internal/llm/domain"
 	llminfrastructure "dungeons-and-dragons-ai/internal/llm/infrastructure"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragembeddings "dungeons-and-dragons-ai/internal/rag/infrastructure/embeddings"
@@ -53,6 +67,9 @@ type testConfig struct {
 	chatID       int64
 	tgUserID     int64
 	ctx          context.Context
+
+	llm        llmdomain.LLM
+	indexDocUC *ragapp.IndexDocument
 
 	initCampaignUC       *campaign.InitCampaignUseCase
 	handleActionUC       *player_action.HandleActionUseCase
@@ -88,9 +105,7 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 
 	// Postgres
 	dbDSN := getEnv("DATABASE_URL", "postgres://dnd_user:dnd_password@localhost:5432/dnd?sslmode=disable")
-	if strings.Contains(dbDSN, "@postgres:") {
-		dbDSN = strings.Replace(dbDSN, "@postgres:", "@localhost:", 1)
-	}
+	dbDSN = strings.Replace(dbDSN, "@postgres:", "@localhost:", 1)
 	db, err := gorm.Open(postgres.Open(dbDSN), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("Не удалось подключиться к БД: %v", err)
@@ -104,11 +119,13 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	}
 
 	// Миграции для интеграционных тестов (volume может быть старый).
-	if err := db.AutoMigrate(&session.GameSession{}); err != nil {
-		t.Fatalf("Не удалось выполнить AutoMigrate для game_sessions: %v", err)
+	if err := runIntegrationMigrations(db); err != nil {
+		t.Fatalf("Не удалось выполнить AutoMigrate: %v", err)
 	}
-	if err := db.AutoMigrate(&worlddomain.WorldEvent{}); err != nil {
-		t.Fatalf("Не удалось выполнить AutoMigrate для world_events: %v", err)
+
+	// Очистка базы перед тестом для изоляции данных.
+	if err := resetIntegrationDatabase(db); err != nil {
+		t.Fatalf("Не удалось очистить БД перед тестом: %v", err)
 	}
 
 	// Qdrant (gRPC)
@@ -157,9 +174,11 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	gigachatClient := gigachat.NewClient(gigachatCfg)
 	gigachatModel := getEnv("GIGACHAT_MODEL", "GigaChat")
 
-	// LLM (+ test-only rate limit, чтобы не DDOSить модель при полном прогоне).
-	llm := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
-	llm = wrapLLMWithTestRateLimit(llm)
+	// LLM (+ monitoring + test-only rate limit, чтобы не DDOSить модель при полном прогоне).
+	baseLLM := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
+	llmLogRepo := persistence.NewLLMLogRepository(db)
+	monitoredLLM := llminfrastructure.NewMonitoredLLM(baseLLM, llmLogRepo)
+	llm := wrapLLMWithTestRateLimit(monitoredLLM)
 	imageGenerator := llminfrastructure.NewGigachatImageGenerator(gigachatClient, gigachatModel)
 
 	// Image storage (локально).
@@ -272,6 +291,8 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 		chatID:               chatID,
 		tgUserID:             tgUserID,
 		ctx:                  ctx,
+		llm:                  llm,
+		indexDocUC:           indexDocUC,
 		initCampaignUC:       initCampaignUC,
 		handleActionUC:       handleActionUC,
 		createCharacterUC:    createCharacterUC,
@@ -364,6 +385,8 @@ func cleanupTest(t *testing.T, cfg *testConfig) {
 		cfg.db.Exec("DELETE FROM inventory_items WHERE inventory_id IN (SELECT id FROM inventories WHERE character_id IN (SELECT character_id FROM players WHERE game_session_id = ?))", sessionID)
 		cfg.db.Exec("DELETE FROM inventories WHERE character_id IN (SELECT character_id FROM players WHERE game_session_id = ?)", sessionID)
 		cfg.db.Exec("DELETE FROM story_events WHERE game_session_id = ?", sessionID)
+		// NOTE: FK is game_session_id (see session.SessionGoal.GameSessionID).
+		cfg.db.Exec("DELETE FROM session_goals WHERE game_session_id = ?", sessionID)
 		cfg.db.Exec("DELETE FROM players WHERE game_session_id = ?", sessionID)
 		cfg.db.Exec("DELETE FROM characters WHERE id IN (SELECT character_id FROM players WHERE tg_user_id = ?)", cfg.tgUserID)
 		cfg.db.Exec("DELETE FROM game_sessions WHERE id = ?", sessionID)
@@ -423,13 +446,82 @@ func min(a, b int) int {
 	return b
 }
 
+func runIntegrationMigrations(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("db is nil")
+	}
+	return db.AutoMigrate(
+		&session.GameSession{},
+		&session.SessionGoal{},
+		&worlddomain.World{},
+		&worlddomain.Location{},
+		&worlddomain.LocationConnection{},
+		&worlddomain.NPC{},
+		&worlddomain.Monster{},
+		&worlddomain.WorldEvent{},
+		&player.Player{},
+		&character.Character{},
+		&character.Stats{},
+		&event.StoryEvent{},
+		&inventory.Inventory{},
+		&inventory.InventoryItem{},
+		&llmlogdomain.LLMLog{},
+		&combat.Combat{},
+		&combat.CombatParticipant{},
+		&item.Item{},
+		&quest.Quest{},
+		&quest.DailyQuest{},
+		&quest.DailyQuestProgress{},
+		&quest.DailyQuestStreak{},
+		&feedback.Feedback{},
+		&achievement.Achievement{},
+		&rating.PlayerRating{},
+		&achievement.PlayerAchievement{},
+		&achievement.AchievementProgress{},
+		&spell.Spell{},
+		&spell.CharacterSpell{},
+		&subscription.Subscription{},
+	)
+}
+
+func resetIntegrationDatabase(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("db is nil")
+	}
+	tables, err := db.Migrator().GetTables()
+	if err != nil {
+		return fmt.Errorf("failed to list tables: %w", err)
+	}
+	if len(tables) == 0 {
+		return nil
+	}
+
+	quoted := make([]string, 0, len(tables))
+	for _, table := range tables {
+		if table == "" {
+			continue
+		}
+		if table == "schema_migrations" || table == "goose_db_version" {
+			continue
+		}
+		safeName := strings.ReplaceAll(table, `"`, `""`)
+		quoted = append(quoted, `"`+safeName+`"`)
+	}
+	if len(quoted) == 0 {
+		return nil
+	}
+	query := fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE", strings.Join(quoted, ", "))
+	if err := db.Exec(query).Error; err != nil {
+		return fmt.Errorf("failed to truncate tables: %w", err)
+	}
+	return nil
+}
+
 func isContainersRunning(t *testing.T) bool {
 	t.Helper()
 
 	dbDSN := getEnv("DATABASE_URL", "postgres://dnd_user:dnd_password@localhost:5432/dnd?sslmode=disable")
-	if strings.Contains(dbDSN, "@postgres:") {
-		dbDSN = strings.Replace(dbDSN, "@postgres:", "@localhost:", 1)
-	}
+	dbDSN = strings.Replace(dbDSN, "@postgres:", "@localhost:", 1)
 	db, err := gorm.Open(postgres.Open(dbDSN), &gorm.Config{})
 	if err != nil {
 		return false

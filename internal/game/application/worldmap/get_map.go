@@ -79,6 +79,8 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 	parts = append(parts, fmt.Sprintf("🗺️ Карта мира: %s\n", w.Name))
 	parts = append(parts, "")
 
+	knownLocations := uc.buildKnownLocations(w, currentLocationID)
+
 	// Создаем карту связей для быстрого доступа
 	locationMap := make(map[uint]*world.Location)
 	for i := range w.Locations {
@@ -94,17 +96,11 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 		currentLoc = &w.Locations[0]
 	}
 
-	// Добавляем визуальную карту связей
-	visualMap := uc.generateVisualMap(w, currentLocationID)
-	if visualMap != "" {
-		parts = append(parts, visualMap)
-		parts = append(parts, "")
-	}
-
 	// Легенда карты
 	parts = append(parts, "📖 Легенда:")
 	parts = append(parts, "📍▶️ - Ваше текущее положение")
 	parts = append(parts, "📍 - Известная локация")
+	parts = append(parts, "❓ - Неизвестная локация")
 	parts = append(parts, "⬆️⬇️➡️⬅️ - Направления движения")
 	parts = append(parts, "🌀 - Портал или магический переход")
 	parts = append(parts, "🛤️ - Дорога или путь")
@@ -119,17 +115,6 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 		parts = append(parts, fmt.Sprintf("📝 Описание: %s", desc))
 	}
 
-	// Информация о обитателях текущей локации
-	if len(currentLoc.NPCs) > 0 || len(currentLoc.Monsters) > 0 {
-		parts = append(parts, "👥 Обитатели:")
-		for _, npc := range currentLoc.NPCs {
-			parts = append(parts, fmt.Sprintf("   👤 %s (%s)", npc.Name, npc.Role))
-		}
-		for _, monster := range currentLoc.Monsters {
-			parts = append(parts, fmt.Sprintf("   👹 %s", monster.Name))
-		}
-	}
-
 	parts = append(parts, "")
 
 	// Доступные пути из текущей локации
@@ -138,11 +123,13 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 		for _, conn := range currentLoc.Connections {
 			sym := uc.getDirectionSymbol(conn.Direction)
 			toLocName := "Неизвестная локация"
-			status := "неисследована"
+			status := "неизвестна"
 
 			if toLoc, exists := locationMap[conn.ToLocationID]; exists {
-				toLocName = toLoc.Name
-				status = "известна"
+				if knownLocations[toLoc.ID] {
+					toLocName = toLoc.Name
+					status = "известна"
+				}
 			}
 
 			pathDesc := fmt.Sprintf("   %s %s → %s (%s)", sym, strings.ToLower(conn.Direction), toLocName, status)
@@ -157,102 +144,20 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 	}
 	parts = append(parts, "")
 
-	// Формируем список локаций с их связями
-	for i := range w.Locations {
-		loc := &w.Locations[i]
-		isCurrent := currentLoc != nil && loc.ID == currentLoc.ID
-		prefix := "📍"
-		if isCurrent {
-			prefix = "📍▶️"
-		}
-		parts = append(parts, fmt.Sprintf("%s %s", prefix, loc.Name))
-
-		if loc.Description != "" {
-			// Ограничиваем длину описания для компактности
-			desc := truncateRunes(loc.Description, 100)
-			parts = append(parts, fmt.Sprintf("   %s", desc))
-		}
-
-		// Добавляем информацию о связях
-		if len(loc.Connections) > 0 {
-			var connectionLines []string
-			for _, conn := range loc.Connections {
-				var toLocationName string
-				if toLoc, exists := locationMap[conn.ToLocationID]; exists {
-					toLocationName = toLoc.Name
-				} else {
-					toLocationName = fmt.Sprintf("Локация #%d", conn.ToLocationID)
-				}
-
-				// Формируем направление
-				directionSymbol := uc.getDirectionSymbol(conn.Direction)
-				connectionInfo := fmt.Sprintf("%s %s", directionSymbol, toLocationName)
-
-				if conn.Description != "" {
-					desc := truncateRunes(conn.Description, 50)
-					connectionInfo += fmt.Sprintf(" (%s)", desc)
-				}
-
-				connectionLines = append(connectionLines, "   └─ "+connectionInfo)
-			}
-			parts = append(parts, strings.Join(connectionLines, "\n"))
-		}
-
-		// Добавляем информацию о NPC и монстрах
-		if len(loc.NPCs) > 0 || len(loc.Monsters) > 0 {
-			var entities []string
-			for _, npc := range loc.NPCs {
-				entities = append(entities, fmt.Sprintf("👤 %s (%s)", npc.Name, npc.Role))
-			}
-			for _, monster := range loc.Monsters {
-				entities = append(entities, fmt.Sprintf("👹 %s", monster.Name))
-			}
-			if len(entities) > 0 {
-				parts = append(parts, "   Обнаружено: "+strings.Join(entities, ", "))
-			}
-		}
-
-		parts = append(parts, "")
-	}
-
-	// Анализ регионов мира
-	regions := uc.analyzeWorldRegions(locationMap)
-	if len(regions) > 1 {
-		parts = append(parts, "🗺️ РЕГИОНЫ МИРА")
-		for regionName, locations := range regions {
-			parts = append(parts, fmt.Sprintf("🌍 %s: %d локаций", regionName, len(locations)))
-		}
-		parts = append(parts, "")
-	}
-
 	// Добавляем сводную информацию о мире
 	parts = append(parts, "---")
 	parts = append(parts, "📊 СВОДКА МИРА")
 
 	// Прогресс исследования
-	exploredLocations := 0
-	if currentLocationID != nil {
-		// Простая оценка: считаем, что игрок посетил все локации, до которых можно дойти
-		reachable := uc.findReachableLocations(*currentLocationID, locationMap)
-		exploredLocations = len(reachable)
-	}
+	exploredLocations := len(knownLocations)
 
 	parts = append(parts, fmt.Sprintf("🏛️ Всего локаций: %d", len(w.Locations)))
-	parts = append(parts, fmt.Sprintf("🔍 Исследовано: %d (%.1f%%)", exploredLocations, float64(exploredLocations)/float64(len(w.Locations))*100))
-	parts = append(parts, fmt.Sprintf("🗺️ Регионов: %d", len(regions)))
-
-	totalNPCs := 0
-	totalMonsters := 0
-	totalConnections := 0
-	for _, loc := range w.Locations {
-		totalNPCs += len(loc.NPCs)
-		totalMonsters += len(loc.Monsters)
-		totalConnections += len(loc.Connections)
+	exploredPercent := 0.0
+	if len(w.Locations) > 0 {
+		exploredPercent = float64(exploredLocations) / float64(len(w.Locations)) * 100
 	}
-
-	parts = append(parts, fmt.Sprintf("👥 NPC: %d", totalNPCs))
-	parts = append(parts, fmt.Sprintf("👹 Монстры: %d", totalMonsters))
-	parts = append(parts, fmt.Sprintf("🛤️ Путей: %d", totalConnections))
+	parts = append(parts, fmt.Sprintf("🔍 Исследовано: %d (%.1f%%)", exploredLocations, exploredPercent))
+	parts = append(parts, fmt.Sprintf("🛤️ Путей: %d", totalConnectionsCount(w)))
 
 	// Добавляем информацию о времени суток и погоде
 	if w.TimeOfDay != "" {
@@ -301,21 +206,26 @@ func (uc *GetMapUseCase) buildMapSignature(w *world.World, currentLocationID *ui
 	totalConnections := 0
 	totalNPCs := 0
 	totalMonsters := 0
+	knownLocations := 0
 	for _, loc := range w.Locations {
 		totalConnections += len(loc.Connections)
 		totalNPCs += len(loc.NPCs)
 		totalMonsters += len(loc.Monsters)
+		if len(loc.ScenarioJSON) > 0 {
+			knownLocations++
+		}
 	}
 	currentID := uint(0)
 	if currentLocationID != nil {
 		currentID = *currentLocationID
 	}
-	return fmt.Sprintf("%d:%d:%d:%d:%d:%s:%s:%d:%d:%d",
+	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%s:%s:%d:%d:%d",
 		w.ID,
 		currentID,
 		len(w.Locations),
 		totalConnections,
 		totalNPCs+totalMonsters,
+		knownLocations,
 		w.TimeOfDay,
 		w.Weather,
 		w.Day,
@@ -382,8 +292,36 @@ func (uc *GetMapUseCase) translateWeather(weather string) string {
 	return weather
 }
 
+func (uc *GetMapUseCase) buildKnownLocations(w *world.World, currentLocationID *uint) map[uint]bool {
+	known := make(map[uint]bool)
+	if w == nil {
+		return known
+	}
+	for i := range w.Locations {
+		loc := &w.Locations[i]
+		if len(loc.ScenarioJSON) > 0 {
+			known[loc.ID] = true
+		}
+	}
+	if currentLocationID != nil && *currentLocationID != 0 {
+		known[*currentLocationID] = true
+	}
+	return known
+}
+
+func totalConnectionsCount(w *world.World) int {
+	if w == nil {
+		return 0
+	}
+	total := 0
+	for _, loc := range w.Locations {
+		total += len(loc.Connections)
+	}
+	return total
+}
+
 // generateVisualMap создает визуальную ASCII-карту связей между локациями
-func (uc *GetMapUseCase) generateVisualMap(w *world.World, currentLocationID *uint) string {
+func (uc *GetMapUseCase) generateVisualMap(w *world.World, currentLocationID *uint, knownLocations map[uint]bool) string {
 	if len(w.Locations) <= 1 {
 		return ""
 	}
@@ -434,12 +372,17 @@ func (uc *GetMapUseCase) generateVisualMap(w *world.World, currentLocationID *ui
 				var symbol string
 				if currentLoc != nil && loc.ID == currentLoc.ID {
 					symbol = "🏠" // Дом для текущей локации
+				} else if knownLocations[loc.ID] {
+					symbol = "📍" // Известная локация
 				} else {
-					symbol = "📍" // Обычная локация
+					symbol = "❓" // Неизвестная локация
 				}
 
 				// Сокращаем длинные названия
-				name := truncateRunes(loc.Name, 12)
+				name := "Неизв."
+				if knownLocations[loc.ID] || (currentLoc != nil && loc.ID == currentLoc.ID) {
+					name = truncateRunes(loc.Name, 12)
+				}
 
 				levelLine = append(levelLine, fmt.Sprintf("%s%s", symbol, name))
 			}

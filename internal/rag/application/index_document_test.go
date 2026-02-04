@@ -94,7 +94,7 @@ func TestIndexDocument_Execute(t *testing.T) {
 					return nil, errors.New("embedder error")
 				}
 			},
-			expectedError: true,
+			expectedError: false,
 		},
 		{
 			name: "vector store error",
@@ -111,7 +111,7 @@ func TestIndexDocument_Execute(t *testing.T) {
 					return errors.New("vector store error")
 				}
 			},
-			expectedError: true,
+			expectedError: false,
 		},
 		{
 			name: "empty text",

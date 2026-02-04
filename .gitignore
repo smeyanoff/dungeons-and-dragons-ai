@@ -36,6 +36,7 @@ go.work.sum
 # Build artifacts
 /bin/
 bot
+main
 
 # Security scan reports
 *-report.json

@@ -1,164 +1,127 @@
-# CODE_REVIEW — Dungeons & Dragons AI Bot (Telegram + AI DM + RAG)
+# CODE_REVIEW — Dungeons & Dragons AI Bot
 
-**Последнее обновление:** 2026-01-23 (критические проблемы из Docker логов + анализ архитектуры)
-**Зачем файл:** держим **короткий** список **активных** рисков/дефектов + конкретные action items.
-
----
-
-## 🚨 СРОЧНЫЕ ДЕЙСТВИЯ (P0 Blocker)
-
-**GigaChat API полностью недоступен** - все LLM запросы fail с 30-секундным timeout. Это блокирует создание новых игр.
-
-### Немедленные шаги:
-1. ✅ **Исправить выбор HTTP клиента** - imageClient для изображений, client для текста
-2. **Уменьшить timeout** в `pkg/gigachat/client.go` с 30s до 15s для текстовых запросов
-3. **Добавить backoff для timeout ошибок** в retry логике
-4. **Реализовать stub fallback** для генерации квестов при API недоступности
-5. **Проверить network connectivity** к GigaChat API извне контейнера
-6. **Добавить circuit breaker monitoring** - после 5 failures должен открываться
-
-### Диагностика:
-- Проверить, отвечает ли GigaChat API с другого IP
-- Проверить rate limits и возможную блокировку аккаунта
-- Добавить detailed network logging
+**Последнее обновление:** 2026-02-02
+**Цель:** короткий список активных рисков + action items для команды.
 
 ---
 
-## ✅ Состояние инфраструктуры (на 2026-01-23)
+## 🚨 P0 — Критичные проблемы
 
-- **Тесты**: `go test ./...` ✅ PASS; интеграционные выявляют P0 проблемы
-- **Docker (prod)**: Все контейнеры healthy, PostgreSQL стабильные checkpoint'ы, Qdrant работает
-- **Критические проблемы в логах**: TLS handshake timeout к GigaChat API блокирует создание кампаний
+### 1. GigaChat TLS Certificate
+**Симптом:** `tls: failed to verify certificate: x509: certificate signed by unknown authority`
+**Влияние:** 100% LLM запросов fail → невозможно создать игру/персонажа
 
----
+**Action items:**
+- [x] Добавить `GIGACHAT_SKIP_TLS_VERIFY=true` или настроить правильные сертификаты
+- [x] Добавить fallback на stub content при TLS failures для graceful degradation
 
-## 🚨 Активные риски (P0-P1 приоритезация)
-
-### P0 — GigaChat API: Context Deadline Exceeded (КРИТИЧНО)
-- **Симптом**: `context deadline exceeded` при всех LLM запросах (30s timeout)
-- **Влияние**: Невозможно создать кампанию, полный блок игрового процесса
-- **Метрики**: 100% failure rate для chat/completions, постоянные retry без backoff
-- **Root cause**: GigaChat API не отвечает в течение 30 секунд + неправильный выбор HTTP клиента
-- **Action items**:
-  - ✅ Исправить выбор HTTP клиента: imageClient (5min) для генерации изображений, client (30s) для текста
-  - ✅ Улучшить rate limiting: 2 RPS, burst=1, убрать confusing "tokens" логи
-  - Уменьшить HTTP timeout с 30s до 15s для быстрого failure detection
-  - Добавить backoff даже для timeout ошибок (сейчас retry без задержки)
-  - Реализовать fallback на stub контент при API недоступности
-  - Проверить network connectivity и возможную блокировку IP
-- **Как проверить**: Создание кампании работает без 30-секундных задержек
-
-### P0 — DM Analyzer: Усеченные JSON ответы (КРИТИЧНО)
-- **Симптом**: JSON обрывается (`"items_received":[`, `"npc_met":n`), 6 retry + fallback
-- **Влияние**: Location events не генерируются, бой не стартует
-- **Метрики**: `analyzer_json_empty_json count=6`
-- **Action items**:
-  - Увеличить лимит токенов analyzer (4096 → 8192)
-  - Улучшить prompt для полного JSON ответа
-  - Добавить strict JSON validation перед отправкой
-  - Улучшить `tryRepairTruncatedJSON` для массивов
-- **Как проверить**: Analyzer всегда возвращает полный валидный JSON
-
-### P0 — Combat Detection: Неправильное определение боя (КРИТИЧНО)
-- **Симптом**: `combat_detected=false` при явных атаках ("гоблин атакует")
-- **Влияние**: Бой не начинается автоматически
-- **Тесты**: FAIL в `TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit`
-- **Action items**:
-  - Расширить `detectsCombatMarker` русскими ключевыми словами
-  - Улучшить prompt с примерами распознавания боя
-  - Добавить fallback анализ для извлечения врагов
-  - Улучшить `validateCombatAnalysis` для битых полей
-- **Как проверить**: Все combat detection тесты PASS
-
-### P0 — Блокировка после успешной проверки (КРИТИЧНО)
-- **Симптом**: Даже после успеха (d20=17) система пишет "проверка уже выполнена"
-- **Влияние**: Успешные проверки блокируют игру, DM не продолжает повествование
-- **Action items**:
-  - Исправить логику resolve pending check для success случаев
-  - Убедиться что DM получает результат успеха в контексте
-  - После успеха DM автоматически продолжает с положительными последствиями
-- **Как проверить**: После успешной проверки DM продолжает историю
-
-### P1 — LLM Context Deadline Exceeded (ВЛИЯЕТ НА НАДЕЖНОСТЬ)
-- **Симптом**: `context deadline exceeded` при генерации квестов
-- **Влияние**: Невозможно создать новую игру
-- **Action items**:
-  - Увеличить timeout для LLM запросов (30s → 60s)
-  - Оптимизировать промпты для уменьшения токенов
-  - Добавить retry с exponential backoff
-  - Реализовать fallback на stub контент
-
-### P1 — Telegram Polling: EOF ошибки (ВЛИЯЕТ НА UX)
-- **Симптом**: `unexpected EOF` при получении обновлений от Telegram API
-- **Влияние**: Прерывания в коммуникации с пользователями
-- **Метрики**: Множественные ошибки в логах за последние часы
-- **Action items**:
-  - Увеличить timeout polling (30s → 60s)
-  - Добавить exponential backoff с jitter
-  - Улучшить обработку network ошибок
-  - Добавить connection pooling
-- **Как проверить**: Стабильное polling без EOF ошибок
-
-### P1 — Battlefield Command: Нестабильность (ВЛИЯЕТ НА ПРОЗРАЧНОСТЬ)
-- **Симптом**: `/battlefield` не отображает информацию о бое
-- **Влияние**: Нет прозрачности боя, сложно играть и отлаживать
-- **Action items**:
-  - Аудит кода команды `/battlefield`
-  - Исправить обработку результатов от `GetBattlefieldStatusTool`
-  - Добавить поддержку разных форматов (table/compact/detailed)
-  - Проверить логику "нет активного боя"
-- **Как проверить**: `/battlefield` корректно показывает участников, HP, статусы
-
-### P2 — Архитектурные проблемы (ТЕХНИЧЕСКИЙ ДОЛГ)
-- **Симптом**: main.go слишком большой (775 строк, 24 внутренних импорта), глобальные переменные
-- **Влияние**: Сложность поддержки, тестирования и развития
-- **Action items**:
-  - Рефакторинг main.go с разделением на модули инициализации
-  - Убрать глобальные переменные, использовать dependency injection
-  - Уменьшить количество адаптеров для совместимости интерфейсов
-- **Как проверить**: main.go < 300 строк, нет глобальных переменных
+**Проверка:** Успешные запросы к GigaChat API без TLS ошибок
 
 ---
 
-## ✅ Реализованные риски (архив)
+### 2. Database Migrations
+**Симптом:** `relation "session_goals" does not exist`
+**Влияние:** Cooperative режим и сессионные цели недоступны
 
-### ✅ Утечка информации о ловушках в DM текст
-- **Решено**: Исправлена analyzer-first логика, добавлен guardrail в промпт
-- **Результат**: Ловушки активируются только при действиях игрока
+**Action items:**
+- [x] Автоматизировать миграции в CI/CD pipeline
+- [x] Добавить health check на старте: проверка существования всех таблиц
 
-### ✅ Автопродолжение после провала проверки
-- **Решено**: DM получает результат проверки в контексте, автоматически продолжает повествование
-
-### ✅ Блокировка после успешной проверки
-- **Решено**: Исправлена логика resolve pending check для success случаев
-- **Результат**: DM автоматически продолжает после успешных проверок
-
-### ✅ Combat Detection: Стабильное обнаружение боя
-- **Решено**: Расширены ключевые слова, улучшен prompt, добавлен fallback анализ
-- **Результат**: Combat detection accuracy >95%
-
-### ✅ Telegram Polling: EOF ошибки
-- **Решено**: Увеличен timeout, добавлен exponential backoff с jitter
-- **Результат**: Стабильное polling без прерываний
-
-### ✅ Battlefield Command: Нестабильность
-- **Решено**: Исправлена обработка результатов, добавлена поддержка форматов
-- **Результат**: Корректное отображение участников, HP, статусов
-
-### ✅ Оптимизация генерации изображений
-- **Решено**: Rate limiting (макс 3/сессию), обновлен промпт DM
-- **Результат**: Изображения только для ключевых моментов
-
-### ✅ JSON Stability Crisis
-- **Решено**: Улучшен `tryRepairTruncatedJSON`, pre-validation
-- **Результат**: Снижено количество truncated JSON
+**Проверка:** Все таблицы существуют, `go run scripts/migrate.go` выполнен
 
 ---
 
-## 📊 Метрики для мониторинга
-- **GigaChat API**: context deadline exceeded =0 (КРИТИЧНО), успешные запросы >95%
-- **DM Analyzer**: truncated JSON =0, retry count <1, успешные парсинги >95%
-- **Combat Detection**: точность >90%, false negatives =0
-- **LLM Requests**: context deadline exceeded =0
-- **Telegram Polling**: EOF ошибки =0, стабильное подключение
-- **Battlefield**: успешные ответы >95%
+### 3. Runtime Panics (nil pointer)
+**Симптом:** `panic: runtime error: invalid memory address or nil pointer dereference`
+**Влияние:** Crash в production, падение тестов cooperative mode
+
+**Action items:**
+- [x] Добавить nil checks в cooperative mode логике
+- [x] Defensive programming: проверки на nil перед использованием session/player
+
+**Проверка:** Все тесты проходят без panic
+
+---
+
+## ⚠️ P1 — Важные проблемы
+
+### 4. DM Analyzer: Truncated JSON
+**Симптом:** JSON обрывается (`"npc_met":n`), 6 retry + fallback
+**Влияние:** Location events не генерируются, пропуск игровых триггеров
+
+**Action items:**
+- [x] Увеличить token limit analyzer (4096 → 8192)
+- [x] Улучшить JSON repair/validation logic
+
+**Проверка:** Analyzer возвращает valid JSON в >95% случаев
+
+---
+
+### 5. Combat Detection: False Negatives
+**Симптом:** `combat_detected=false` при явных атаках ("гоблин атакует")
+**Влияние:** Бой не стартует автоматически
+
+**Action items:**
+- [x] Расширить `detectsCombatMarker` русскими ключевыми словами (атакует, нападает, бьёт)
+- [x] Улучшить prompt с примерами combat на русском
+
+**Проверка:** Combat detection accuracy >95%
+
+---
+
+### 6. /battlefield нестабильность
+**Симптом:** Команда не отображает информацию о бое или падает
+**Влияние:** Нет прозрачности боевой системы
+
+**Action items:**
+- [x] Добавить defensive checks для отсутствующих данных боя
+- [x] Логирование ошибок для диагностики
+
+**Проверка:** `/battlefield` корректно показывает состояние боя
+
+---
+
+## 📊 Ключевой продуктовый сигнал
+
+**DM спамит проверками** — пользователи ожидают редкие и значимые проверки.
+
+**Статус:** ✅ Реализованы guardrails (budget/cooldown/anti-trivial + reason/stakes)
+
+**Мониторить:** среднее количество проверок за сессию, негативный feedback
+
+---
+
+## ✅ Решено (архив)
+
+| Проблема | Решение | Дата |
+|----------|---------|------|
+| DM спамит проверками | Guardrails: budget/cooldown/anti-trivial + reason/stakes | 2026-02 |
+| GigaChat TLS Certificate | Skip TLS env + TLS fallback stub | 2026-02 |
+| Database Migrations | Session goals + health checks | 2026-02 |
+| Runtime Panics | Defensive nil checks in coop flow | 2026-02 |
+| DM Analyzer: Truncated JSON | 8192 tokens + repair/validation | 2026-02 |
+| Combat Detection: False Negatives | Expanded markers + prompt | 2026-02 |
+| /battlefield нестабильность | Defensive checks + logging | 2026-02 |
+| Прогресс персонажа | Визуализация роста и статистика сессий | 2026-01 |
+| Утечка информации о ловушках | Analyzer-first + guardrails в промпт | 2026-01 |
+| Автопродолжение после провала проверки | DM получает результат в контексте | 2026-01 |
+| Блокировка после успешной проверки | Исправлена логика resolve pending check | 2026-01 |
+| Частая генерация изображений | Rate limiting (3/сессию) | 2026-01 |
+| JSON Stability Crisis | Улучшен repair + pre-validation | 2026-01 |
+| LLM Context Deadline Exceeded | Увеличены timeouts (30s → 60s) | 2026-01 |
+| GigaChat Function Calling | Тулзы в `functions` в `chat/completions` | 2026-01 |
+| Telegram Polling EOF | Exponential backoff с jitter | 2026-01 |
+| Image download 403 | X-Client-ID header + retry | 2026-01 |
+
+---
+
+## 📈 Метрики мониторинга
+
+| Метрика | Цель | Критичность |
+|---------|------|-------------|
+| GigaChat TLS errors | 0 | P0 |
+| Migration errors | 0 | P0 |
+| Runtime panics | 0 | P0 |
+| DM Analyzer valid JSON | >95% | P1 |
+| Combat detection accuracy | >95% | P1 |
+| Integration tests pass rate | >90% | P1 |

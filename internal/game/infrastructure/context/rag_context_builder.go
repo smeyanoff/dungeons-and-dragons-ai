@@ -19,13 +19,13 @@ import (
 )
 
 type RAGContextBuilder struct {
-	simpleBuilder    *SimpleContextBuilder
-	retrieveUC       *application.RetrieveContext
-	eventRepo        EventRepository
-	inventoryRepo    InventoryRepository
-	combatRepo       CombatRepository
-	worldEventRepo   WorldEventRepository
-	config           ragContextConfig
+	simpleBuilder  *SimpleContextBuilder
+	retrieveUC     *application.RetrieveContext
+	eventRepo      EventRepository
+	inventoryRepo  InventoryRepository
+	combatRepo     CombatRepository
+	worldEventRepo WorldEventRepository
+	config         ragContextConfig
 }
 
 type EventRepository interface {
@@ -284,6 +284,12 @@ func (b *RAGContextBuilder) BuildContext(
 
 	// Используем RAG для поиска релевантных событий с таймаутом
 	// Используем сообщение игрока как запрос для поиска
+	if b.retrieveUC == nil {
+		logger.Warn("RAG retrieve use case is nil, skipping RAG context",
+			logger.Uint("session_id", gs.ID),
+		)
+		return strings.Join(parts, "\n"), nil
+	}
 	logger.Debug("Retrieving RAG context",
 		logger.Uint("session_id", gs.ID),
 		logger.String("query", playerMessage),

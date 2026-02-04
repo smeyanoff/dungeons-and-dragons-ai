@@ -73,6 +73,7 @@ services:
       - GIGACHAT_AUTH_URL=${GIGACHAT_AUTH_URL:-https://ngw.devices.sberbank.ru:9443}
       - GIGACHAT_API_URL=${GIGACHAT_API_URL:-https://gigachat.devices.sberbank.ru/api/v1}
       - GIGACHAT_SCOPE=${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      - GIGACHAT_SKIP_TLS_VERIFY=${GIGACHAT_SKIP_TLS_VERIFY:-false}
       
       # Qdrant
       - QDRANT_HOST=${QDRANT_HOST:-qdrant}

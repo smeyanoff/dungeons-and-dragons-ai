@@ -953,6 +953,11 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 	// ВАЖНО: Проверяем, нет ли уже активного боя перед обработкой врагов
 	// Это предотвращает повторную генерацию врагов при каждом анализе ответа DM
 	if analysis.CombatDetected && len(analysis.Enemies) > 0 {
+		if uc.combatRepo == nil {
+			log.Printf("[DM Analyzer] Combat repo is nil, skipping combat handling (session_id: %d)", uc.sessionID)
+			analysis.CombatDetected = false
+			analysis.Enemies = nil
+		} else {
 		// Проверяем, нет ли уже активного боя
 		activeCombat, err := uc.combatRepo.GetActiveBySessionID(ctx, uc.sessionID)
 		if err != nil {
@@ -970,6 +975,7 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 			if err := uc.handleCombatStart(ctx, analysis.Enemies); err != nil {
 				return fmt.Errorf("failed to start combat: %w", err)
 			}
+		}
 		}
 	}
 

@@ -83,6 +83,8 @@ spec:
           value: "https://gigachat.devices.sberbank.ru/api/v1"
         - name: GIGACHAT_SCOPE
           value: "GIGACHAT_API_PERS"
+        - name: GIGACHAT_SKIP_TLS_VERIFY
+          value: "false"
         - name: TZ
           value: "Europe/Moscow"
         resources:

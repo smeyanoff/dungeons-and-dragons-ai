@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/llm_log"
@@ -112,7 +113,6 @@ func NewServer(addr string, logRepo LLMLogRepository) *Server {
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/log/", s.handleLogDetail)
 	mux.HandleFunc("/errors", s.handleErrors)
-	mux.HandleFunc("/stats", s.handleStats)
 	mux.HandleFunc("/branches", s.handleBranches)
 
 	// API endpoints
@@ -175,7 +175,6 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
 			<a href="/branches">Branches</a>
-			<a href="/stats">Statistics</a>
 		</div>
 		<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
 			<h1>🤖 LLM Monitoring Dashboard</h1>
@@ -646,6 +645,58 @@ func respondJSONError(w http.ResponseWriter, status int, message string) {
 	respondJSON(w, status, map[string]string{"error": message})
 }
 
+func formatInt64(v int64) string {
+	if v == 0 {
+		return "-"
+	}
+	return strconv.FormatInt(v, 10)
+}
+
+func formatUintPtr(v *uint) string {
+	if v == nil || *v == 0 {
+		return "-"
+	}
+	return strconv.FormatUint(uint64(*v), 10)
+}
+
+func toolNames(raw interface{}) string {
+	var payload string
+	switch v := raw.(type) {
+	case string:
+		payload = v
+	case *string:
+		if v != nil {
+			payload = *v
+		}
+	}
+	if strings.TrimSpace(payload) == "" {
+		return "-"
+	}
+	var calls []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(payload), &calls); err != nil {
+		return "-"
+	}
+	if len(calls) == 0 {
+		return "-"
+	}
+	seen := make(map[string]bool)
+	names := make([]string, 0, len(calls))
+	for _, call := range calls {
+		name := strings.TrimSpace(call.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return "-"
+	}
+	return strings.Join(names, ", ")
+}
+
 type logsPageFilters struct {
 	ChatID    string
 	TgUserID  string
@@ -670,6 +721,9 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filters logsP
 		"escape": func(s string) template.HTML {
 			return template.HTML(template.HTMLEscapeString(s))
 		},
+		"formatInt64":   formatInt64,
+		"formatUintPtr": formatUintPtr,
+		"toolNames":     toolNames,
 	}).Parse(`
 <!DOCTYPE html>
 <html>
@@ -776,7 +830,6 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filters logsP
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
 			<a href="/branches">Branches</a>
-			<a href="/stats">Statistics</a>
 		</div>
 		<form method="get" action="/logs" style="margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
 			<input type="text" name="chat_id" placeholder="Chat ID" value="{{.Filters.ChatID}}">
@@ -808,9 +861,9 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filters logsP
 				<tr>
 					<td><a href="/log/{{.ID}}">{{.ID}}</a></td>
 					<td class="time">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
-					<td>{{.ChatID}}</td>
-					<td>{{.TgUserID}}</td>
-					<td>{{if .SessionID}}{{.SessionID}}{{else}}-{{end}}</td>
+					<td>{{formatInt64 .ChatID}}</td>
+					<td>{{formatInt64 .TgUserID}}</td>
+					<td>{{formatUintPtr .SessionID}}</td>
 					<td>
 						{{if .SessionID}}
 						<a href="/logs?chat_id={{.ChatID}}&session_id={{.SessionID}}">Branch</a>
@@ -854,15 +907,7 @@ func renderLogsPage(w http.ResponseWriter, logs []*llm_log.LLMLog, filters logsP
 						<span class="badge badge-success">OK</span>
 						{{end}}
 					</td>
-					<td>
-						{{if .ToolsCallsCount}}
-						<span class="badge badge-tools">{{.ToolsCallsCount}}</span>
-						{{else if .HasTools}}
-						<span class="badge badge-tools">Yes</span>
-						{{else}}
-						-
-						{{end}}
-					</td>
+					<td>{{toolNames .ToolsCalls}}</td>
 				</tr>
 				{{end}}
 			</tbody>
@@ -906,6 +951,9 @@ func renderLogDetailPage(w http.ResponseWriter, logEntry *llm_log.LLMLog) {
 		"escape": func(s string) template.HTML {
 			return template.HTML(template.HTMLEscapeString(s))
 		},
+		"formatInt64":   formatInt64,
+		"formatUintPtr": formatUintPtr,
+		"toolNames":     toolNames,
 	}).Parse(`
 <!DOCTYPE html>
 <html>
@@ -940,7 +988,6 @@ func renderLogDetailPage(w http.ResponseWriter, logEntry *llm_log.LLMLog) {
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
 			<a href="/branches">Branches</a>
-			<a href="/stats">Statistics</a>
 		</div>
 		<div class="meta-info">
 			<div class="meta-field">
@@ -949,15 +996,15 @@ func renderLogDetailPage(w http.ResponseWriter, logEntry *llm_log.LLMLog) {
 			</div>
 			<div class="meta-field">
 				<div class="meta-label">Chat ID</div>
-				<div class="meta-value">{{.ChatID}}</div>
+				<div class="meta-value">{{formatInt64 .ChatID}}</div>
 			</div>
 			<div class="meta-field">
 				<div class="meta-label">User ID</div>
-				<div class="meta-value">{{.TgUserID}}</div>
+				<div class="meta-value">{{formatInt64 .TgUserID}}</div>
 			</div>
 			<div class="meta-field">
 				<div class="meta-label">Session ID</div>
-				<div class="meta-value">{{if .SessionID}}{{.SessionID}}{{else}}-{{end}}</div>
+				<div class="meta-value">{{formatUintPtr .SessionID}}</div>
 			</div>
 			<div class="meta-field">
 				<div class="meta-label">Request Branch</div>
@@ -1010,15 +1057,19 @@ func renderLogDetailPage(w http.ResponseWriter, logEntry *llm_log.LLMLog) {
 			<div class="value error">{{escape .Error}}</div>
 		</div>
 		{{end}}
-		{{if .ToolsCalls}}
-		<div class="field">
-			<div class="label">Tools Calls</div>
-			<div class="value json" id="tools-value">{{escape .ToolsCalls}}</div>
-			{{if gt (len .ToolsCalls) 2000}}
-			<span class="expand-btn" onclick="toggleFullHeight('tools-value')">[Показать полностью]</span>
+			<div class="field">
+				<div class="label">Tool Names</div>
+				<div class="value json">{{toolNames .ToolsCalls}}</div>
+			</div>
+			{{if .ToolsCalls}}
+			<div class="field">
+				<div class="label">Tools Calls</div>
+				<div class="value json" id="tools-value">{{escape .ToolsCalls}}</div>
+				{{if gt (len .ToolsCalls) 2000}}
+				<span class="expand-btn" onclick="toggleFullHeight('tools-value')">[Показать полностью]</span>
+				{{end}}
+			</div>
 			{{end}}
-		</div>
-		{{end}}
 	</div>
 	<script>
 		function toggleFullHeight(elementId) {
@@ -1069,7 +1120,6 @@ func renderBranchesPage(w http.ResponseWriter, branches []*LLMLogBranch, filters
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
 			<a href="/branches">Branches</a>
-			<a href="/stats">Statistics</a>
 		</div>
 		<form method="get" action="/branches" style="margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
 			<input type="text" name="chat_id" placeholder="Chat ID" value="{{.Filters.ChatID}}">
@@ -1163,7 +1213,6 @@ func renderStatsPage(w http.ResponseWriter, stats *LLMStats, from, to time.Time)
 			<a href="/logs">Recent Logs</a>
 			<a href="/errors">Errors</a>
 			<a href="/branches">Branches</a>
-			<a href="/stats">Statistics</a>
 		</div>
 		<div class="period">
 			<strong>Period:</strong> {{.From.Format "2006-01-02 15:04:05"}} to {{.To.Format "2006-01-02 15:04:05"}}

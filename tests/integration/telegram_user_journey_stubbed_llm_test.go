@@ -161,11 +161,11 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 		nil, // useSpellUC
 		nil, // responseCache
 		player_action.NewActionValidator(),
-		nil, // checkDailyProgressUC
-		nil, // getSubscriptionUC
-		nil, // updateRatingUC
+		nil,       // checkDailyProgressUC
+		nil,       // getSubscriptionUC
+		nil,       // updateRatingUC
 		analyzeUC, // analyzePlayerActionUC
-		nil, // generateLocationEventUC
+		nil,       // generateLocationEventUC
 	)
 
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
@@ -234,22 +234,28 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 	}
 
 	// 3) player action -> tool-first ability check prompt + /roll d20
+	beforeCalls := fakeAPI.snapshotCalls()
 	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "Пытаюсь вскрыть замок на сундуке")); err != nil {
 		problems = append(problems, fmt.Sprintf("player action: %v", err))
 	}
 
 	calls := fakeAPI.snapshotCalls()
+	startIdx := len(beforeCalls)
+	if startIdx > len(calls) {
+		startIdx = 0
+	}
 	promptFound := false
-	for _, c := range calls {
+	for _, c := range calls[startIdx:] {
 		if (c.Method == "sendMessage" || c.Method == "editMessageText") &&
 			c.ChatID == chatID &&
-			strings.Contains(c.Text, "Нужна проверка") {
+			strings.Contains(c.Text, "🎲 Нужна проверка") &&
+			strings.Contains(c.Text, "DC") {
 			promptFound = true
 			break
 		}
 	}
 	if !promptFound {
-		t.Fatalf("Не удалось найти prompt с текстовой подсказкой ability check")
+		t.Fatalf("Не удалось найти player-facing подсказку про ability check (ожидали новый текст с '🎲 Нужна проверка' и 'DC' после действия игрока)")
 	}
 	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "/roll d20")); err != nil {
 		t.Fatalf("/roll d20: %v", err)
