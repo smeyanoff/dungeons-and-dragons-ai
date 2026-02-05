@@ -1,149 +1,73 @@
-# CODE_REVIEW — Dungeons & Dragons AI Bot
+# CODE_REVIEW — D&D AI Bot
 
-**Последнее обновление:** 2026-02-05
-**Цель:** короткий список активных рисков + action items для команды.
-
-**Статус:** P0 блокеров нет. P1 по стабильности/архитектуре закрыты (tests без `time.Sleep`, `bot.go` < 1500 LOC, output‑guard, RAG fallback, visited/навигация, 402 fallback). Остаются P2 улучшения: контроль медиа (реже, без автокарты), тонкая настройка частоты изображений.
+**Обновлено:** 2026-02-05  
+**Назначение:** активные риски и задачи для команды. Детали решённого — в TASKS.md и PROBLEMS.md.
 
 ---
 
-## 🚨 P0 — Критичные проблемы
+## Статус
 
-*Нет активных критических проблем*
-
----
-
-## ⚠️ P1 — Важные проблемы
-
-### 1. Остаточные флейковые тесты
-**Симптом:** было — интеграционные тесты использовали `time.Sleep` для синхронизации  
-**Влияние:** было — нестабильность CI/CD, ложные срабатывания
-**Файлы:** 
-- `tests/integration/*.go` (множественные использования)
-- `internal/game/infrastructure/persistence/*_test.go` (unit тесты)
-
-**Action items:**
-- [x] Заменить `time.Sleep` в интеграционных тестах на proper synchronization
-- [x] Добавить deterministic test helpers для unit тестов
-
-**Проверка:** `go test ./...` проходит стабильно
+- **P0:** нет блокеров.
+- **P1:** спринт OOC, медиа, combat guard доставлен (см. TASKS.md архив).
+- **В бэклоге:** TASKS.md P2 — медиа-детали, playbook, мониторинг.
 
 ---
 
-### 2. Telegram Bot все еще большой
-**Симптом:** было — `internal/telegram/bot.go` содержал тысячи строк кода  
-**Влияние:** Сложность поддержки, тестирования, риск конфликтов при разработке
-**Файл:** `internal/telegram/bot.go`
+## P0 — Критичные
 
-**Action items:**
-- [x] Дальнейшее разделение bot.go на более мелкие модули (факт: `bot.go` ~700 LOC)
-- [ ] Выделить middleware и utility функции (опционально, если снова начнёт разрастаться)
-- [x] Проверить соответствие роутинга команд и списка распознаваемых команд (`isKnownCommand` vs `handleCommand`)
-
-**Проверка:** Основной bot.go файл < 1500 строк
+*Нет активных.*
 
 ---
 
-## 📊 Ключевые продуктовые сигналы
+## P1 — Остаточное
 
-### Основные UX проблемы (из FEEDBACK.md):
-- **Утечки internal/tool текста** в сообщения DM — игроки видят системные инструкции
-- **Слишком много изображений** — медиа появляется "само по себе" слишком часто  
-- **Провалы памяти** — таймауты/сбои в RAG приводят к потере контекста
-- **Навигация блокируется проверками** — после перемещения запросы попадают под cooldown
-- **Visited-состояние локаций** — нет отметки посещённых локаций для ориентации
-
-### Что работает хорошо:
-- ✅ **Guardrails для проверок** — budget/cooldown/anti-trivial + reason/stakes
-- ✅ **Атмосферные описания** и связность мира
-- ✅ **RAG помогает удерживать контекст** когда стабилен
-
-**Мониторить:** утечки системного текста, частота генерации изображений, RAG failures
+- **Опционально:** при росте `internal/telegram/bot.go` (>1000 LOC) вынести middleware/утилиты.
+- **Мониторинг:** в TASKS.md P2.7 (частота 402, RAG-failures, утечки).
 
 ---
 
-## 🧪 Новые проблемы из интеграционного тестирования
+## P2 — Бэклог
 
-### GigaChat 402 ошибки в cooperative режиме
-**Симптом:** `failed to generate main quest: gigachat error status 402`
-**Влияние:** Блокирует создание новых игр в cooperative режиме
-**Файлы:** Тесты cooperative режима
+Переведено в **TASKS.md** P2: лимит изображений (счётчик уже есть), playbook, мониторинг.
 
-**Action items:**
-- [ ] Исследовать лимиты/квоты GigaChat API и условия использования
-- [x] Добавить fallback для случаев исчерпания лимитов (typed `PaymentRequiredError` + упрощённый режим без блокировки старта)
-- [ ] Мониторинг использования API квот
+| Область | Статус |
+|---------|--------|
+| **Медиа** | P1.2 доставлено; P2.3, P2.4 в бэклоге |
+| **Combat guard** | P1.3 доставлено |
+| **OOC** | P1.1 доставлено |
+| **Навигация** | Уже учтено (вне cooldown). |
 
----
-
-## ⚠️ P1 — UX регрессии (влияет на игроков)
-
-### Утечки системного текста *(UX КРИТИЧНО)*
-**Проблема:** Игроки видят internal/tool инструкции в сообщениях DM
-**Влияние:** Ломает immersion, показывает "кухню" системы
-**Action items:**
-- [x] Единый output‑guard перед отправкой в Telegram: жёсткая фильтрация internal/tool/JSON артефактов из финального текста DM
-- [x] Логировать утечки, но не показывать игроку
-- [x] Добавить validation/тесты на output DM перед отправкой
+**Из FEEDBACK.md:** сохранять атмосферные описания; проверки — редкие и со stakes; OOC-запросы обрабатывать отдельно.
 
 ---
 
-### Контроль медиа генерации *(UX УЛУЧШЕНИЕ)*
-**Проблема:** Слишком много изображений генерируется "само по себе"
-**Влияние:** Медиа появляется слишком часто, отвлекает от игры
-**Action items:**
-- [ ] Правила генерации/показа изображений (реже, только по событию/запросу)
-- [ ] Лимиты на сессию для медиа контента
-- [ ] Убрать автогенерацию карты как часть базового UX
+## Решено (архив)
+
+| Проблема | Решение |
+|----------|---------|
+| P0 Combat race / goroutine leaks | Copy return, fallback, managed worker |
+| P1 LLM coupling / flaky tests | Shared tools, split bot, sync без Sleep |
+| Утечки DM / RAG / 402 / visited | Output-guard, RAG fallback, PaymentRequiredError, visited, clear pending on move |
+| DM Analyzer JSON, Combat, TLS, nil panic | 8192 tokens + repair; markers; skip TLS env; nil checks |
 
 ---
 
-### Навигационные улучшения *(UX УЛУЧШЕНИЕ)*
-**Проблема:** Навигация блокируется проверками, нет visited-состояния локаций
-**Action items:**
-- [ ] Исключить навигационные запросы из cooldown/анти-повтор
-- [ ] Добавить отметку посещённых локаций
-- [ ] OOC/мета-запросы должны обрабатываться отдельно
-- [ ] При перемещении закрывать `pending ability check` (иначе навигация “залипает” после смены локации)
+## Метрики
+
+| Метрика | Цель | Сейчас |
+|---------|------|--------|
+| P0/P1 активные | 0 | 0 ✅ |
+| bot.go LOC | <1500 | ~696 ✅ |
+| Flaky tests | 0 | 0 ✅ |
+| System text leaks | 0 | guarded + tests ✅ |
+| GigaChat 402 | fallback | typed error + упрощённый режим ✅ |
 
 ---
 
-## ✅ Решено (архив основных достижений)
+## Техдолг (низкий приоритет)
 
-| Проблема | Решение | Дата |
-|----------|---------|------|
-| **P0 Combat race condition** | Copy return + concurrent tests | 2026-02 |
-| **P0 Ignored critical errors** | Log session/RAG failures + fallback paths | 2026-02 |
-| **P0 Goroutine leaks** | Managed log worker + cache Close | 2026-02 |
-| **P1 LLM architecture coupling** | Shared tool interfaces in llm domain | 2026-02 |
-| **P1 Telegram bot monolith** | Split callbacks/commands/feedback/health/messages | 2026-02 |
-| **P1 Basic command instability** | Integration test coverage + LLM fallback | 2026-02 |
-| DM Analyzer: Truncated JSON | 8192 tokens + repair/validation | 2026-02 |
-| Combat Detection: False Negatives | Expanded markers + prompt | 2026-02 |
-| GigaChat TLS Certificate | Skip TLS env + TLS fallback stub | 2026-02 |
-| Database Migrations | Session goals + health checks | 2026-02 |
-| Runtime Panics (nil pointer) | Defensive nil checks в cooperative mode | 2026-02 |
-
----
-
-## 📈 Метрики мониторинга
-
-| Метрика | Текущее состояние | Цель | Критичность |
-|---------|-------------------|------|-------------|
-| P0 проблемы | 0 ✅ | 0 | P0 |
-| P1 проблемы | 0 ✅ | 0 | P1 |
-| Flaky tests (time.Sleep) | 0 ✅ | 0 | P1 |
-| Large files (>1000 LOC) | bot.go: 696 ✅ | <3 | P1 |
-| Integration tests pass rate | >95% ✅ | >95% | P1 |
-| System text leaks в DM | 0 (guarded + tests) ✅ | 0 | P1 |
-| GigaChat 402 errors | могут происходить, но есть fallback ✅ | <1% | P1 |
-
----
-
-## 🔧 Технический долг (низкий приоритет)
-
-- **Дублирование кода:** `truncateRunes` в 2 местах
-- **Глобальное состояние:** `pkg/logger` глобальная переменная  
-- **Неправильная структура pkg:** бизнес-логика в `pkg/gigachat/`
-- **Отсутствие валидации:** Telegram callback data без проверок
-- **Небезопасное TLS:** `InsecureSkipVerify` в production коде
+- Дублирование: `truncateRunes` в двух местах.
+- Глобальное состояние: `pkg/logger`.
+- Бизнес-логика в `pkg/gigachat/`.
+- Telegram callback data без валидации.
+- `InsecureSkipVerify` в production.

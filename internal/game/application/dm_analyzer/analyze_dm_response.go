@@ -30,9 +30,11 @@ import (
 // DMResponseAnalysis содержит структурированный анализ ответа DM
 type DMResponseAnalysis struct {
 	// Боевая ситуация
-	CombatDetected     bool    `json:"combat_detected"`                // Начался ли бой
-	Enemies            []Enemy `json:"enemies,omitempty"`              // Список врагов, если бой начался
-	CombatStartMessage string  `json:"combat_start_message,omitempty"` // Сообщение о порядке ходов при начале боя
+	CombatDetected              bool    `json:"combat_detected"`                           // Начался ли бой
+	Enemies                     []Enemy `json:"enemies,omitempty"`                       // Список врагов, если бой начался
+	CombatStartMessage          string  `json:"combat_start_message,omitempty"`           // Сообщение о порядке ходов при начале боя
+	CombatEmptyEnemiesFallback  string  `json:"combat_empty_enemies_fallback,omitempty"` // Подсказка игроку, если бой без врагов
+	CombatEnded                  bool    `json:"combat_ended"`                           // Конец боя (победа, последний враг повержен) — значимое событие для автогена
 
 	// Квесты
 	QuestCompleted bool   `json:"quest_completed"`       // Выполнен ли квест
@@ -51,7 +53,8 @@ type DMResponseAnalysis struct {
 	NPCMet          *NPC      `json:"npc_met,omitempty"`          // NPC, с которым игрок впервые встретился
 
 	// Автоматически сгенерированные изображения
-	GeneratedImages []GeneratedImage `json:"generated_images,omitempty"` // Пути к автоматически сгенерированным изображениям
+	GeneratedImages       []GeneratedImage `json:"generated_images,omitempty"`       // Пути к автоматически сгенерированным изображениям
+	ImageLimitReachedMessage string        `json:"image_limit_reached_message,omitempty"` // Сообщение при достижении лимита изображений за сессию
 }
 
 var invalidAnalyzerJSONCount uint64
@@ -138,9 +141,10 @@ type AnalyzeDMResponseUseCase struct {
 	fullSessionRepo          FullSessionRepository     // Репозиторий для доступа к полной сессии (для pending проверок)
 	eventRepo                StoryEventRepository      // Репозиторий для записи событий истории
 	indexDocUC               RAGIndexer                // Индексатор RAG для событий
-	imagesGeneratedInSession int                       // Счетчик изображений, сгенерированных в этой сессии
-	maxImagesPerSession      int                       // Максимальное количество изображений за сессию
-	autoGenerateImages       bool                      // Включить/отключить автоматическую генерацию изображений
+	imagesGeneratedInSession  int    // Счетчик изображений, сгенерированных в этой сессии
+	maxImagesPerSession       int    // Максимальное количество изображений за сессию
+	autoGenerateImages        bool   // Включить/отключить автоматическую генерацию изображений
+	imageLimitReachedMessage  string // Сообщение игроку при достижении лимита (устанавливается в генераторах)
 }
 
 // SessionRepository интерфейс для доступа к сессии (для поиска локаций)
@@ -358,6 +362,7 @@ func (uc *AnalyzeDMResponseUseCase) Execute(
 	ctx context.Context,
 	dmResponse string,
 ) (*DMResponseAnalysis, error) {
+	uc.imageLimitReachedMessage = "" // Сбрасываем для каждого анализа
 	// Анализируем ответ DM с помощью LLM
 	analysis, err := uc.analyzeWithLLM(ctx, dmResponse)
 	if err != nil {
@@ -383,6 +388,9 @@ func (uc *AnalyzeDMResponseUseCase) Execute(
 		analysis.CombatStartMessage = uc.combatStartMessage
 		uc.combatStartMessage = "" // Очищаем для следующего использования
 	}
+	// Сообщение при достижении лимита изображений за сессию
+	analysis.ImageLimitReachedMessage = uc.imageLimitReachedMessage
+	uc.imageLimitReachedMessage = ""
 
 	return analysis, nil
 }
@@ -476,12 +484,14 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 	}
 
 	// Валидируем боевую ситуацию с дополнительными проверками
+	combatEmptyFallback := "*(Ведущий упомянул бой, но противники не указаны. Опиши, кого видишь, или попроси уточнить.)*"
 	if analysis.CombatDetected {
 		validEnemies, hasValidEnemies := validateEnemiesStrict(analysis.Enemies)
 		if !hasValidEnemies {
 			log.Printf("[DM Analyzer] Combat detected but no valid enemies found, disabling combat")
 			analysis.CombatDetected = false
 			analysis.Enemies = nil
+			analysis.CombatEmptyEnemiesFallback = combatEmptyFallback
 		} else {
 			analysis.Enemies = validEnemies
 			// Дополнительная проверка: убеждаемся что у всех врагов есть имена и характеристики
@@ -495,6 +505,7 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 				log.Printf("[DM Analyzer] Combat detected but no enemies have complete stats, disabling combat")
 				analysis.CombatDetected = false
 				analysis.Enemies = nil
+				analysis.CombatEmptyEnemiesFallback = combatEmptyFallback
 			}
 		}
 	}
@@ -564,6 +575,7 @@ func validateJSONSchemaStrict(prompt string) error {
 	requiredFields := []string{
 		"combat_detected",
 		"enemies",
+		"combat_ended",
 		"quest_completed",
 		"quest_failed",
 		"quest_title",
@@ -1019,8 +1031,8 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 			}
 		}
 
-		// Автоматически генерируем изображения для полученных предметов
-		if uc.imageGenerationService != nil && uc.userID > 0 {
+		// Автоматически генерируем изображения для полученных предметов только при включённом autoimage (значимое событие)
+		if uc.imageGenerationService != nil && uc.userID > 0 && uc.autoGenerateImages {
 			generatedImages := uc.generateImagesForItems(ctx, analysis.ItemsReceived)
 			// Добавляем пути к изображениям в анализ для последующей отправки
 			analysis.GeneratedImages = append(analysis.GeneratedImages, generatedImages...)
@@ -1113,22 +1125,33 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 		}
 	}
 
+	// Конец боя — значимое событие для автогена (P2.4)
+	if analysis.CombatEnded && uc.imageGenerationService != nil && uc.userID > 0 && uc.autoGenerateImages {
+		generatedImage := uc.generateImageForCombatEnd(ctx)
+		if generatedImage != nil {
+			analysis.GeneratedImages = append(analysis.GeneratedImages, *generatedImage)
+		}
+	}
+
 	return nil
 }
 
-// generateImagesForItems автоматически генерирует изображения для полученных предметов
-// Возвращает пути к сгенерированным изображениям (синхронно, но с таймаутом)
+// generateImagesForItems автоматически генерирует изображения для полученных предметов.
+// Вызывается только при включённом autoGenerateImages (значимое событие).
 func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 	ctx context.Context,
 	items []Item,
 ) []GeneratedImage {
-	if uc.imageGenerationService == nil || uc.userID == 0 {
+	if uc.imageGenerationService == nil || uc.userID == 0 || !uc.autoGenerateImages {
 		return nil
 	}
 
 	// Проверяем лимит изображений за сессию
 	if uc.imagesGeneratedInSession >= uc.maxImagesPerSession {
 		log.Printf("[DM Analyzer] Session image limit reached (%d/%d), skipping item image generation", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		if uc.imageLimitReachedMessage == "" {
+			uc.imageLimitReachedMessage = fmt.Sprintf("Использовано %d из %d изображений за сессию. Можно запросить вручную: /image описание", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		}
 		return nil
 	}
 
@@ -1205,6 +1228,9 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 	// Проверяем лимит изображений за сессию
 	if uc.imagesGeneratedInSession >= uc.maxImagesPerSession {
 		log.Printf("[DM Analyzer] Session image limit reached (%d/%d), skipping location image generation", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		if uc.imageLimitReachedMessage == "" {
+			uc.imageLimitReachedMessage = fmt.Sprintf("Использовано %d из %d изображений за сессию. Можно запросить вручную: /image описание", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		}
 		return nil
 	}
 
@@ -1297,6 +1323,9 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 	// Проверяем лимит изображений за сессию
 	if uc.imagesGeneratedInSession >= uc.maxImagesPerSession {
 		log.Printf("[DM Analyzer] Session image limit reached (%d/%d), skipping NPC image generation", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		if uc.imageLimitReachedMessage == "" {
+			uc.imageLimitReachedMessage = fmt.Sprintf("Использовано %d из %d изображений за сессию. Можно запросить вручную: /image описание", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		}
 		return nil
 	}
 
@@ -1381,6 +1410,47 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 		ImagePath:  resp.ImagePath,
 		FileID:     resp.FileID,
 		EntityName: npc.Name,
+		Downloaded: resp.Downloaded,
+	}
+}
+
+// generateImageForCombatEnd генерирует изображение «конец боя / победа» при значимом событии (P2.4).
+func (uc *AnalyzeDMResponseUseCase) generateImageForCombatEnd(ctx context.Context) *GeneratedImage {
+	if uc.imageGenerationService == nil || uc.userID == 0 || !uc.autoGenerateImages {
+		return nil
+	}
+	if uc.imagesGeneratedInSession >= uc.maxImagesPerSession {
+		log.Printf("[DM Analyzer] Session image limit reached (%d/%d), skipping combat end image", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		if uc.imageLimitReachedMessage == "" {
+			uc.imageLimitReachedMessage = fmt.Sprintf("Использовано %d из %d изображений за сессию. Можно запросить вручную: /image описание", uc.imagesGeneratedInSession, uc.maxImagesPerSession)
+		}
+		return nil
+	}
+	imgCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
+	defer cancel()
+	systemPrompt := `Ты — талантливый художник в стиле фэнтези и Dungeons & Dragons. Создавай атмосферные сцены победы и завершения боя в стиле классического фэнтези-арта.`
+	userPrompt := "Победа после боя: герой среди поверженных врагов, конец схватки, атмосфера триумфа и усталости, фэнтези, D&D"
+	req := GenerateImageRequest{
+		SystemPrompt:    systemPrompt,
+		UserPrompt:      userPrompt,
+		Type:            "event",
+		EntityID:        0,
+		EntityName:      "combat_end",
+		ForceRegenerate: false,
+		UserID:          uc.userID,
+		SkipLimitCheck:  false,
+	}
+	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
+	if err != nil {
+		log.Printf("Failed to auto-generate image for combat end: %v", err)
+		return nil
+	}
+	uc.imagesGeneratedInSession++
+	return &GeneratedImage{
+		Type:       "event",
+		ImagePath:  resp.ImagePath,
+		FileID:     resp.FileID,
+		EntityName: "combat_end",
 		Downloaded: resp.Downloaded,
 	}
 }
@@ -1706,7 +1776,7 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 
 // buildAnalysisPrompt создает промпт для анализа ответа DM
 func buildAnalysisPrompt(dmResponse string, strict bool) string {
-	skeleton := `{"combat_detected":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+	skeleton := `{"combat_detected":false,"enemies":[],"combat_ended":false,"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
 	criticalFooter := ""
 	if strict {
 		criticalFooter = "\n\nСТРОГОЕ ПРАВИЛО ДЛЯ РЕТРАЯ:\n- НЕ возвращай пустой JSON {} или пустой ответ\n- Если нет событий, верни этот скелет без изменений: " + skeleton
@@ -1728,6 +1798,7 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
       "attack_bonus": число
     }
   ],
+  "combat_ended": true/false,
   "quest_completed": true/false,
   "quest_failed": true/false,
   "quest_title": "название",
@@ -1792,6 +1863,11 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
 - НЕ устанавливай true если: только упоминание о потенциальной угрозе, планирование боя, воспоминания о прошлом бое
 - Если combat_detected=true, ОБЯЗАТЕЛЬНО укажи хотя бы одного врага в массиве enemies
 - Для каждого врага ОБЯЗАТЕЛЬНО укажи hp, ac и attack_bonus (только числа!)
+
+КОНЕЦ БОЯ (combat_ended) — значимое событие для автогена изображений:
+- Устанавливай combat_ended=true ТОЛЬКО если в ответе DM явно описан КОНЕЦ боя: победа, последний враг повержен, враги бегут/сдаются.
+- Ключевые слова: "победа", "повержен", "последний враг падает", "бой окончен", "враги бегут", "побеждаешь", "одерживаешь победу", "остаёшься победителем".
+- НЕ устанавливай true при начале боя или в середине боя.
 - Если характеристики не указаны, используй значения по умолчанию:
   * hp: 15 (обычный враг), 35 (сильный), 75 (босс)
   * ac: 13 (обычный), 16 (сильный), 18 (босс)
@@ -3278,12 +3354,22 @@ func (uc *AnalyzeDMResponseUseCase) generateSimpleLocationScenario(location worl
 		reward = "Ценный предмет или информация"
 	}
 
+	hook := description
+	if len(hook) > 120 {
+		hook = hook[:117] + "..."
+	}
+	criticalChoice := objective
+	if criticalChoice == "" {
+		criticalChoice = "Выбрать, как действовать в ключевой момент"
+	}
 	return &world.LocationScenario{
-		ID:               fmt.Sprintf("simple_scenario_%d_%d", location.ID, time.Now().Unix()),
-		Title:            title,
+		ID:                fmt.Sprintf("simple_scenario_%d_%d", location.ID, time.Now().Unix()),
+		Title:             title,
 		Description:      description,
+		Hook:             hook,
 		Objective:        objective,
 		KeyEvents:        keyEvents,
+		CriticalChoice:   criticalChoice,
 		PossibleOutcomes: possibleOutcomes,
 		Reward:           reward,
 		Status:           "not_started",

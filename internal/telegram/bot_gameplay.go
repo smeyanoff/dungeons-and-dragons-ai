@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/pkg/logger"
 
@@ -161,65 +159,15 @@ sessionSaved:
 		}
 	}
 
-	// Генерируем красивую карту-изображение мира (если доступна генерация изображений)
-	// Сохраняем путь в сессии, чтобы /map мог показать картинку
-	if b.generateImageUC != nil && gs.MapImagePath == "" && len(gs.World.Locations) > 0 {
-		var sb strings.Builder
-		sb.WriteString("Fantasy world map, top-down, detailed, colored, parchment style, Dungeons & Dragons.\n")
-		sb.WriteString(fmt.Sprintf("World: %s.\n", gs.World.Name))
-		if gs.World.Description != "" {
-			sb.WriteString(fmt.Sprintf("World description: %s.\n", gs.World.Description))
-		}
-		sb.WriteString("Locations:\n")
-		for _, loc := range gs.World.Locations {
-			sb.WriteString(fmt.Sprintf("- %s\n", loc.Name))
-		}
-		sb.WriteString("Connections (direction -> destination):\n")
-		// Строим карту ID->name для удобного отображения связей
-		locNameByID := map[uint]string{}
-		for _, loc := range gs.World.Locations {
-			locNameByID[loc.ID] = loc.Name
-		}
-		for _, loc := range gs.World.Locations {
-			for _, conn := range loc.Connections {
-				toName := locNameByID[conn.ToLocationID]
-				if toName == "" {
-					toName = fmt.Sprintf("Location #%d", conn.ToLocationID)
-				}
-				sb.WriteString(fmt.Sprintf("- %s: %s -> %s\n", loc.Name, conn.Direction, toName))
-			}
-		}
+	// Автогенерация карты при старте отключена (никогда не срабатывала стабильно).
 
-		imgCtx, cancel := context.WithTimeout(ctx, 120*time.Second) // увеличиваем таймаут для изображений с учетом retry
-		defer cancel()
-		req := imageapp.GenerateImageRequest{
-			SystemPrompt:    "You are a fantasy cartographer. Create beautiful D&D-style maps with clear landmarks and readable layout. No text labels on the map itself.",
-			UserPrompt:      sb.String(),
-			Type:            "custom",
-			EntityID:        gs.WorldID,
-			ForceRegenerate: false,
-			UserID:          0,
-			SkipLimitCheck:  true,
-		}
-		resp, err := b.generateImageUC.Execute(imgCtx, req)
-		if err != nil {
-			logger.Warn("Failed to generate world map image",
-				logger.ErrorField(err),
-				logger.Int64("chat_id", chatID),
-				logger.Uint("world_id", gs.WorldID),
-			)
-		} else if resp != nil && resp.ImagePath != "" {
-			gs.MapImagePath = resp.ImagePath
-			if err := b.sessionRepo.Save(ctx, gs); err != nil {
-				logger.Warn("Failed to save map image path to session",
-					logger.ErrorField(err),
-					logger.Int64("chat_id", chatID),
-				)
-			}
-		}
+	// Вступительное сообщение от DM: описание мира и главного квеста
+	openingMsg, err := b.initCampaignUC.GenerateOpeningMessage(ctx, world)
+	if err == nil && openingMsg != "" {
+		finalMsg := openingMsg + "\n\n_Напишите, что хотите сделать, или используйте /help._"
+		return b.sendLongMessage(chatID, finalMsg)
 	}
-
-	// Отправляем приветственное сообщение
+	// Fallback: статичное приветствие при ошибке или пустом ответе LLM
 	welcomeText := fmt.Sprintf(`🎮 Игра начата!
 
 Мир: %s

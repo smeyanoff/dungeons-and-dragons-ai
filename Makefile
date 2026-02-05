@@ -19,7 +19,8 @@ help:
 	@echo "  test                 Run unit tests (go test ./...)"
 	@echo "  test-integration     Run all integration tests (requires containers)"
 	@echo "  test-telegram-stub   Telegram gameplay (stable, no real LLM/RAG network calls)"
-	@echo "  test-telegram-real   Telegram gameplay with real LLM (GigaChat) (may SKIP if creds missing)"
+	@echo "  test-telegram-real   One campaign: world -> first combat (real LLM; may SKIP if creds missing)"
+	@echo "  test-telegram-real-all  All Telegram real-LLM tests (CompleteFlow, CombatFlow, RealLLM_*)"
 	@echo "  test-telegram        Telegram gameplay tests (stub + real)"
 	@echo ""
 	@echo "Production targets:"
@@ -59,11 +60,16 @@ test:
 test-integration:
 	LLM_TEST_MIN_DELAY_MS=$(LLM_TEST_MIN_DELAY_MS) go test -v -count=1 -timeout $(GO_TEST_TIMEOUT) ./tests/integration/...
 
-.PHONY: test-telegram-stub test-telegram-real test-telegram
+.PHONY: test-telegram-stub test-telegram-real test-telegram-real-all test-telegram
 test-telegram-stub:
 	go test -v -count=1 -timeout $(GO_TEST_TIMEOUT) ./tests/integration/... -run 'TestTelegramGameplay_BotSimulation_'
 
+# Одна тестовая кампания: от появления в мире до первого боя в другой локации (mock Telegram + real LLM).
 test-telegram-real:
+	LLM_TEST_MIN_DELAY_MS=$(LLM_TEST_MIN_DELAY_MS) go test -v -count=1 -timeout $(GO_TEST_TIMEOUT) ./tests/integration/... -run 'TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat'
+
+# Расширенный набор: CompleteFlow, CombatFlow, все RealLLM_* тесты.
+test-telegram-real-all:
 	LLM_TEST_MIN_DELAY_MS=$(LLM_TEST_MIN_DELAY_MS) go test -v -count=1 -timeout $(GO_TEST_TIMEOUT) ./tests/integration/... -run 'TestTelegramGameplay_(CompleteFlow|CombatFlow|RealLLM_)'
 
 test-telegram: test-telegram-stub test-telegram-real

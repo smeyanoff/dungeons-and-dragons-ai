@@ -11,6 +11,7 @@ import (
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	llmlogdomain "dungeons-and-dragons-ai/internal/game/domain/llm_log"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
@@ -262,6 +263,12 @@ func TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat(t *testing.T) {
 			problems = append(problems, "в llm_logs не нашли tool вызов request_ability_check (ожидали tool-first ability check)")
 		}
 	}
+
+	// Всегда дописываем анализ запросов/ответов/промптов/тулзов в отчёт (даже при отсутствии логов или проблемах).
+	if logs == nil {
+		logs = []*llmlogdomain.LLMLog{}
+	}
+	appendAnalysisToTestingReport(chatID, logs)
 
 	if len(problems) > 0 {
 		writeToTestingReport(problems)

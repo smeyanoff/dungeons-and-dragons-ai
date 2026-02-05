@@ -40,25 +40,32 @@ type Client struct {
 }
 
 func NewClient(cfg Config) *Client {
+	// Базовый Transport для обычных запросов (LLM, embeddings)
 	transport := &http.Transport{
-		MaxIdleConns:        100,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 30 * time.Second, // Increased from 10s to handle slow TLS handshakes
-		// Add connection pooling and keep-alive
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   30 * time.Second,
 		MaxIdleConnsPerHost:   10,
 		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		// Enable keep-alive
-		DisableKeepAlives: false,
+		DisableKeepAlives:     false,
+	}
+	// Отдельный Transport для генерации/скачивания изображений (GigaChat может отвечать 1–3 мин)
+	imageTransport := &http.Transport{
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   30 * time.Second,
+		MaxIdleConnsPerHost:   10,
+		ResponseHeaderTimeout: 5 * time.Minute, // Генерация изображений часто >30s
+		ExpectContinueTimeout: 1 * time.Second,
+		DisableKeepAlives:     false,
 	}
 
 	// Если нужно пропустить проверку TLS (только для тестов)
-	// #nosec G402 - преднамеренно отключаем проверку TLS для работы с GigaChat API,
-	// который использует корневые сертификаты Сбербанка, устанавливаемые отдельно в образе
+	// #nosec G402 - преднамеренно отключаем проверку TLS для работы с GigaChat API
 	if cfg.SkipTLSVerify {
-		transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true,
-		}
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		imageTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
 	// Concurrency limit: уменьшаем до 2 для предотвращения rate limiting
@@ -87,7 +94,7 @@ func NewClient(cfg Config) *Client {
 		},
 		imageClient: &http.Client{
 			Timeout:   5 * time.Minute, // Extended timeout for image generation and download
-			Transport: transport,
+			Transport: imageTransport,
 		},
 		semaphore:              make(chan struct{}, concurrencyLimit),
 		rateLimiter:            rateLimiter,

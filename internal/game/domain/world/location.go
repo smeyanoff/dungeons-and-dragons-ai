@@ -10,17 +10,20 @@ type PredefinedCheck struct {
 	LocationHint string `json:"location_hint"` // Подсказка о том, где в локации находится проверка
 }
 
-// LocationScenario представляет сценарий для локации (цель, события, возможные исходы)
+// LocationScenario представляет playbook локации (P2.1): hook → 2–4 сцены → критический выбор → последствия.
+// Связь с NPC и квестовыми предметами задаётся через локацию (Location.NPCs) и контекст квеста.
 type LocationScenario struct {
-	ID               string   `json:"id"`                // Уникальный ID сценария
-	Title            string   `json:"title"`             // Название сценария
-	Description      string   `json:"description"`       // Подробное описание
-	Objective        string   `json:"objective"`         // Цель, которую нужно достичь
-	KeyEvents        []string `json:"key_events"`        // Ключевые события сценария
-	PossibleOutcomes []string `json:"possible_outcomes"` // Возможные исходы
-	Reward           string   `json:"reward"`            // Награда за успешное завершение
-	Status           string   `json:"status"`            // Статус: "not_started", "in_progress", "completed", "failed"
-	CreatedAt        string   `json:"created_at"`        // Время создания
+	ID                string   `json:"id"`                  // Уникальный ID сценария
+	Title             string   `json:"title"`                // Название сценария
+	Description       string   `json:"description"`         // Подробное описание (зацепка / hook)
+	Hook              string   `json:"hook,omitempty"`      // Зацепка: с чего начинается сцена (явный вход в сцену)
+	Objective         string   `json:"objective"`           // Цель сценария
+	KeyEvents         []string `json:"key_events"`           // Ключевые события (2–4 сцены)
+	CriticalChoice    string   `json:"critical_choice,omitempty"` // Критический выбор игрока
+	PossibleOutcomes  []string `json:"possible_outcomes"`  // Последствия / возможные исходы
+	Reward            string   `json:"reward"`               // Награда за успешное завершение
+	Status            string   `json:"status"`              // Статус: "not_started", "in_progress", "completed", "failed"
+	CreatedAt         string   `json:"created_at"`          // Время создания
 }
 
 type Location struct {

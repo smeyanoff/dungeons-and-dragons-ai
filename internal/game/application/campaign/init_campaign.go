@@ -538,6 +538,70 @@ func (uc *InitCampaignUseCase) buildWorld(
 	return w, nil
 }
 
+// GenerateOpeningMessage генерирует вступительное сообщение от DM: описание мира и главного квеста.
+// Вызывается сразу после создания мира. При ошибке вызывающий код должен показать статичное приветствие.
+func (uc *InitCampaignUseCase) GenerateOpeningMessage(ctx context.Context, w *world.World) (string, error) {
+	if w == nil || w.MainQuest == nil {
+		return "", fmt.Errorf("world or main quest is nil")
+	}
+
+	worldDesc := w.Description
+	if worldDesc == "" || worldDesc == w.Name {
+		worldDesc = w.Name + " — мир приключений."
+	}
+
+	var locList string
+	if len(w.Locations) > 0 {
+		names := make([]string, 0, len(w.Locations))
+		for _, loc := range w.Locations {
+			names = append(names, loc.Name)
+		}
+		locList = strings.Join(names, ", ")
+	}
+
+	prompt := fmt.Sprintf(`Ты — Мастер подземелий (Dungeon Master) в D&D 5e.
+
+Только что создан мир. Опиши его игроку и представь главный квест — одним вступительным сообщением от лица DM.
+
+Данные мира:
+- Название мира: %s
+- Описание/атмосфера: %s
+- Главный квест: «%s» — %s
+- Локации мира: %s
+
+Требования:
+- Ответь на русском языке.
+- 2–4 коротких абзаца: сначала атмосфера мира, затем представь главный квест так, чтобы игроку было понятно, с чего начать.
+- Пиши от первого лица как DM (обращайся к игроку «ты»).
+- Не проси бросать кубики и не добавляй проверки — только описание и постановка квеста.
+- Без технических пометок, без JSON, без markdown-блоков кода.`,
+		w.Name,
+		worldDesc,
+		w.MainQuest.Title,
+		w.MainQuest.Description,
+		locList,
+	)
+
+	genCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	msg, err := uc.llm.Generate(genCtx, prompt)
+	if err != nil {
+		logger.Warn("Failed to generate opening message from DM",
+			logger.ErrorField(err),
+			logger.String("world_name", w.Name),
+		)
+		return "", err
+	}
+
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return "", fmt.Errorf("empty opening message from LLM")
+	}
+
+	return msg, nil
+}
+
 // cleanJSONResponse очищает ответ LLM от markdown блоков кода
 func cleanJSONResponse(raw string) string {
 	return jsonrepair.Clean(raw)

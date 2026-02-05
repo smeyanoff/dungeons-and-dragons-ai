@@ -116,10 +116,11 @@ type GameSession struct {
 	LastAbilityCheckAt         *time.Time `gorm:"index"`
 
 	// Adaptive difficulty statistics (адаптивная сложность)
-	SessionSuccessCount  int `gorm:"default:0"` // Количество успешных проверок в сессии
-	SessionFailureCount  int `gorm:"default:0"` // Количество провальных проверок в сессии
-	SessionChecksCount   int `gorm:"default:0"` // Общее количество проверок в сессии
+	SessionSuccessCount   int `gorm:"default:0"` // Количество успешных проверок в сессии
+	SessionFailureCount   int `gorm:"default:0"` // Количество провальных проверок в сессии
+	SessionChecksCount    int `gorm:"default:0"` // Общее количество проверок в сессии
 	SessionDifficultyMod int `gorm:"default:0"` // Модификатор сложности для сессии (-2 до +2)
+	SessionMessageCount   int `gorm:"default:0"` // Сообщений в сессии (игрок + DM) для метрики checks per 100 msg (P2.6)
 
 	SessionGoals []SessionGoal `gorm:"foreignKey:GameSessionID"` // Цели текущей сессии
 
@@ -413,6 +414,14 @@ func (s *GameSession) ClearExpiredCooldowns(cooldownDuration time.Duration) {
 			delete(s.AbilityCooldowns, abilityType)
 		}
 	}
+}
+
+// ChecksPer100Messages возвращает метрику «проверок на 100 сообщений» (P2.6). Целевое значение <5.
+func (s *GameSession) ChecksPer100Messages() float64 {
+	if s.SessionMessageCount <= 0 {
+		return 0
+	}
+	return float64(s.SessionChecksCount) / float64(s.SessionMessageCount) * 100
 }
 
 // AddCompanion добавляет компаньона в отряд

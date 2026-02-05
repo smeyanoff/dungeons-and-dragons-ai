@@ -8,9 +8,11 @@
 - **Real LLM (одна кампания, RAG включен)**:
 
 ```bash
-set -a && source /Users/dima/Projects/dungeons-and-dragons-ai/.env && set +a
+set -a && source .env && set +a
 go test -v -count=1 -timeout 60m ./tests/integration/... -run 'TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat'
 ```
+
+Перезапуск контейнеров — только через `make deploy`.
 
 ## Итог (актуально)
 
@@ -51,51 +53,49 @@ go test -v -count=1 -timeout 60m ./tests/integration/... -run 'TestTelegramGamep
 - `tests/integration/location_event_payload_test.go` — ожидания по payload/metadata устарели (ложные FAIL).
 - `tests/integration/telegram_location_events_test.go` — флейковый/ошибочный тест (ложные FAIL).
 
----
+## История проблем (кратко)
 
-## Проблемы, найденные при интеграционном тестировании (2026-02-03 15:34:03)
+Сводка по категориям по прошлым прогонам (2026-02-03):
 
-1. llm_logs есть (10), но нет ни одного запроса с tools
-2. в llm_logs не нашли tool вызов request_ability_check (ожидали tool-first ability check)
-
----
-
-## Проблемы, найденные при интеграционном тестировании (2026-02-03 15:35:45)
-
-1. Real LLM Combat Analysis: 0 problems, 0 feedback items from 5 test cases
+- **LLM/сеть**: GigaChat 402 при генерации main quest (/newgame для сессионных целей и cooperative режима).
+- **Команды/UX**: бот не ответил на /help; после /battlefield не найдено сообщение с «Поле боя»; после /map не найдены inline-кнопки навигации (map_to_*); инвентарь не отображает информацию; карта мира без кнопок навигации.
+- **Состояние**: персонаж не создан после /createcharacter (сессионные цели / cooperative); pending ability check не очищен после /roll d20; первый игрок не создан в cooperative режиме; в llm_logs есть записи, но нет запросов с tools и не найден вызов request_ability_check.
 
 ---
 
-## Проблемы, найденные при интеграционном тестировании (2026-02-03 15:37:25)
+Ниже дописывается секция **«Анализ запросов/ответов/промптов/тулзов»** после каждого прогона теста `TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat`.
 
-1. Бот не ответил на команду /help
-2. После /battlefield не найдено сообщение с полем боя
-3. После /map не найдены inline-кнопки навигации (map_to_*)
+## Анализ запросов/ответов/промптов/тулзов (2026-02-05 14:26:40)
+
+chat_id=1770290740524597943, логов=11
+
+| #1 | prompt_len=7038 | response_len=408 | has_tools=false | tools= |
+|     | response_preview: ```json {   "combat_detected": false,   "enemies": [],   "combat_ended": false, ... |
+| #2 | prompt_len=3693 | response_len=715 | has_tools=false | tools= |
+|     | response_preview: ### Финальный ответ:  Эребос, едва успев спрятаться в тени, слышит приближающиес... |
+| #3 | prompt_len=2887 | response_len=783 | has_tools=true | tools=generate_image |
+|     | response_preview: Эребос тяжело сглотнул, услышав характерный скрип двери, открывшейся не так, как... |
+| #4 | prompt_len=4062 | response_len=468 | has_tools=false | tools= |
+|     | response_preview: {   "needs_ability_check": true,   "ability_check": {     "ability": "dexterity"... |
+| #5 | prompt_len=616 | response_len=1183 | has_tools=false | tools= |
+|     | response_preview: {   "connections": {     "Руины Черного замка": [       {         "to_location":... |
+| #6 | prompt_len=381 | response_len=285 | has_tools=false | tools= |
+|     | response_preview: {   "npcs": [     {       "name": "Аббадон Серые Очи",       "role": "Маг-путеше... |
+| #7 | prompt_len=362 | response_len=349 | has_tools=false | tools= |
+|     | response_preview: {   "npcs": [     {       "name": "Граф Дарквуд",       "role": "главный антагон... |
+| #8 | prompt_len=365 | response_len=282 | has_tools=false | tools= |
+|     | response_preview: {   "npcs": [     {       "name": "Таградар Кровавая Коготь",       "role": "стр... |
+| #9 | prompt_len=580 | response_len=405 | has_tools=false | tools= |
+|     | response_preview: {   "locations": [     {       "name": "Руины Черного замка",       "description... |
+| #10 | prompt_len=600 | response_len=634 | has_tools=false | tools= |
+|     | response_preview: {   "locations": [     {       "name": "Руины древнего храма Вельзира",       "d... |
+| #11 | prompt_len=503 | response_len=757 | has_tools=false | tools= |
+|     | response_preview: {   "title": "Проклятая книга теней",   "description": "Игроки исследуют древние... |
 
 ---
 
-## Проблемы, найденные при интеграционном тестировании (2026-02-03 15:37:46)
+## Проблемы, найденные при интеграционном тестировании (2026-02-05 14:26:40)
 
-1. Bot did not respond to /help command
-2. Character not created after /createcharacter
-3. Pending ability check not cleared after /roll d20
-4. Battlefield message not found after /battlefield command
-5. No navigation buttons found after /map command
-
----
-
-## Проблемы, найденные при интеграционном тестировании (2026-02-03 15:38:42)
-
-1. Система инвентаря не отображает информацию
-2. Карта мира не предоставляет кнопки навигации
-
----
-
-## Проблемы, найденные при интеграционном тестировании (2026-02-03 15:40:12)
-
-1. /newgame для сессионных целей: failed to generate main quest: gigachat error status 402: 
-2. Персонаж не создан для сессионных целей
-3. /newgame для cooperative режима: failed to generate main quest: gigachat error status 402: 
-4. Первый игрок не создан в cooperative режиме
+1. в llm_logs не нашли tool вызов request_ability_check (ожидали tool-first ability check)
 
 ---

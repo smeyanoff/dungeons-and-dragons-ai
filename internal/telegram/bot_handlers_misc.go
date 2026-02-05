@@ -1082,6 +1082,7 @@ func (b *Bot) handleProgress(ctx context.Context, chatID int64, tgUserID int64) 
 └ Проверки: %d всего (%d успехов, %d провалов)
 └ Процент успеха: %.1f%%
 └ Модификатор сложности: %+d
+└ Проверок на 100 сообщений: %.1f (цель <5)
 └ Текущая локация: %s
 
 📅 Сессия начата: %s`,
@@ -1101,6 +1102,7 @@ func (b *Bot) handleProgress(ctx context.Context, chatID int64, tgUserID int64) 
 		gs.SessionFailureCount,
 		successRate,
 		gs.SessionDifficultyMod,
+		gs.ChecksPer100Messages(),
 		locationName,
 		gs.CreatedAt.Format("02.01.2006 15:04"),
 	)

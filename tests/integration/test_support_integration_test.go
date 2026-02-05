@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -493,6 +494,63 @@ func writeToFeedback(feedback []string) {
 	newSection += "\n---\n"
 
 	_ = os.WriteFile(feedbackPath, []byte(existingContent+newSection), 0644)
+}
+
+// appendAnalysisToTestingReport дописывает в TESTING_REPORT.md секцию «Анализ запросов/ответов/промптов/тулзов»
+// с метриками по каждому логу (длина промпта/ответа, has_tools, имена тулзов). Полный текст промптов не выводится.
+func appendAnalysisToTestingReport(chatID int64, logs []*llmlogdomain.LLMLog) {
+	reportPath := reportFilePath("TESTING_REPORT.md")
+	existingContent := ""
+	if data, err := os.ReadFile(reportPath); err == nil {
+		existingContent = string(data)
+	}
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	newSection := fmt.Sprintf("\n## Анализ запросов/ответов/промптов/тулзов (%s)\n\n", timestamp)
+	newSection += fmt.Sprintf("chat_id=%d, логов=%d\n\n", chatID, len(logs))
+
+	if len(logs) == 0 {
+		newSection += "Нет записей llm_logs по chat_id.\n\n"
+	} else {
+		const responsePreviewLen = 80
+		for i, l := range logs {
+			if l == nil {
+				continue
+			}
+			promptLen := len([]rune(l.Prompt))
+			responseLen := len([]rune(l.Response))
+			responsePreview := l.Response
+			if len([]rune(responsePreview)) > responsePreviewLen {
+				runes := []rune(responsePreview)
+				responsePreview = string(runes[:responsePreviewLen]) + "..."
+			}
+			toolNames := ""
+			if l.HasTools && l.ToolsCalls != nil && strings.TrimSpace(*l.ToolsCalls) != "" {
+				var decoded []struct {
+					Name string `json:"name"`
+				}
+				if decErr := json.Unmarshal([]byte(*l.ToolsCalls), &decoded); decErr == nil {
+					var names []string
+					for _, c := range decoded {
+						if c.Name != "" {
+							names = append(names, c.Name)
+						}
+					}
+					toolNames = strings.Join(names, ", ")
+				} else {
+					toolNames = "(parse error)"
+				}
+			} else if l.HasTools {
+				toolNames = "(has_tools=true, tools_calls empty)"
+			}
+			newSection += fmt.Sprintf("| #%d | prompt_len=%d | response_len=%d | has_tools=%v | tools=%s |\n", i+1, promptLen, responseLen, l.HasTools, toolNames)
+			newSection += fmt.Sprintf("|     | response_preview: %s |\n", strings.ReplaceAll(responsePreview, "\n", " "))
+		}
+		newSection += "\n"
+	}
+	newSection += "---\n"
+
+	_ = os.WriteFile(reportPath, []byte(existingContent+newSection), 0644)
 }
 
 func min(a, b int) int {
