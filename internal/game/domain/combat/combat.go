@@ -121,10 +121,10 @@ func (c *Combat) GetCurrentParticipant() *CombatParticipant {
 		idx := (c.CurrentTurn + attempts) % len(c.Participants)
 		participant := &c.Participants[idx]
 		if participant.IsAlive() {
-			// Возвращаем копию участника для безопасности
-			// Примечание: это не идеально, но безопаснее, чем возвращать указатель на участника из среза
-			result := participant
-			return result
+			// Возвращаем копию, чтобы избежать указателя на элемент среза.
+			// Это снижает риск race conditions при внешней модификации.
+			result := *participant
+			return &result
 		}
 		attempts++
 	}

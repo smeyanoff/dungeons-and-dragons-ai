@@ -8,9 +8,9 @@ import (
 	"time"
 
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
+	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	combatdomain "dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
-	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
@@ -200,8 +200,19 @@ func TestTelegramGameplay_RealLLM_UserJourney_MainMechanics(t *testing.T) {
 		problems = append(problems, fmt.Sprintf("/attack: %v", err))
 	}
 
-	// Give the repo a moment in case combat writes are async in future (today it's sync, but cheap safety).
-	time.Sleep(50 * time.Millisecond)
+	_ = waitForCondition(t, 500*time.Millisecond, 25*time.Millisecond, func() bool {
+		active, _ := combatRepo.GetActiveBySessionID(ctx, gs.ID)
+		if active == nil {
+			return true
+		}
+		hpAfter := hpBefore
+		for _, p := range active.Participants {
+			if !p.IsPlayer && strings.EqualFold(p.MonsterName, "Goblin") {
+				hpAfter = p.MonsterHP
+			}
+		}
+		return hpBefore > 0 && hpAfter != hpBefore
+	})
 
 	activeAfter, _ := combatRepo.GetActiveBySessionID(ctx, gs.ID)
 	if activeAfter == nil {
@@ -256,4 +267,3 @@ func lastNonThinkingPlayerFacingText(calls []tgCapturedCall, chatID int64) strin
 	}
 	return ""
 }
-

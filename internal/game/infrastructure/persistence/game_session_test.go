@@ -25,6 +25,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	// Автомиграции
 	err = db.AutoMigrate(
 		&session.GameSession{},
+		&session.SessionGoal{},
 		&world.World{},
 		&world.Location{},
 		&world.LocationConnection{},
@@ -344,8 +345,7 @@ func TestGameSessionRepository_ContextTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
 		defer cancel()
 
-		// Даем контексту время истечь
-		time.Sleep(10 * time.Millisecond)
+		waitForContextDone(t, ctx)
 
 		_, err := repo.GetByChatID(ctx, 12345)
 		if err == nil {

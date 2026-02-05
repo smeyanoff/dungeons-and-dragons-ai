@@ -12,13 +12,13 @@ import (
 	"dungeons-and-dragons-ai/internal/game/application/campaign"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
 	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
-	dm_tools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/application/history"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
@@ -92,7 +92,7 @@ func (l *initCampaignStubLLM) GenerateWithMaxTokens(ctx context.Context, prompt 
 	return l.Generate(ctx, prompt)
 }
 
-func (l *initCampaignStubLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (l *initCampaignStubLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error) {
 	_ = ctx
 	_ = prompt
 	_ = tools

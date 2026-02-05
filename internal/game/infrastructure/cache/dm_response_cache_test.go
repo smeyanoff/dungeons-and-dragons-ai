@@ -6,9 +6,18 @@ import (
 	"time"
 )
 
+func newCacheForTest(t *testing.T, ttl time.Duration) *DMResponseCache {
+	t.Helper()
+	cache := NewDMResponseCache(ttl)
+	t.Cleanup(func() {
+		cache.Close()
+	})
+	return cache
+}
+
 func TestNewDMResponseCache(t *testing.T) {
 	ttl := 10 * time.Minute
-	cache := NewDMResponseCache(ttl)
+	cache := newCacheForTest(t, ttl)
 
 	if cache == nil {
 		t.Fatal("Expected cache to be created, got nil")
@@ -22,12 +31,10 @@ func TestNewDMResponseCache(t *testing.T) {
 		t.Error("Expected cache map to be initialized")
 	}
 
-	// Даем время на запуск cleanup горутины
-	time.Sleep(100 * time.Millisecond)
 }
 
 func TestDMResponseCache_Get_NotFound(t *testing.T) {
-	cache := NewDMResponseCache(10 * time.Minute)
+	cache := newCacheForTest(t, 10*time.Minute)
 	ctx := context.Background()
 
 	response, found := cache.Get(ctx, 1, "context", "message")
@@ -40,7 +47,7 @@ func TestDMResponseCache_Get_NotFound(t *testing.T) {
 }
 
 func TestDMResponseCache_SetAndGet(t *testing.T) {
-	cache := NewDMResponseCache(10 * time.Minute)
+	cache := newCacheForTest(t, 10*time.Minute)
 	ctx := context.Background()
 
 	sessionID := uint(1)
@@ -61,7 +68,7 @@ func TestDMResponseCache_SetAndGet(t *testing.T) {
 
 func TestDMResponseCache_Expiration(t *testing.T) {
 	ttl := 100 * time.Millisecond
-	cache := NewDMResponseCache(ttl)
+	cache := newCacheForTest(t, ttl)
 	ctx := context.Background()
 
 	sessionID := uint(1)
@@ -73,8 +80,13 @@ func TestDMResponseCache_Expiration(t *testing.T) {
 		t.Error("Expected response to be found immediately after setting")
 	}
 
-	// Ждем истечения TTL
-	time.Sleep(150 * time.Millisecond)
+	// Имитируем истечение TTL вручную без ожидания
+	key := cache.generateKey(sessionID, "context", "message")
+	cache.mu.Lock()
+	if entry, ok := cache.cache[key]; ok {
+		entry.cachedAt = time.Now().Add(-2 * ttl)
+	}
+	cache.mu.Unlock()
 
 	// Проверяем, что ответ больше не найден
 	_, found = cache.Get(ctx, sessionID, "context", "message")
@@ -84,7 +96,7 @@ func TestDMResponseCache_Expiration(t *testing.T) {
 }
 
 func TestDMResponseCache_KeyGeneration_Consistent(t *testing.T) {
-	cache := NewDMResponseCache(10 * time.Minute)
+	cache := newCacheForTest(t, 10*time.Minute)
 	ctx := context.Background()
 
 	sessionID := uint(1)
@@ -111,7 +123,7 @@ func TestDMResponseCache_KeyGeneration_Consistent(t *testing.T) {
 }
 
 func TestDMResponseCache_KeyGeneration_Different(t *testing.T) {
-	cache := NewDMResponseCache(10 * time.Minute)
+	cache := newCacheForTest(t, 10*time.Minute)
 	ctx := context.Background()
 
 	sessionID := uint(1)
@@ -131,7 +143,7 @@ func TestDMResponseCache_KeyGeneration_Different(t *testing.T) {
 }
 
 func TestDMResponseCache_ConcurrentAccess(t *testing.T) {
-	cache := NewDMResponseCache(10 * time.Minute)
+	cache := newCacheForTest(t, 10*time.Minute)
 	ctx := context.Background()
 
 	// Запускаем несколько горутин для параллельного доступа
@@ -161,7 +173,7 @@ func TestDMResponseCache_ConcurrentAccess(t *testing.T) {
 }
 
 func TestDMResponseCache_HitCount(t *testing.T) {
-	cache := NewDMResponseCache(10 * time.Minute)
+	cache := newCacheForTest(t, 10*time.Minute)
 	ctx := context.Background()
 
 	sessionID := uint(1)
@@ -184,7 +196,7 @@ func TestDMResponseCache_HitCount(t *testing.T) {
 
 func TestDMResponseCache_Cleanup(t *testing.T) {
 	ttl := 200 * time.Millisecond
-	cache := NewDMResponseCache(ttl)
+	cache := newCacheForTest(t, ttl)
 	ctx := context.Background()
 
 	// Добавляем несколько записей
@@ -198,9 +210,12 @@ func TestDMResponseCache_Cleanup(t *testing.T) {
 		t.Errorf("Expected cache size 5, got %d", size)
 	}
 
-	// Ждем истечения TTL + время на cleanup (cleanup работает каждые 5 минут, но записи удаляются при Get)
-	// Поэтому проверяем удаление через Get вместо ожидания cleanup
-	time.Sleep(250 * time.Millisecond)
+	// Имитируем истечение TTL вручную без ожидания
+	cache.mu.Lock()
+	for _, entry := range cache.cache {
+		entry.cachedAt = time.Now().Add(-2 * ttl)
+	}
+	cache.mu.Unlock()
 
 	// Проверяем, что записи истекли через Get (который удаляет истекшие)
 	for i := 0; i < 5; i++ {
@@ -212,7 +227,7 @@ func TestDMResponseCache_Cleanup(t *testing.T) {
 }
 
 func TestDMResponseCache_ContextSnippet(t *testing.T) {
-	cache := NewDMResponseCache(10 * time.Minute)
+	cache := newCacheForTest(t, 10*time.Minute)
 	ctx := context.Background()
 
 	sessionID := uint(1)
@@ -254,7 +269,7 @@ func TestNormalizeMessage(t *testing.T) {
 }
 
 func TestDMResponseCache_DifferentSessions(t *testing.T) {
-	cache := NewDMResponseCache(10 * time.Minute)
+	cache := newCacheForTest(t, 10*time.Minute)
 	ctx := context.Background()
 
 	cache.Set(ctx, 1, "context", "message", "response1")

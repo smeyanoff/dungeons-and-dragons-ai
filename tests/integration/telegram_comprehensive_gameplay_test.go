@@ -8,8 +8,8 @@ import (
 	"time"
 
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
+	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
@@ -233,8 +233,10 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 		// Получаем актуальную сессию
 		gs, _ := cfg.sessionRepo.GetByChatID(ctx, chatID)
 
-		// Даем время на обработку async операций
-		time.Sleep(100 * time.Millisecond)
+		_ = waitForCondition(t, 750*time.Millisecond, 25*time.Millisecond, func() bool {
+			activeCombat, _ := combatRepo.GetActiveBySessionID(ctx, gs.ID)
+			return activeCombat == nil || !activeCombat.IsActive()
+		})
 
 		activeCombat, _ := combatRepo.GetActiveBySessionID(ctx, gs.ID)
 		if activeCombat != nil {

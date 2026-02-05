@@ -958,24 +958,24 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 			analysis.CombatDetected = false
 			analysis.Enemies = nil
 		} else {
-		// Проверяем, нет ли уже активного боя
-		activeCombat, err := uc.combatRepo.GetActiveBySessionID(ctx, uc.sessionID)
-		if err != nil {
-			log.Printf("[DM Analyzer] Failed to check active combat: %v", err)
-			// Продолжаем обработку, так как это не критично
-		} else if activeCombat != nil {
-			// Бой уже активен, не обрабатываем врагов из анализа
-			// Это предотвращает повторную генерацию врагов с новыми HP
-			log.Printf("[DM Analyzer] Combat already active, ignoring enemies from analysis (session_id: %d)", uc.sessionID)
-			// Сбрасываем флаг combat_detected, чтобы не обрабатывать врагов
-			analysis.CombatDetected = false
-			analysis.Enemies = nil
-		} else {
-			// Боя нет, создаем новый
-			if err := uc.handleCombatStart(ctx, analysis.Enemies); err != nil {
-				return fmt.Errorf("failed to start combat: %w", err)
+			// Проверяем, нет ли уже активного боя
+			activeCombat, err := uc.combatRepo.GetActiveBySessionID(ctx, uc.sessionID)
+			if err != nil {
+				log.Printf("[DM Analyzer] Failed to check active combat: %v", err)
+				// Продолжаем обработку, так как это не критично
+			} else if activeCombat != nil {
+				// Бой уже активен, не обрабатываем врагов из анализа
+				// Это предотвращает повторную генерацию врагов с новыми HP
+				log.Printf("[DM Analyzer] Combat already active, ignoring enemies from analysis (session_id: %d)", uc.sessionID)
+				// Сбрасываем флаг combat_detected, чтобы не обрабатывать врагов
+				analysis.CombatDetected = false
+				analysis.Enemies = nil
+			} else {
+				// Боя нет, создаем новый
+				if err := uc.handleCombatStart(ctx, analysis.Enemies); err != nil {
+					return fmt.Errorf("failed to start combat: %w", err)
+				}
 			}
-		}
 		}
 	}
 
@@ -3382,6 +3382,11 @@ func (uc *AnalyzeDMResponseUseCase) recognizeNaturalAbilityChecks(
 	checkRequest := uc.parseNaturalCheckRequest(dmResponse)
 	if checkRequest == nil {
 		// Нет запроса проверки в естественном языке
+		return nil
+	}
+
+	// P2: не повторяем одну и ту же проверку в рамках текущей сцены (локации).
+	if gs.IsAbilityCheckRepeatedInScene(checkRequest.Ability) {
 		return nil
 	}
 

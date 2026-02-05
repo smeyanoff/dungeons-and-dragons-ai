@@ -6,11 +6,11 @@ import (
 	"errors"
 	"testing"
 
-	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 )
 
 // intPtr создает указатель на int (helper для тестов)
@@ -22,7 +22,7 @@ func intPtr(i int) *int {
 type mockLLM struct {
 	generateFunc              func(ctx context.Context, prompt string) (string, error)
 	generateWithMaxTokensFunc func(ctx context.Context, prompt string, maxTokens int) (string, error)
-	generateWithToolsFunc     func(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error)
+	generateWithToolsFunc     func(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error)
 }
 
 func (m *mockLLM) Generate(ctx context.Context, prompt string) (string, error) {
@@ -44,7 +44,7 @@ func (m *mockLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, maxT
 }
 
 // GenerateWithTools implements domain.LLM interface
-func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error) {
 	if m.generateWithToolsFunc != nil {
 		return m.generateWithToolsFunc(ctx, prompt, tools)
 	}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
@@ -26,6 +27,8 @@ type RAGContextBuilder struct {
 	combatRepo     CombatRepository
 	worldEventRepo WorldEventRepository
 	config         ragContextConfig
+	ragAttempts    int64
+	ragFallbacks   int64
 }
 
 type EventRepository interface {
@@ -296,14 +299,28 @@ func (b *RAGContextBuilder) BuildContext(
 	)
 	ragCtx, ragCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer ragCancel()
+	atomic.AddInt64(&b.ragAttempts, 1)
 	ragDocs, err := b.retrieveUC.Execute(ragCtx, gs.ID, playerMessage, maxRAGDocs)
 	if err != nil {
 		// Если RAG не работает, возвращаем базовый контекст с информацией о персонаже
+		fallbacks := atomic.AddInt64(&b.ragFallbacks, 1)
+		attempts := atomic.LoadInt64(&b.ragAttempts)
+		fallbackRatio := 0.0
+		if attempts > 0 {
+			fallbackRatio = float64(fallbacks) / float64(attempts)
+		}
 		logger.Warn("Failed to retrieve RAG context",
 			logger.ErrorField(err),
 			logger.Uint("session_id", gs.ID),
 			logger.String("query", playerMessage),
+			logger.Int64("rag_attempts", attempts),
+			logger.Int64("rag_fallbacks", fallbacks),
+			logger.Float64("rag_fallback_ratio", fallbackRatio),
 		)
+		parts = append(parts, "\n--- RAG fallback ---")
+		parts = append(parts, "⚠️ История из RAG недоступна.")
+		parts = append(parts, "Сделай краткое резюме текущей сцены (2-3 предложения) на основе последних сообщений выше.")
+		parts = append(parts, "Задай один уточняющий вопрос, чтобы продолжить. Не упоминай сбой игроку.")
 		return strings.Join(parts, "\n"), nil
 	}
 

@@ -32,16 +32,16 @@ type PerformAbilityCheckUseCase struct {
 }
 
 type PerformAbilityCheckResult struct {
-	Message         string
-	Ability         string
-	DC              int    // Адаптивный DC
-	BaseDC          int    // Базовый DC
-	DifficultyDesc  string // Описание сложности
-	BaseRoll        int
-	Modifier        int
-	Total           int
-	Success         bool
-	CharacterName   string
+	Message        string
+	Ability        string
+	DC             int    // Адаптивный DC
+	BaseDC         int    // Базовый DC
+	DifficultyDesc string // Описание сложности
+	BaseRoll       int
+	Modifier       int
+	Total          int
+	Success        bool
+	CharacterName  string
 }
 
 func NewPerformAbilityCheckUseCase(
@@ -160,6 +160,9 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 
 	// Устанавливаем cooldown для типа способности
 	gs.SetAbilityCooldown(ability)
+
+	// Ограничиваем повторные проверки в рамках текущей сцены (локации)
+	gs.MarkAbilityCheckPerformed(ability)
 
 	gs.ClearPendingAbilityCheck()
 	if err := uc.sessionRepo.Save(ctx, gs); err != nil {

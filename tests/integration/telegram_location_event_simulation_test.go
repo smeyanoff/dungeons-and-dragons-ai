@@ -7,7 +7,6 @@ import (
 
 	achievementapp "dungeons-and-dragons-ai/internal/game/application/achievement"
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
-	dm_tools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	locationeventapp "dungeons-and-dragons-ai/internal/game/application/location_event"
 	"dungeons-and-dragons-ai/internal/game/application/player_action"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
@@ -18,6 +17,7 @@ import (
 	contextbuilder "dungeons-and-dragons-ai/internal/game/infrastructure/context"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 
@@ -59,7 +59,7 @@ func (l *recordingScriptedLLM) GenerateWithMaxTokens(ctx context.Context, prompt
 	return l.Generate(ctx, prompt)
 }
 
-func (l *recordingScriptedLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (l *recordingScriptedLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error) {
 	_ = ctx
 	_ = tools
 	l.prompts = append(l.prompts, prompt)

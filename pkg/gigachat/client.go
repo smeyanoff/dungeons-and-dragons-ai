@@ -407,6 +407,18 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 			break
 		}
 
+		// Если получили 402 Payment Required (обычно лимит/квота исчерпаны)
+		if resp.StatusCode == 402 {
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			log.Printf("GigaChat: Payment required (402) for %s %s. Response: %s", method, url, string(data))
+			return nil, &PaymentRequiredError{
+				StatusCode: 402,
+				Message:    "Payment Required - check quota or billing",
+				Response:   string(data),
+			}
+		}
+
 		// Если получили 5xx, пробуем повторить с задержкой
 		if resp.StatusCode >= 500 {
 			data, _ := io.ReadAll(resp.Body)
@@ -716,6 +728,18 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 				url, c.cfg.ClientID, req.Header.Get("X-Client-ID"), req.Header.Get("Authorization") != "")
 			lastErr = fmt.Errorf("gigachat error status 403: Permission denied - check ClientID permissions, X-Client-ID, and API access rights. Response: %s", string(data))
 			break
+		}
+
+		// Если получили 402 Payment Required (обычно лимит/квота исчерпаны)
+		if resp.StatusCode == 402 {
+			data, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			log.Printf("GigaChat: Payment required (402) for %s %s. Response: %s", method, url, string(data))
+			return nil, &PaymentRequiredError{
+				StatusCode: 402,
+				Message:    "Payment Required - check quota or billing",
+				Response:   string(data),
+			}
 		}
 
 		// Если получили 5xx, пробуем повторить с задержкой

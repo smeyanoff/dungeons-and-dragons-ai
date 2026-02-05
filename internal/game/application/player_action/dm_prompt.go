@@ -2,6 +2,7 @@ package player_action
 
 import (
 	"fmt"
+	"strings"
 
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 )
@@ -42,6 +43,15 @@ func BuildDMPrompt(gameContext, playerMessage string, preferences player.UserPre
 	// Получаем персонализированные инструкции стиля
 	lengthInstruction, styleInstruction := buildPersonalizedStyleInstructions(preferences)
 
+	combatActive := strings.Contains(gameContext, "--- Текущий бой ---") ||
+		strings.Contains(gameContext, "⚔️ КРИТИЧЕСКИ ВАЖНО")
+	combatInstruction := ""
+	if combatActive {
+		combatInstruction = `
+⚔️ БОЙ АКТИВЕН
+Начинай ответ с '⚔️ [В БОЮ]' и описывай происходящее в рамках боя.`
+	}
+
 	return fmt.Sprintf(`Ты — Dungeon Master в D&D 5e.
 
 КОНТЕКСТ И ИСТОРИЯ:
@@ -50,10 +60,17 @@ func BuildDMPrompt(gameContext, playerMessage string, preferences player.UserPre
 ДЕЙСТВИЕ ИГРОКА: "%s"
 
 СТИЛЬ: %s, %s
+%s
 
 ПРАВИЛА:
+• НЕ проси игрока бросать кубики
+• Система сама решит, нужна ли проверка
 • Используй результаты проверок из истории
-• Добавляй атмосферные описания (1-2 предложения)
-• Используй инструменты только при необходимости
-• Продолжай историю естественно`, gameContext, playerMessage, lengthInstruction, styleInstruction)
+• После провала проверки навыка → АВТОМАТИЧЕСКИ опиши последствия
+• НЕ добавляй проверки навыков к мини-ивентам
+• ИНОГДА добавляй короткие атмосферные описания (1-2 предложения)
+• Генерируй изображения ТОЛЬКО для ключевых моментов
+• Используй изображения sparingly
+• Используй инструменты ТОЛЬКО когда необходимо
+ • Продолжай историю естественно`, gameContext, playerMessage, lengthInstruction, styleInstruction, strings.TrimSpace(combatInstruction))
 }

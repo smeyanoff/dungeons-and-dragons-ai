@@ -93,6 +93,50 @@ type testConfig struct {
 	sessionRepo session.Repository
 }
 
+type llmLogFetcher interface {
+	GetByChatID(ctx context.Context, chatID int64, limit int) ([]*llmlogdomain.LLMLog, error)
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, interval time.Duration, condition func() bool) bool {
+	t.Helper()
+	if condition() {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	ticker := time.NewTicker(interval)
+	defer timer.Stop()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if condition() {
+				return true
+			}
+		case <-timer.C:
+			return condition()
+		}
+	}
+}
+
+func waitForLLMLogs(t *testing.T, repo llmLogFetcher, chatID int64, limit int, timeout time.Duration) ([]*llmlogdomain.LLMLog, error) {
+	t.Helper()
+	var logs []*llmlogdomain.LLMLog
+	var lastErr error
+	ok := waitForCondition(t, timeout, 50*time.Millisecond, func() bool {
+		var err error
+		logs, err = repo.GetByChatID(context.Background(), chatID, limit)
+		if err != nil {
+			lastErr = err
+			return false
+		}
+		return len(logs) > 0
+	})
+	if !ok && lastErr != nil {
+		return logs, lastErr
+	}
+	return logs, lastErr
+}
+
 // setupIntegrationTest настраивает окружение для интеграционных тестов, которые используют:
 // Postgres + Qdrant + (опционально) реальный LLM (GigaChat).
 func setupIntegrationTest(t *testing.T) *testConfig {
@@ -178,6 +222,15 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	baseLLM := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
 	llmLogRepo := persistence.NewLLMLogRepository(db)
 	monitoredLLM := llminfrastructure.NewMonitoredLLM(baseLLM, llmLogRepo)
+	if shutdowner, ok := interface{}(monitoredLLM).(interface {
+		Shutdown(context.Context) error
+	}); ok {
+		t.Cleanup(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = shutdowner.Shutdown(shutdownCtx)
+		})
+	}
 	llm := wrapLLMWithTestRateLimit(monitoredLLM)
 	imageGenerator := llminfrastructure.NewGigachatImageGenerator(gigachatClient, gigachatModel)
 
@@ -222,6 +275,9 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	generateImageUC.SetLimiter(subscriptionImageLimiter)
 
 	responseCache := dmcache.NewDMResponseCache(1 * time.Hour)
+	t.Cleanup(func() {
+		responseCache.Close()
+	})
 	actionValidator := player_action.NewActionValidator()
 
 	initCampaignUC := campaign.NewInitCampaignUseCase(llm, worldRepo)

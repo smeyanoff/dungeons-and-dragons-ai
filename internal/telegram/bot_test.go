@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -234,5 +235,69 @@ func TestTelegramMaxMessageLength(t *testing.T) {
 	if TelegramSafeMessageLength >= TelegramMaxMessageLength {
 		t.Errorf("TelegramSafeMessageLength (%d) should be less than TelegramMaxMessageLength (%d)",
 			TelegramSafeMessageLength, TelegramMaxMessageLength)
+	}
+}
+
+func TestSanitizeTelegramOutput(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		mustNot  []string
+		mustHave []string
+	}{
+		{
+			name:    "tool_call_block_and_code_fence_and_json",
+			input:   "Привет!\n<tool_call>{\"name\":\"do_thing\",\"arguments\":{\"x\":1}}</tool_call>\n```json\n{\"foo\": \"bar\"}\n```\nГотово.",
+			mustNot: []string{"<tool_call>", "tool_call", "```", "{\"foo\""},
+			mustHave: []string{
+				"Привет!",
+				"Готово.",
+			},
+		},
+		{
+			name:    "tool_result_block_is_removed",
+			input:   "Ок.\n<tool_result>{\"status\":\"ok\",\"result\":{\"y\":2}}</tool_result>\nПродолжаем.",
+			mustNot: []string{"<tool_result>", "tool_result", "\"status\":\"ok\""},
+			mustHave: []string{
+				"Ок.",
+				"Продолжаем.",
+			},
+		},
+		{
+			name:    "suspicious_lines_are_stripped",
+			input:   "Нормальный текст\n{\"a\": 1}\nTOOL_RESULT: something\nЕще строка",
+			mustNot: []string{"{\"a\": 1}", "TOOL_RESULT"},
+			mustHave: []string{
+				"Нормальный текст",
+				"Еще строка",
+			},
+		},
+		{
+			name:    "empty_after_strip_becomes_ellipsis",
+			input:   "<tool_call>{\"name\":\"x\"}</tool_call>",
+			mustNot: []string{"<tool_call>", "tool_call"},
+			mustHave: []string{
+				"...",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeTelegramOutput(tt.input, 123, "test")
+			for _, s := range tt.mustNot {
+				if strings.Contains(got, s) {
+					t.Fatalf("expected %q to be removed, got %q", s, got)
+				}
+			}
+			for _, s := range tt.mustHave {
+				if !strings.Contains(got, s) {
+					t.Fatalf("expected %q to be present, got %q", s, got)
+				}
+			}
+			if strings.TrimSpace(got) == "" {
+				t.Fatalf("expected non-empty sanitized output, got %q", got)
+			}
+		})
 	}
 }

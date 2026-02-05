@@ -1,176 +1,113 @@
 # Задачи команды разработки (Sprint Backlog)
 
-**Последнее обновление:** 2026-02-02
-**Текущий спринт:** Февраль 2026 — исправление критических инфраструктурных проблем
+**Последнее обновление:** 2026-02-05  
+**Текущий спринт:** Февраль 2026 — стабилизация + предсказуемый UX (без монетизации)
 
-**Правило приоритета:** P0 ошибки → P1 ошибки → P2 улучшения геймплея (монетизация не берем).
-
----
-
-## 🎯 Цель спринта
-
-- **Исправление критических блокеров**: GigaChat TLS, Database migrations, Runtime panics
-- **Стабилизация core механик**: DM Analyzer JSON, Combat detection
-- **Улучшение тестовой инфраструктуры**
+**Правило приоритета:** баги/стабильность (P0/P1) → улучшения игровых механик (P2). Монетизацию не берём.
 
 ---
 
-## 🚨 P0 — Критические ошибки (блокеры)
+## 🎯 Цель спринта (результат для игрока)
 
-### 1. GigaChat TLS Certificate *(БЛОКИРУЕТ ВСЕ LLM)*
-**Симптом:** `tls: failed to verify certificate: x509: certificate signed by unknown authority`
-**Влияние:** 100% LLM запросов fail → невозможно создать игру
-
-**Action items:**
-- [x] Добавить `GIGACHAT_SKIP_TLS_VERIFY=true` или настроить сертификаты
-- [x] Добавить fallback на stub content при TLS failures
-
-**Проверка:** Успешные запросы к GigaChat API без TLS ошибок
+- **Никаких утечек системного/инструментального текста** в сообщениях DM
+- **Навигация не “залипает” на проверках** (перемещение и мета‑вопросы всегда доступны)
+- **Стабильный CI** (без `time.Sleep`) + **внятная архитектура бота** (bot.go < 1500 LOC)
 
 ---
 
-### 2. Database Migration Failure *(БЛОКИРУЕТ COOPERATIVE)*
-**Симптом:** `relation "session_goals" does not exist`
-**Влияние:** Cooperative режим и сессионные цели недоступны
+## 🚨 P0 — Блокеры (если всплывут)
 
-**Action items:**
-- [x] Выполнить `go run scripts/migrate.go` для pending миграций
-- [x] Добавить database health checks при старте приложения
-- [x] Автоматизировать миграции в CI/CD pipeline
-
-**Проверка:** Все таблицы существуют, cooperative режим работает
+- *(Пока нет активных P0. Если появляется утечка tool/system текста в чат — это P0.)*
 
 ---
 
-### 3. Runtime Panics: Nil Pointer *(CRASH В PRODUCTION)*
-**Симптом:** `panic: runtime error: invalid memory address or nil pointer dereference`
-**Влияние:** Тесты падают, возможные crashes в production
+## ⚠️ P1 — Баги, стабильность, предсказуемость (берём в спринт)
 
-**Action items:**
-- [x] Добавить nil checks в cooperative mode логике
-- [x] Defensive programming для session/player initialization
-- [x] Улучшить error handling для missing entities
+### 1) Анти‑утечки player‑facing текста (DM / инструменты / JSON)
+- [x] **Сделать единый “output guard” перед отправкой в Telegram**: жёстко вычищать tool/internal/JSON/markdown артефакты, логировать факт утечки (но не показывать игроку).
+- [x] **Тесты**: кейсы с `<tool_call>…`, `tool_result`, fenced code blocks, JSON‑кусочки — на выходе 0 утечек.
 
-**Проверка:** Все тесты проходят без runtime panics
+**Acceptance:** 0 утечек в интеграционных тестах + ручных сценариях из `FEEDBACK.md`.
 
 ---
 
-### 4. DM Analyzer: JSON Parsing *(ВЛИЯЕТ НА ГЕЙМПЛЕЙ)*
-**Симптом:** JSON обрывается (`"npc_met":n`), 6 retry + fallback
-**Влияние:** Location events не генерируются, пропуск триггеров
+### 2) Навигация ≠ проверка: не блокировать перемещения и “где я/что вокруг”
+- [x] **При перемещении очищать `pending ability check`** (иначе игрок попадает в “залипание” после смены локации).
+- [x] **Разделить навигационные/мета‑запросы и проверки**: вопросы “где я / что вокруг / резюме / опиши место” не должны попадать под cooldown/anti-repeat.
 
-**Action items:**
-- [x] Увеличить token limit analyzer (4096 → 8192)
-- [x] Улучшить JSON validation и repair logic
-- [x] Оптимизировать prompt для complete responses
-
-**Проверка:** Analyzer возвращает valid JSON в >95% случаев
+**Acceptance:** после `/map` + перехода в новую локацию можно сразу спрашивать “что вокруг?” без требований броска/кулдауна.
 
 ---
 
-### 5. Combat Detection: False Negatives *(ВЛИЯЕТ НА БОЙ)*
-**Симптом:** `combat_detected=false` при явных атаках ("гоблин атакует")
-**Влияние:** Бой не начинается автоматически
+### 3) Visited‑состояние локаций (для ориентирования и прогресса)
+- [x] **Автоматически отмечать локацию как посещённую при входе/выходе** (минимум: при успешном `MoveToLocation`).
+- [x] **Отображать visited‑маркеры на карте** (в `/map` и inline navigation).
 
-**Action items:**
-- [x] Расширить `detectsCombatMarker` русскими ключевыми словами (атакует, нападает, бьёт)
-- [x] Улучшить prompt с примерами combat на русском
-- [x] Добавить fallback enemy extraction
-
-**Проверка:** Combat detection accuracy >95%
+**Acceptance:** игрок видит, где уже был; достижения/прогресс по “locations_visited” сходятся.
 
 ---
 
-## ⚠️ P1 — Стабилизация инфраструктуры
+### 4) RAG “без забывания”: деградация вместо провала контекста
+- [x] **Fallback режим при timeout/ошибке RAG**: короткое резюме текущей сцены + уточняющий вопрос вместо “потери памяти”.
+- [x] **Логирование**: метрика частоты RAG‑failures и доля ответов с fallback.
 
-### 6. Test Infrastructure: Database Isolation
-**Симптом:** `record not found` при поиске sessions/players в тестах
-**Влияние:** Интеграционные тесты не работают корректно
-
-**Action items:**
-- [x] Улучшить test data setup и cleanup
-- [x] Добавить transaction isolation
-- [x] Реализовать test database fixtures
-
-**Проверка:** Все integration тесты проходят
+**Acceptance:** при принудительных сбоях индекса/поиска бот не “сбрасывает” контекст.
 
 ---
 
-### 7. /battlefield нестабильность
-**Симптом:** Команда не отображает информацию о бое или падает
-**Влияние:** Нет прозрачности боевой системы
+### 5) GigaChat 402 в cooperative режиме (graceful fallback)
+- [x] **Разобрать причины 402 (квоты/лимиты/конфигурация аккаунта)** и задокументировать в `CODE_REVIEW.md`.
+- [x] **Fallback**: при 402 выдавать игроку понятный ответ + продолжать игру в упрощённом режиме (без блокировки старта).
 
-**Action items:**
-- [x] Добавить defensive checks для отсутствующих данных боя
-- [x] Логирование ошибок для диагностики
-
-**Проверка:** `/battlefield` корректно показывает состояние боя
+**Acceptance:** cooperative игра не ломается “в ноль” из‑за 402.
 
 ---
 
-### 8. DM Analyzer: Улучшение Prompt
-**Симптом:** Недостаточно качественные JSON ответы
-**Влияние:** Увеличивает retry и fallback случаи
+### 6) Flaky tests: убрать `time.Sleep` из тестов
+- [x] **Заменить `time.Sleep` в интеграционных тестах** на синхронизацию (polling/wait helpers/каналы).
+- [x] **Добавить deterministic test helpers** для unit тестов persistence.
 
-**Action items:**
-- [x] Оптимизировать JSON prompt для DM Analyzer
-- [x] Фикс GigaChat token expiry (единицы измерения)
-- [x] Валидация полей (защита от пустых enemies при combat_detected=true)
-
-**Проверка:** Стабильные полные JSON ответы
+**Acceptance:** 100 прогонов локально без флейков; CI стабилен.
 
 ---
 
-## 📋 P2 — Игровые улучшения (backlog)
+### 7) Telegram bot: продолжить декомпозицию и починить UX команд
+- [x] **Довести `internal/telegram/bot.go` до < 1500 LOC** (вынести обработчики в модули).
+- [x] **Синхронизировать команды**: список распознаваемых команд и роутинг (`isKnownCommand` vs `handleCommand`) должны совпадать.
 
-### Гибридный бой
-- Авто + ручные решения в бою
-- Динамический выбор тактики
-
-### Динамические квесты
-- Квесты реагируют на действия игрока
-- Ветвление сюжета
-
-### Система репутации NPC
-- Отношения с NPC влияют на квесты и диалоги
+**Acceptance:** команды из `/help` всегда распознаются; bot.go заметно меньше.
 
 ---
 
-## ✅ Завершено в текущем спринте
+## 📋 P2 — Улучшения игровых механик (берём только если закрыли P1)
 
-| Задача | Результат | Дата |
-|--------|-----------|------|
-| GigaChat Function Calling | Тулзы в `functions` в запросе | 2026-01 |
-| Cooldown система проверок | Guardrails: budget/cooldown/anti-trivial | 2026-01 |
-| Прогресс персонажа | Визуализация роста и статистика | 2026-01 |
-| JSON Stability Crisis | Улучшен repair + pre-validation | 2026-01 |
-| LLM Context Deadline | Увеличены timeouts (30s → 60s) | 2026-01 |
-| Image download 403 | X-Client-ID header + retry | 2026-01 |
-| GigaChat TLS Certificate | Skip TLS env + TLS fallback stub | 2026-02 |
-| Database migrations | Session goals table + health checks | 2026-02 |
-| Runtime panics | Defensive nil checks in coop flow | 2026-02 |
-| DM Analyzer JSON parsing | 8192 tokens + JSON repair/prompt | 2026-02 |
-| Combat detection | Expanded markers + prompt + fallback | 2026-02 |
-| Test infra DB isolation | Migrations + cleanup | 2026-02 |
-| /battlefield stability | Defensive checks + logging | 2026-02 |
-| DM Analyzer prompt quality | Schema validation + token expiry fix | 2026-02 |
+### A) Повтор проверки ограничен сценой (не “вечный запрет”)
+- [x] Запрет “нельзя повторять” действует только в рамках одной сцены/подхода; после смены локации/сцены — снова можно.
+
+### B) Контроль медиа (предсказуемо и редко)
+- [ ] Генерировать изображения **только по явному запросу или крупному событию**, с лимитом на сессию.
+- [ ] Автоген — только если включён игроком (`/autoimage on`) и есть “значимое событие”.
 
 ---
 
-## 📈 Ключевые метрики
+## ✅ Архив (кратко, что уже доставили в 2026‑02)
 
-| Метрика | Цель | Критичность |
-|---------|------|-------------|
-| GigaChat TLS errors | 0 | P0 |
-| Migration errors | 0 | P0 |
-| Runtime panics | 0 | P0 |
-| DM Analyzer valid JSON | >95% | P1 |
-| Combat detection accuracy | >95% | P1 |
-| Checks per 100 messages | <5 | P1 |
+- ✅ Multi‑step loop с tools + чистка tool‑артефактов в ответах (базовый уровень)
+- ✅ Рефакторинг инструментов: общий интерфейс tools в `internal/llm/domain/tools`
+- ✅ Telegram бот частично разнесён на модули (commands/callbacks/messages/feedback/health)
+- ✅ Базовые стабилизации: combat race, goroutine leaks, JSON repair в DM analyzer
+- ✅ Анти‑утечки player‑facing текста в Telegram pipeline + тесты
+- ✅ Visited‑локации + inline навигация + очистка pending check при перемещении
+- ✅ RAG fallback (резюме сцены + уточняющий вопрос) + логирование
+- ✅ GigaChat 402: typed ошибка + “упрощённый режим”
+- ✅ Интеграционные тесты без `time.Sleep`
+- ✅ `internal/telegram/bot.go` < 1500 LOC + синхронизированные команды
+- ✅ Повтор ability check ограничен текущей сценой (сброс при перемещении)
 
 ---
 
-## 📝 Workflow обновления задач
+## 📝 Workflow обновления
 
-1. Взяли задачу → отметить **⏳ In Progress**, добавить исполнителя
-2. Завершили → перенести в "Завершено", обновить CODE_REVIEW.md и PRODUCT_IDEAS.md
+- **Взяли задачу** → пометить как **⏳ In Progress**, добавить исполнителя/ссылку на PR
+- **Завершили** → перенести в архив, обновить `CODE_REVIEW.md` и `PRODUCT_IDEAS.md`
+- **Монетизация** → не планируем в спринт (фокус на механиках и UX)

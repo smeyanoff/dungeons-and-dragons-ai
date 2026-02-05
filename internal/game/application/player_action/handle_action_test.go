@@ -7,7 +7,6 @@ import (
 	"time"
 
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
-	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
@@ -18,6 +17,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 )
@@ -66,7 +66,7 @@ func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, embedding 
 type mockLLM struct {
 	generateFunc              func(ctx context.Context, prompt string) (string, error)
 	generateWithMaxTokensFunc func(ctx context.Context, prompt string, maxTokens int) (string, error)
-	generateWithToolsFunc     func(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error)
+	generateWithToolsFunc     func(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error)
 }
 
 func (m *mockLLM) Generate(ctx context.Context, prompt string) (string, error) {
@@ -87,7 +87,7 @@ func (m *mockLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, maxT
 	return "Test DM response", nil
 }
 
-func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error) {
 	if m.generateWithToolsFunc != nil {
 		return m.generateWithToolsFunc(ctx, prompt, tools)
 	}

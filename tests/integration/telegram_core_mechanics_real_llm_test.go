@@ -8,8 +8,8 @@ import (
 	"time"
 
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
+	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
@@ -240,8 +240,14 @@ func TestTelegramGameplay_CoreMechanics_RealLLM(t *testing.T) {
 			problems = append(problems, fmt.Sprintf("/attack failed: %v", err))
 		}
 
-		// Allow time for async operations
-		time.Sleep(200 * time.Millisecond)
+		_ = waitForCondition(t, 750*time.Millisecond, 25*time.Millisecond, func() bool {
+			gs, _ := cfg.sessionRepo.GetByChatID(ctx, chatID)
+			if gs == nil {
+				return false
+			}
+			activeCombat, _ := combatRepo.GetActiveBySessionID(ctx, gs.ID)
+			return activeCombat == nil || !activeCombat.IsActive()
+		})
 
 		// Check combat state
 		gs, _ := cfg.sessionRepo.GetByChatID(ctx, chatID)

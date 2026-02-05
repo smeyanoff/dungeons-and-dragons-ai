@@ -8,8 +8,8 @@ import (
 	"time"
 
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
+	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
@@ -17,16 +17,16 @@ import (
 // Комплексный end-to-end тест всех основных механик игры с реальными LLM вызовами
 // Симулирует полный пользовательский journey от создания игры до завершения,
 // тестируя все реализованные фичи согласно TASKS.md:
-// - Система достижений
-// - Ежедневные квесты и система стрик
-// - Адаптивная сложность
-// - Вариативность событий (3-5 веток развития)
-// - Персонализация мира (темный/светлый стиль, уровни детализации)
-// - Мини-ивенты (короткие сценки без чеков)
-// - Улучшенная карта мира (связи локаций, текущая позиция)
-// - NPC компаньоны в отряд
-// - Базовые механики: создание мира, персонажа, исследование, бой, инвентарь, квесты,
-//   заклинания, достижения, карту, историю и location events
+//   - Система достижений
+//   - Ежедневные квесты и система стрик
+//   - Адаптивная сложность
+//   - Вариативность событий (3-5 веток развития)
+//   - Персонализация мира (темный/светлый стиль, уровни детализации)
+//   - Мини-ивенты (короткие сценки без чеков)
+//   - Улучшенная карта мира (связи локаций, текущая позиция)
+//   - NPC компаньоны в отряд
+//   - Базовые механики: создание мира, персонажа, исследование, бой, инвентарь, квесты,
+//     заклинания, достижения, карту, историю и location events
 func TestTelegramGameplay_RealLLM_FullGameplayJourney(t *testing.T) {
 	cfg := setupTelegramGameplayTest(t)
 	defer cleanupTest(t, cfg.testConfig)
@@ -275,8 +275,14 @@ func TestTelegramGameplay_RealLLM_FullGameplayJourney(t *testing.T) {
 			problems = append(problems, fmt.Sprintf("/attack failed: %v", err))
 		}
 
-		// Allow time for async operations
-		time.Sleep(200 * time.Millisecond)
+		_ = waitForCondition(t, 750*time.Millisecond, 25*time.Millisecond, func() bool {
+			gs, _ := cfg.sessionRepo.GetByChatID(ctx, chatID)
+			if gs == nil {
+				return false
+			}
+			activeCombat, _ := combatRepo.GetActiveBySessionID(ctx, gs.ID)
+			return activeCombat == nil || !activeCombat.IsActive()
+		})
 
 		// Check combat state
 		gs, _ := cfg.sessionRepo.GetByChatID(ctx, chatID)
@@ -466,9 +472,6 @@ func TestTelegramGameplay_RealLLM_FullGameplayJourney(t *testing.T) {
 			if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, action)); err != nil {
 				problems = append(problems, fmt.Sprintf("Event action %d failed: %v", i+1, err))
 			}
-
-			// Small delay between actions
-			time.Sleep(500 * time.Millisecond)
 		}
 	})
 

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/player"
@@ -107,6 +108,12 @@ type GameSession struct {
 	PendingAbilityCheckStakes      string `gorm:"type:text"` // Ставки (что на кону)
 	PendingAbilityCheckRequestedAt *time.Time
 	PendingAbilityCheckNotified    bool
+
+	// Last ability check marker (ограничение повторов в текущей сцене).
+	// Сцена в текущей модели = текущая локация; очищается при перемещении.
+	LastAbilityCheckLocationID *uint      `gorm:"index"`
+	LastAbilityCheckAbility    string     `gorm:"type:varchar(32)"`
+	LastAbilityCheckAt         *time.Time `gorm:"index"`
 
 	// Adaptive difficulty statistics (адаптивная сложность)
 	SessionSuccessCount  int `gorm:"default:0"` // Количество успешных проверок в сессии
@@ -458,6 +465,32 @@ func (s *GameSession) SetPendingAbilityCheckWithContext(checkID, ability string,
 	s.PendingAbilityCheckStakes = stakes
 	s.PendingAbilityCheckRequestedAt = &now
 	s.PendingAbilityCheckNotified = false
+}
+
+// MarkAbilityCheckPerformed отмечает, что проверка была выполнена в текущей сцене.
+func (s *GameSession) MarkAbilityCheckPerformed(ability string) {
+	now := time.Now()
+	s.LastAbilityCheckAt = &now
+	s.LastAbilityCheckAbility = ability
+	s.LastAbilityCheckLocationID = s.CurrentLocationID
+}
+
+// IsAbilityCheckRepeatedInScene возвращает true, если в текущей сцене уже была выполнена проверка этой характеристики.
+func (s *GameSession) IsAbilityCheckRepeatedInScene(ability string) bool {
+	if ability == "" || s.CurrentLocationID == nil || s.LastAbilityCheckLocationID == nil {
+		return false
+	}
+	if *s.CurrentLocationID != *s.LastAbilityCheckLocationID {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(s.LastAbilityCheckAbility), strings.TrimSpace(ability))
+}
+
+// ClearSceneAbilityCheckHistory сбрасывает маркеры проверок текущей сцены.
+func (s *GameSession) ClearSceneAbilityCheckHistory() {
+	s.LastAbilityCheckLocationID = nil
+	s.LastAbilityCheckAbility = ""
+	s.LastAbilityCheckAt = nil
 }
 
 func (s *GameSession) ClearPendingAbilityCheck() {

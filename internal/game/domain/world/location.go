@@ -12,15 +12,15 @@ type PredefinedCheck struct {
 
 // LocationScenario представляет сценарий для локации (цель, события, возможные исходы)
 type LocationScenario struct {
-	ID          string   `json:"id"`          // Уникальный ID сценария
-	Title       string   `json:"title"`       // Название сценария
-	Description string   `json:"description"` // Подробное описание
-	Objective   string   `json:"objective"`   // Цель, которую нужно достичь
-	KeyEvents   []string `json:"key_events"` // Ключевые события сценария
+	ID               string   `json:"id"`                // Уникальный ID сценария
+	Title            string   `json:"title"`             // Название сценария
+	Description      string   `json:"description"`       // Подробное описание
+	Objective        string   `json:"objective"`         // Цель, которую нужно достичь
+	KeyEvents        []string `json:"key_events"`        // Ключевые события сценария
 	PossibleOutcomes []string `json:"possible_outcomes"` // Возможные исходы
-	Reward      string   `json:"reward"`      // Награда за успешное завершение
-	Status      string   `json:"status"`      // Статус: "not_started", "in_progress", "completed", "failed"
-	CreatedAt   string   `json:"created_at"`  // Время создания
+	Reward           string   `json:"reward"`            // Награда за успешное завершение
+	Status           string   `json:"status"`            // Статус: "not_started", "in_progress", "completed", "failed"
+	CreatedAt        string   `json:"created_at"`        // Время создания
 }
 
 type Location struct {
@@ -34,6 +34,9 @@ type Location struct {
 
 	// Scenario - сгенерированный сценарий для локации (цель, события, исходы)
 	ScenarioJSON json.RawMessage `gorm:"type:jsonb" json:"-"` // JSON представление сценария для БД
+
+	// Visited отмечает, что локация была посещена в рамках текущего мира
+	Visited bool `gorm:"index"`
 
 	NPCs        []NPC
 	Monsters    []Monster

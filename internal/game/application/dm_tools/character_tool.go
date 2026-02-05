@@ -303,6 +303,20 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 	// Вычисляем модификатор
 	modifier := calculateModifier(abilityValue)
 
+	// P2: не повторяем одну и ту же проверку в рамках текущей сцены (локации).
+	// Если проверка уже была выполнена, DM должен описать исход или эскалировать ставки/изменить подход.
+	if gs.IsAbilityCheckRepeatedInScene(abilityStr) {
+		return map[string]interface{}{
+			"ability":         abilityStr,
+			"ability_name":    abilityName,
+			"ability_value":   abilityValue,
+			"modifier":        modifier,
+			"character_name":  char.Name,
+			"repeat_in_scene": true,
+			"warning":         "Повторная проверка этой характеристики в текущей сцене не требуется. Опиши последствия/исход или предложи другой подход, вместо нового броска.",
+		}, nil
+	}
+
 	// Проверяем, не была ли уже выполнена проверка этой характеристики
 	// В D&D проверка навыка обычно выполняется только один раз - если провалена, нужно попробовать другой подход
 	if t.eventRepo != nil {

@@ -95,11 +95,15 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 	if currentLoc == nil {
 		currentLoc = &w.Locations[0]
 	}
+	// Текущая локация всегда "известна" игроку, даже если CurrentLocationID не установлен.
+	if currentLoc != nil {
+		knownLocations[currentLoc.ID] = true
+	}
 
 	// Легенда карты
 	parts = append(parts, "📖 Легенда:")
 	parts = append(parts, "📍▶️ - Ваше текущее положение")
-	parts = append(parts, "📍 - Известная локация")
+	parts = append(parts, "✅ - Посещенная локация")
 	parts = append(parts, "❓ - Неизвестная локация")
 	parts = append(parts, "⬆️⬇️➡️⬅️ - Направления движения")
 	parts = append(parts, "🌀 - Портал или магический переход")
@@ -115,6 +119,22 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 		parts = append(parts, fmt.Sprintf("📝 Описание: %s", desc))
 	}
 
+	// NPCs и монстры текущей локации (короткая сводка)
+	if len(currentLoc.NPCs) > 0 || len(currentLoc.Monsters) > 0 {
+		parts = append(parts, "")
+		parts = append(parts, "Обнаружено:")
+		for _, npc := range currentLoc.NPCs {
+			line := fmt.Sprintf("👤 %s", npc.Name)
+			if strings.TrimSpace(npc.Role) != "" {
+				line += fmt.Sprintf(" (%s)", npc.Role)
+			}
+			parts = append(parts, line)
+		}
+		for _, m := range currentLoc.Monsters {
+			parts = append(parts, fmt.Sprintf("👹 %s", m.Name))
+		}
+	}
+
 	parts = append(parts, "")
 
 	// Доступные пути из текущей локации
@@ -124,15 +144,21 @@ func (uc *GetMapUseCase) generateMap(w *world.World, currentLocationID *uint) st
 			sym := uc.getDirectionSymbol(conn.Direction)
 			toLocName := "Неизвестная локация"
 			status := "неизвестна"
+			marker := "❓ "
 
-			if toLoc, exists := locationMap[conn.ToLocationID]; exists {
+			if toLoc, exists := locationMap[conn.ToLocationID]; exists && toLoc != nil {
+				// Название локации мы знаем из карты мира, но отмечаем маркером visited/unknown.
+				toLocName = toLoc.Name
 				if knownLocations[toLoc.ID] {
-					toLocName = toLoc.Name
 					status = "известна"
+					marker = "✅ "
 				}
+			} else if conn.ToLocationID != 0 {
+				// Если ссылка битая — все равно показываем её ID (нужно для диагностики/тестов).
+				toLocName = fmt.Sprintf("Локация #%d", conn.ToLocationID)
 			}
 
-			pathDesc := fmt.Sprintf("   %s %s → %s (%s)", sym, strings.ToLower(conn.Direction), toLocName, status)
+			pathDesc := fmt.Sprintf("   %s %s → %s%s (%s)", sym, strings.ToLower(conn.Direction), marker, toLocName, status)
 			if conn.Description != "" {
 				pathDesc += fmt.Sprintf("\n     └─ %s", conn.Description)
 			}
@@ -211,7 +237,7 @@ func (uc *GetMapUseCase) buildMapSignature(w *world.World, currentLocationID *ui
 		totalConnections += len(loc.Connections)
 		totalNPCs += len(loc.NPCs)
 		totalMonsters += len(loc.Monsters)
-		if len(loc.ScenarioJSON) > 0 {
+		if loc.Visited || len(loc.ScenarioJSON) > 0 {
 			knownLocations++
 		}
 	}
@@ -299,7 +325,7 @@ func (uc *GetMapUseCase) buildKnownLocations(w *world.World, currentLocationID *
 	}
 	for i := range w.Locations {
 		loc := &w.Locations[i]
-		if len(loc.ScenarioJSON) > 0 {
+		if loc.Visited || len(loc.ScenarioJSON) > 0 {
 			known[loc.ID] = true
 		}
 	}

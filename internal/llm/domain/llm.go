@@ -2,7 +2,7 @@ package domain
 
 import (
 	"context"
-	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 )
 
 type LLM interface {
@@ -12,12 +12,12 @@ type LLM interface {
 	// GenerateWithTools генерирует ответ с поддержкой вызова инструментов
 	// Если модель поддерживает нативный function calling, использует его
 	// Иначе возвращает ответ с инструкциями о вызове функций
-	GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*LLMResponseWithTools, error)
+	GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*LLMResponseWithTools, error)
 }
 
 // LLMResponseWithTools представляет ответ LLM с возможными вызовами инструментов
 type LLMResponseWithTools struct {
-	Content   string              // Текстовый ответ
-	ToolCalls []dm_tools.ToolCall // Вызовы инструментов, которые нужно выполнить
-	Finished  bool                // Закончена ли генерация (true если не нужно вызывать tools)
+	Content   string               // Текстовый ответ
+	ToolCalls []llmtools.ToolCall  // Вызовы инструментов, которые нужно выполнить
+	Finished  bool                 // Закончена ли генерация (true если не нужно вызывать tools)
 }

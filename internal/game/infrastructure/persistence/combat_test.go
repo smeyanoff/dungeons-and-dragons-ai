@@ -435,11 +435,8 @@ func TestCombatRepository_ContextTimeout(t *testing.T) {
 	repo := NewCombatRepository(db)
 
 	t.Run("respects context timeout", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-1*time.Second))
 		defer cancel()
-
-		// Даем контексту время истечь
-		time.Sleep(10 * time.Millisecond)
 
 		_, err := repo.GetActiveBySessionID(ctx, 12345)
 		if err == nil {

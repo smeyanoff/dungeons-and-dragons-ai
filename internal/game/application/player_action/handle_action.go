@@ -36,6 +36,7 @@ import (
 	"dungeons-and-dragons-ai/internal/llm/domain"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
+	gigachat "dungeons-and-dragons-ai/pkg/gigachat"
 	"dungeons-and-dragons-ai/pkg/logger"
 
 	"github.com/google/uuid"
@@ -455,6 +456,8 @@ func (uc *HandleActionUseCase) Execute(
 		return uc.handleTimeChange(ctx, gs, timeChange)
 	}
 
+	isNavigationQuery := isNavigationMetaQuery(playerMessage)
+
 	// Анализируем действие игрока для определения необходимости проверок
 	// Пропускаем анализ для системных сообщений (результаты проверок, технические сообщения)
 	var actionAnalysis *dm_analyzer.PlayerActionAnalysis
@@ -482,6 +485,14 @@ func (uc *HandleActionUseCase) Execute(
 			)
 			// Анализ используется только для принятия решений, не добавляем в контекст DM
 		}
+	}
+
+	if isNavigationQuery && actionAnalysis != nil {
+		actionAnalysis.NeedsAbilityCheck = false
+		actionAnalysis.NeedsPredefinedCheck = false
+		actionAnalysis.NeedsRandomRoll = false
+		actionAnalysis.SimpleAction = true
+		actionAnalysis.Recommendation = "Навигационный/мета запрос: опиши окружение без проверок."
 	}
 
 	// Сохраняем событие действия игрока ДО вызова LLM
@@ -534,7 +545,7 @@ func (uc *HandleActionUseCase) Execute(
 
 	// Если анализатор решил, что нужна проверка навыка — создаем pending check СИСТЕМОЙ
 	// и сразу возвращаем игроку текстовую подсказку. LLM-DM не участвует и не должен просить /roll.
-	if actionAnalysis != nil && actionAnalysis.NeedsAbilityCheck && actionAnalysis.AbilityCheck != nil && !actionAnalysis.SimpleAction {
+	if actionAnalysis != nil && actionAnalysis.NeedsAbilityCheck && actionAnalysis.AbilityCheck != nil && !actionAnalysis.SimpleAction && !isNavigationQuery {
 		checkMsg, handled, err := uc.createAbilityCheckFromAnalyzer(ctx, gs, actionAnalysis.AbilityCheck)
 		if err != nil {
 			logger.Warn("Failed to create pending ability check from analyzer",
@@ -562,7 +573,14 @@ func (uc *HandleActionUseCase) Execute(
 					Text:      checkMsg,
 					Timestamp: time.Now(),
 				}
-				_ = uc.indexDocUC.Execute(ctx, doc)
+				if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
+					logger.Warn("Failed to index analyzer ability check prompt in RAG",
+						logger.ErrorField(err),
+						logger.Uint("session_id", gs.ID),
+						logger.String("doc_id", doc.ID),
+						logger.String("doc_source", string(doc.Source)),
+					)
+				}
 			}
 			// Критично для UX: игрок должен увидеть prompt до продолжения истории.
 			// Дальнейшая генерация DM-ответа откладывается до выполнения /roll.
@@ -637,12 +655,22 @@ func (uc *HandleActionUseCase) Execute(
 		response, imageResults, err = uc.generateWithToolsLoop(llmCtx, prompt, toolRegistry, gs)
 		duration := time.Since(startTime)
 		if err != nil {
+			if gigachat.IsPaymentRequired(err) {
+				fallback := "⚠️ Лимит GigaChat исчерпан (402). Продолжаем в упрощённом режиме без блокировки игры. Опишите, что делаете дальше — отвечу кратко и по делу."
+				logger.Warn("GigaChat payment required, switching to simplified mode",
+					logger.ErrorField(err),
+					logger.Uint("session_id", gs.ID),
+				)
+				return fallback, nil
+			}
 			logger.Error("Failed to generate DM response with tools",
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
 				logger.Duration("duration", duration),
 			)
-			return "", fmt.Errorf("failed to generate DM response: %w", err)
+			// Важно: для большинства ошибок мы возвращаем ошибку наверх (бот покажет её игроку),
+			// и при этом событие игрока уже сохранено.
+			return "", fmt.Errorf("Dungeon Master временно недоступен. Попробуйте повторить действие чуть позже.")
 		}
 		logger.Info("DM response generated with tools",
 			logger.Uint("session_id", gs.ID),
@@ -1057,7 +1085,12 @@ func (uc *HandleActionUseCase) generateEnemyTurn(
 
 	enemyResponse, _, err := uc.generateWithToolsLoop(llmCtx, enemyTurnPrompt, toolRegistry, gs)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate enemy turn: %w", err)
+		logger.Error("Failed to generate enemy turn",
+			logger.ErrorField(err),
+			logger.Uint("session_id", gs.ID),
+			logger.String("enemy_name", enemyName),
+		)
+		return "Враг колеблется и теряет ход. Продолжайте.", nil
 	}
 
 	logger.Info("Enemy turn generated",
@@ -1635,6 +1668,41 @@ func formatAbilityNameForPlayer(ability string) string {
 	}
 }
 
+func isNavigationMetaQuery(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	patterns := []string{
+		"где я",
+		"где мы",
+		"что вокруг",
+		"что рядом",
+		"что здесь",
+		"что вокруг нас",
+		"опиши место",
+		"опиши локацию",
+		"опиши здесь",
+		"резюме",
+		"сводка",
+		"summary",
+		"recap",
+		"where am i",
+		"what's around",
+		"what is around",
+		"what's here",
+		"what is here",
+		"describe the place",
+		"describe the location",
+	}
+	for _, pattern := range patterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
 // createAbilityCheckFromAnalyzer создает pending ability check на основе вывода анализатора,
 // без участия LLM-DM (DM не должен вызывать request_ability_check и не должен просить /roll).
 func (uc *HandleActionUseCase) createAbilityCheckFromAnalyzer(
@@ -1698,7 +1766,7 @@ func (uc *HandleActionUseCase) createAbilityCheckFromAnalyzer(
 
 	abilityName := formatAbilityNameForPlayer(ability)
 	playerMsg := fmt.Sprintf(
-		"🎲 Нужна проверка %s (DC %d).\nПричина: %s.\nНа кону: %s.\n\nНапишите /roll, чтобы бросить кубик. Можно отправить результат числом (например: 17).",
+		"🎲 Нужна проверка %s (DC %d).\nПричина: %s.\nНа кону: %s.\n\nНапишите /roll, чтобы бросить кубик.",
 		abilityName, dc, reason, stakes,
 	)
 
@@ -1707,7 +1775,13 @@ func (uc *HandleActionUseCase) createAbilityCheckFromAnalyzer(
 	updated, getErr := uc.sessionRepo.GetByChatID(ctx, gs.ChatID)
 	if getErr == nil && updated != nil && updated.HasPendingAbilityCheck() {
 		updated.PendingAbilityCheckNotified = true
-		_ = uc.sessionRepo.Save(ctx, updated)
+		if saveErr := uc.sessionRepo.Save(ctx, updated); saveErr != nil {
+			logger.Warn("Failed to mark pending ability check as notified",
+				logger.ErrorField(saveErr),
+				logger.Uint("session_id", updated.ID),
+				logger.Int64("chat_id", updated.ChatID),
+			)
+		}
 	}
 
 	return playerMsg, true, nil

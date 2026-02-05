@@ -406,8 +406,7 @@ func TestInventoryRepository_ContextTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
 		defer cancel()
 
-		// Даем контексту время истечь
-		time.Sleep(10 * time.Millisecond)
+		waitForContextDone(t, ctx)
 
 		_, err := repo.GetByCharacterID(ctx, 1)
 		if err == nil {

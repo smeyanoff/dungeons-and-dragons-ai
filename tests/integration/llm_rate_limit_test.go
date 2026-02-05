@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	dm_tools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	llmdomain "dungeons-and-dragons-ai/internal/llm/domain"
 	llminfra "dungeons-and-dragons-ai/internal/llm/infrastructure"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 )
 
 // rateLimitedLLM is a test-only wrapper that enforces a minimum delay between LLM calls.
@@ -53,7 +53,7 @@ func (l *rateLimitedLLM) GenerateWithMaxTokens(ctx context.Context, prompt strin
 	return l.inner.GenerateWithMaxTokens(ctx, prompt, maxTokens)
 }
 
-func (l *rateLimitedLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*llmdomain.LLMResponseWithTools, error) {
+func (l *rateLimitedLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*llmdomain.LLMResponseWithTools, error) {
 	if err := l.wait(ctx); err != nil {
 		return nil, err
 	}

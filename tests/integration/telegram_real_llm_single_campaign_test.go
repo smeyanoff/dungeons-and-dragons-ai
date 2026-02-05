@@ -1,7 +1,6 @@
 package integration
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -228,8 +227,7 @@ func TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat(t *testing.T) {
 
 	// 8) LLM prompt/context/tools analysis via llm_logs (monitored LLM in setupIntegrationTest).
 	// Save happens async, give it a small window.
-	time.Sleep(250 * time.Millisecond)
-	logs, err := llmLogRepo.GetByChatID(context.Background(), chatID, 50)
+	logs, err := waitForLLMLogs(t, llmLogRepo, chatID, 50, 2*time.Second)
 	if err != nil {
 		problems = append(problems, fmt.Sprintf("не удалось получить llm_logs по chat_id: %v", err))
 	} else if len(logs) == 0 {

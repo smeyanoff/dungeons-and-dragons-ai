@@ -101,6 +101,9 @@ func (uc *MoveToLocationUseCase) Execute(ctx context.Context, req MoveToLocation
 		current = locationMap[firstID]
 		_ = uc.sessionRepo.Save(ctx, gs)
 	}
+	if current != nil {
+		current.Visited = true
+	}
 
 	var targetID uint
 	if req.ToLocationID != nil && *req.ToLocationID != 0 {
@@ -172,6 +175,9 @@ func (uc *MoveToLocationUseCase) Execute(ctx context.Context, req MoveToLocation
 	}
 
 	// Обновляем текущую локацию
+	gs.ClearPendingAbilityCheck()
+	gs.ClearSceneAbilityCheckHistory()
+	to.Visited = true
 	gs.CurrentLocationID = &targetID
 	if err := uc.sessionRepo.Save(ctx, gs); err != nil {
 		return nil, fmt.Errorf("failed to save session: %w", err)

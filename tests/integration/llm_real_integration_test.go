@@ -97,14 +97,11 @@ func TestLLM_RealIntegration_CombatAnalysis(t *testing.T) {
 				inventoryRepo,
 				sessionID,
 				cfg.chatID,
-				1, // worldID
-				1, // characterID
-				1, // playerID
+				1,     // worldID
+				1,     // characterID
+				1,     // playerID
 				false, // autoGenerateImages
 			)
-
-			// Rate limiting - wait 2 seconds between requests
-			time.Sleep(2 * time.Second)
 
 			start := time.Now()
 			result, err := analyzer.Execute(ctx, tc.dmResponse)
@@ -220,9 +217,6 @@ func TestLLM_RealIntegration_RateLimit(t *testing.T) {
 			} else {
 				t.Logf("✅ Request %d successful", i+1)
 			}
-
-			// Small delay between requests
-			time.Sleep(100 * time.Millisecond)
 		}
 
 		totalDuration := time.Since(start)

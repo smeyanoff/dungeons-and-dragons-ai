@@ -176,12 +176,13 @@ func TestGameEventRepository_GetBySessionID(t *testing.T) {
 			{GameSessionID: gs.ID, AuthorType: event.AuthorTypeNPC, AuthorName: "NPC", Content: "Event 3"},
 		}
 
+		baseTime := time.Now().Add(-time.Minute)
 		for i, e := range events {
+			eventTime := baseTime.Add(time.Duration(i) * time.Second)
+			e.CreatedAt = eventTime
 			if err := repo.Save(ctx, e); err != nil {
 				t.Fatalf("Failed to save event %d: %v", i+1, err)
 			}
-			// Небольшая задержка для разных временных меток
-			time.Sleep(10 * time.Millisecond)
 		}
 
 		// Получаем события
@@ -218,6 +219,7 @@ func TestGameEventRepository_GetBySessionID(t *testing.T) {
 		}
 
 		// Создаем 5 событий
+		baseTime := time.Now().Add(-time.Minute)
 		for i := 1; i <= 5; i++ {
 			e := &event.StoryEvent{
 				GameSessionID: gs.ID,
@@ -225,10 +227,11 @@ func TestGameEventRepository_GetBySessionID(t *testing.T) {
 				AuthorName:    "DM",
 				Content:       fmt.Sprintf("Event %d", i),
 			}
+			eventTime := baseTime.Add(time.Duration(i) * time.Second)
+			e.CreatedAt = eventTime
 			if err := repo.Save(ctx, e); err != nil {
 				t.Fatalf("Failed to save event %d: %v", i, err)
 			}
-			time.Sleep(10 * time.Millisecond)
 		}
 
 		// Получаем только последние 3 события
@@ -336,6 +339,7 @@ func TestGameEventRepository_GetAllBySessionID(t *testing.T) {
 		}
 
 		// Создаем события
+		baseTime := time.Now().Add(-time.Minute)
 		for i := 1; i <= 5; i++ {
 			e := &event.StoryEvent{
 				GameSessionID: gs.ID,
@@ -343,10 +347,11 @@ func TestGameEventRepository_GetAllBySessionID(t *testing.T) {
 				AuthorName:    "DM",
 				Content:       fmt.Sprintf("All Event %d", i),
 			}
+			eventTime := baseTime.Add(time.Duration(i) * time.Second)
+			e.CreatedAt = eventTime
 			if err := repo.Save(ctx, e); err != nil {
 				t.Fatalf("Failed to save event %d: %v", i, err)
 			}
-			time.Sleep(10 * time.Millisecond)
 		}
 
 		// Получаем все события
@@ -376,8 +381,7 @@ func TestGameEventRepository_ContextTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
 		defer cancel()
 
-		// Даем контексту время истечь
-		time.Sleep(10 * time.Millisecond)
+		waitForContextDone(t, ctx)
 
 		_, err := repo.GetBySessionID(ctx, 1, 10)
 		if err == nil {

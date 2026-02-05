@@ -94,6 +94,55 @@ func TestGetCurrentParticipant(t *testing.T) {
 	}
 }
 
+func TestGetCurrentParticipantReturnsCopy(t *testing.T) {
+	combat := &Combat{
+		State:       CombatStateActive,
+		CurrentTurn: 0,
+		Participants: []CombatParticipant{
+			createMonsterParticipant("Goblin", 10, 12),
+			createPlayerParticipant("Player 1", 16, 14, 15),
+		},
+	}
+
+	participant := combat.GetCurrentParticipant()
+	if participant == nil {
+		t.Fatal("expected participant, got nil")
+	}
+
+	participant.MonsterHP = 0
+	if combat.Participants[0].MonsterHP == 0 {
+		t.Fatal("expected internal participant to remain unchanged")
+	}
+}
+
+func TestCombatConcurrentAccess(t *testing.T) {
+	combat := &Combat{
+		State:       CombatStateActive,
+		CurrentTurn: 0,
+		Participants: []CombatParticipant{
+			createPlayerParticipant("Player 1", 16, 14, 15),
+			createMonsterParticipant("Goblin", 10, 12),
+		},
+	}
+
+	const goroutines = 50
+	const iterations = 100
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = combat.GetCurrentParticipant()
+				combat.NextTurn()
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
 func TestGetCurrentParticipantInactiveCombat(t *testing.T) {
 	combat := &Combat{
 		State: CombatStateFinished,

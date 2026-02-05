@@ -7,16 +7,16 @@ import (
 	"strings"
 	"testing"
 
-	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 )
 
 // Mock LLM
 type mockLLM struct {
 	generateFunc              func(ctx context.Context, prompt string) (string, error)
 	generateWithMaxTokensFunc func(ctx context.Context, prompt string, maxTokens int) (string, error)
-	generateWithToolsFunc     func(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error)
+	generateWithToolsFunc     func(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error)
 }
 
 func (m *mockLLM) Generate(ctx context.Context, prompt string) (string, error) {
@@ -41,7 +41,7 @@ func (m *mockLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, maxT
 	return "", nil
 }
 
-func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error) {
 	if m.generateWithToolsFunc != nil {
 		return m.generateWithToolsFunc(ctx, prompt, tools)
 	}

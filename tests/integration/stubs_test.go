@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	dm_tools "dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 )
 
@@ -27,7 +27,7 @@ func (n noopDMLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, max
 	return n.Generate(ctx, prompt)
 }
 
-func (noopDMLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (noopDMLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error) {
 	_ = ctx
 	_ = prompt
 	_ = tools
@@ -50,7 +50,7 @@ func (l analysisLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, m
 	return l.Generate(ctx, prompt)
 }
 
-func (analysisLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (analysisLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error) {
 	_ = ctx
 	_ = prompt
 	_ = tools

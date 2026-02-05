@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"dungeons-and-dragons-ai/internal/game/application/dm_tools"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 	"dungeons-and-dragons-ai/pkg/gigachat"
 	"dungeons-and-dragons-ai/pkg/logger"
 )
@@ -103,7 +103,7 @@ func (g *GigachatLLM) GenerateWithMaxTokens(ctx context.Context, prompt string, 
 
 // GenerateWithTools реализует multi-step loop для вызова инструментов
 // Формат: генерация → анализ → вызов функций → повторная генерация
-func (g *GigachatLLM) GenerateWithTools(ctx context.Context, prompt string, tools []dm_tools.Tool) (*domain.LLMResponseWithTools, error) {
+func (g *GigachatLLM) GenerateWithTools(ctx context.Context, prompt string, tools []llmtools.Tool) (*domain.LLMResponseWithTools, error) {
 	functions := buildFunctionDefinitions(tools)
 	toolsPrompt := ""
 
@@ -129,7 +129,7 @@ func (g *GigachatLLM) GenerateWithTools(ctx context.Context, prompt string, tool
 		}
 		if isGigaChatServerError(err) && len(functions) > 0 {
 			// Fallback: используем старый формат с инструкциями в промпте.
-			toolsPrompt = dm_tools.BuildToolsPrompt(tools)
+			toolsPrompt = llmtools.BuildToolsPrompt(tools)
 			fallbackPrompt := prompt + toolsPrompt
 			resp, err = g.client.ChatWithMaxTokens(ctx, g.model, fallbackPrompt, nil)
 			if err != nil {
@@ -161,7 +161,7 @@ func (g *GigachatLLM) GenerateWithTools(ctx context.Context, prompt string, tool
 	toolCalls, found := extractToolCallsFromResponse(resp)
 	if !found {
 		var err error
-		toolCalls, err = dm_tools.ExtractToolCalls(response)
+		toolCalls, err = llmtools.ExtractToolCalls(response)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract tool calls: %w", err)
 		}
@@ -170,7 +170,7 @@ func (g *GigachatLLM) GenerateWithTools(ctx context.Context, prompt string, tool
 	// Если вызовов инструментов нет, возвращаем обычный ответ
 	if len(toolCalls) == 0 {
 		// Удаляем теги tool_call из ответа, если они есть
-		cleanedResponse := dm_tools.CleanToolCallTags(response)
+		cleanedResponse := llmtools.CleanToolCallTags(response)
 		return &domain.LLMResponseWithTools{
 			Content:   cleanedResponse,
 			ToolCalls: nil,
@@ -209,7 +209,7 @@ func tlsFallbackContent() string {
 	return "LLM временно недоступен из-за ошибки TLS проверки сертификата. Используется заглушка."
 }
 
-func buildFunctionDefinitions(tools []dm_tools.Tool) []gigachat.FunctionDefinition {
+func buildFunctionDefinitions(tools []llmtools.Tool) []gigachat.FunctionDefinition {
 	if len(tools) == 0 {
 		return nil
 	}
@@ -226,7 +226,7 @@ func buildFunctionDefinitions(tools []dm_tools.Tool) []gigachat.FunctionDefiniti
 	return defs
 }
 
-func extractToolCallsFromResponse(resp *gigachat.ChatResponse) ([]dm_tools.ToolCall, bool) {
+func extractToolCallsFromResponse(resp *gigachat.ChatResponse) ([]llmtools.ToolCall, bool) {
 	if resp == nil || len(resp.Choices) == 0 {
 		return nil, false
 	}
@@ -243,18 +243,18 @@ func extractToolCallsFromResponse(resp *gigachat.ChatResponse) ([]dm_tools.ToolC
 	return nil, false
 }
 
-func convertFunctionCalls(calls []gigachat.FunctionCall) ([]dm_tools.ToolCall, bool) {
+func convertFunctionCalls(calls []gigachat.FunctionCall) ([]llmtools.ToolCall, bool) {
 	if len(calls) == 0 {
 		return nil, false
 	}
 
-	toolCalls := make([]dm_tools.ToolCall, 0, len(calls))
+	toolCalls := make([]llmtools.ToolCall, 0, len(calls))
 	for _, call := range calls {
 		args, err := parseFunctionCallArgs(call.Arguments)
 		if err != nil {
 			continue
 		}
-		toolCalls = append(toolCalls, dm_tools.ToolCall{
+		toolCalls = append(toolCalls, llmtools.ToolCall{
 			Name:      call.Name,
 			Arguments: args,
 		})

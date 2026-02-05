@@ -15,6 +15,9 @@ type DMResponseCache struct {
 	cache map[string]*cacheEntry
 	mu    sync.RWMutex
 	ttl   time.Duration
+
+	stopCh   chan struct{}
+	closeMu  sync.Once
 }
 
 type cacheEntry struct {
@@ -29,6 +32,7 @@ func NewDMResponseCache(ttl time.Duration) *DMResponseCache {
 	c := &DMResponseCache{
 		cache: make(map[string]*cacheEntry),
 		ttl:   ttl,
+		stopCh: make(chan struct{}),
 	}
 
 	// Запускаем горутину для очистки устаревших записей
@@ -138,23 +142,38 @@ func (c *DMResponseCache) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		c.mu.Lock()
-		now := time.Now()
-		for key, entry := range c.cache {
-			if now.Sub(entry.cachedAt) > c.ttl {
-				delete(c.cache, key)
-				logger.Debug("Removed expired cache entry",
-					logger.String("key", key[:16]+"..."),
-				)
+	for {
+		select {
+		case <-ticker.C:
+			c.mu.Lock()
+			now := time.Now()
+			for key, entry := range c.cache {
+				if now.Sub(entry.cachedAt) > c.ttl {
+					delete(c.cache, key)
+					logger.Debug("Removed expired cache entry",
+						logger.String("key", key[:16]+"..."),
+					)
+				}
 			}
-		}
-		c.mu.Unlock()
+			c.mu.Unlock()
 
-		logger.Debug("DM response cache cleanup completed",
-			logger.Int("cache_size", len(c.cache)),
-		)
+			logger.Debug("DM response cache cleanup completed",
+				logger.Int("cache_size", len(c.cache)),
+			)
+		case <-c.stopCh:
+			return
+		}
 	}
+}
+
+// Close останавливает фоновые горутины очистки.
+func (c *DMResponseCache) Close() {
+	if c == nil {
+		return
+	}
+	c.closeMu.Do(func() {
+		close(c.stopCh)
+	})
 }
 
 // GetStats возвращает статистику кэша
