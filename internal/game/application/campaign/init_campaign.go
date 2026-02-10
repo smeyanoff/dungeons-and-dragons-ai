@@ -100,7 +100,45 @@ func (uc *InitCampaignUseCase) Execute(
 	}
 
 	// Создаем мир из сгенерированных данных
-	return uc.buildWorld(ctx, mainQuest, locations)
+	w, err := uc.buildWorld(ctx, mainQuest, locations)
+	if err != nil {
+		return nil, err
+	}
+
+	// Шаг 5: Playbook для каждой локации (hook → 2–4 сцены → критический выбор → последствия; связь с NPC и квестовыми предметами).
+	// Включается переменной окружения ENABLE_PLAYBOOK_GENERATION=true (в тестах по умолчанию выключено).
+	if os.Getenv("ENABLE_PLAYBOOK_GENERATION") == "true" {
+		for i := range w.Locations {
+			npcNames := make([]string, 0, len(w.Locations[i].NPCs))
+			for _, n := range w.Locations[i].NPCs {
+				npcNames = append(npcNames, n.Name)
+			}
+			var questItemNames []string
+			if w.MainQuest != nil {
+				for _, it := range w.MainQuest.Items {
+					questItemNames = append(questItemNames, it.Name)
+				}
+			}
+			scenario, err := uc.generateLocationPlaybook(ctx, w.Locations[i].Name, w.Locations[i].Description, npcNames, questItemNames)
+			if err != nil {
+				logger.Warn("Failed to generate location playbook",
+					logger.String("location", w.Locations[i].Name),
+					logger.ErrorField(err),
+				)
+				continue
+			}
+			if scenario != nil {
+				if err := w.Locations[i].SetScenario(scenario); err != nil {
+					logger.Warn("Failed to set location scenario", logger.String("location", w.Locations[i].Name), logger.ErrorField(err))
+					continue
+				}
+			}
+		}
+		if err := uc.worldRepo.Save(ctx, w); err != nil {
+			logger.Warn("Failed to save world after playbook generation", logger.ErrorField(err))
+		}
+	}
+	return w, nil
 }
 
 // generateMainQuest генерирует главный квест
@@ -468,6 +506,55 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 	return response.Connections, nil
 }
 
+// playbookResponse — DTO для ответа LLM по playbook локации.
+type playbookResponse struct {
+	Hook                  string   `json:"hook"`
+	KeyEvents             []string `json:"key_events"`
+	CriticalChoice        string   `json:"critical_choice"`
+	PossibleOutcomes      []string `json:"possible_outcomes"`
+	RelatedNPCNames       []string `json:"related_npc_names"`
+	RelatedQuestItemNames []string `json:"related_quest_item_names"`
+}
+
+// generateLocationPlaybook генерирует playbook локации (hook → 2–4 сцены → критический выбор → последствия) и связь с NPC/квестовыми предметами.
+func (uc *InitCampaignUseCase) generateLocationPlaybook(
+	ctx context.Context,
+	locName, locDesc string,
+	npcNames, questItemNames []string,
+) (*world.LocationScenario, error) {
+	prompt := GenerateLocationPlaybookPrompt(locName, locDesc, npcNames, questItemNames)
+	genCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	raw, err := uc.llm.Generate(genCtx, prompt)
+	if err != nil {
+		return nil, err
+	}
+	cleaned := cleanJSONResponse(raw)
+	if !json.Valid([]byte(cleaned)) {
+		return nil, fmt.Errorf("invalid JSON from LLM")
+	}
+	var resp playbookResponse
+	if err := json.Unmarshal([]byte(cleaned), &resp); err != nil {
+		return nil, err
+	}
+	scenario := &world.LocationScenario{
+		ID:                    fmt.Sprintf("playbook_%s", strings.ReplaceAll(locName, " ", "_")),
+		Title:                 locName,
+		Description:           locDesc,
+		Objective:             "",
+		Hook:                  resp.Hook,
+		KeyEvents:             resp.KeyEvents,
+		CriticalChoice:        resp.CriticalChoice,
+		PossibleOutcomes:      resp.PossibleOutcomes,
+		Reward:                "",
+		Status:                "not_started",
+		CreatedAt:             time.Now().Format(time.RFC3339),
+		RelatedNPCNames:       resp.RelatedNPCNames,
+		RelatedQuestItemNames: resp.RelatedQuestItemNames,
+	}
+	return scenario, nil
+}
+
 // buildWorld создает мир из сгенерированных данных
 func (uc *InitCampaignUseCase) buildWorld(
 	ctx context.Context,
@@ -640,7 +727,7 @@ func fallbackLocations(worldTheme string) []LocationDTO {
 		theme = "фэнтезийный мир"
 	}
 	return []LocationDTO{
-		{Name: "Городские ворота", Description: fmt.Sprintf("Вход в %s и отправная точка приключения.", theme)},
+		{Name: "Деревня У развилки", Description: fmt.Sprintf("Мирная деревня у дороги в %s: таверна, рынок, жители.", theme)},
 		{Name: "Древний лес", Description: "Таинственный лес с шепчущими деревьями и скрытыми тропами."},
 		{Name: "Забытые руины", Description: "Разрушенные руины, где хранятся ответы на главный квест."},
 	}

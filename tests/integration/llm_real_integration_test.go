@@ -101,6 +101,7 @@ func TestLLM_RealIntegration_CombatAnalysis(t *testing.T) {
 				1,     // characterID
 				1,     // playerID
 				false, // autoGenerateImages
+				0,     // imagesGeneratedInSession
 			)
 
 			start := time.Now()

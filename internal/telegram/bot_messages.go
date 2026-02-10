@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"dungeons-and-dragons-ai/internal/metrics"
 	"dungeons-and-dragons-ai/pkg/logger"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -183,6 +184,7 @@ func sanitizeTelegramOutput(text string, chatID int64, source string) string {
 	}
 
 	if leakDetected {
+		_ = metrics.IncrementOutputLeak()
 		logger.Warn("Output guard stripped internal artifacts",
 			logger.Int64("chat_id", chatID),
 			logger.String("source", source),

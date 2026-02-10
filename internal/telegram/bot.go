@@ -383,6 +383,7 @@ func (b *Bot) setupBotCommands() error {
 		{Command: "feedback", Description: "Отправить отзыв о игре"},
 		{Command: "subscription", Description: "Информация о подписке"},
 		{Command: "subscribe", Description: "Оформить подписку"},
+		{Command: "summary", Description: "Резюме сессии (где мы и что дальше)"},
 	}
 
 	cmd := tgbotapi.NewSetMyCommands(commands...)

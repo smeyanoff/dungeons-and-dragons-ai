@@ -172,6 +172,27 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 		)
 	}
 
+	// Метрика checks per 100 msg (целевое <5)
+	msgCount := gs.SessionMessageCount
+	if msgCount < 1 {
+		msgCount = 1
+	}
+	checksPer100 := float64(gs.SessionChecksCount) / float64(msgCount) * 100
+	if checksPer100 > 5 {
+		logger.Warn("Checks per 100 msg above target",
+			logger.Uint("session_id", gs.ID),
+			logger.Float64("checks_per_100", checksPer100),
+			logger.Int("target", 5),
+			logger.Int("checks", gs.SessionChecksCount),
+			logger.Int("messages", gs.SessionMessageCount),
+		)
+	} else {
+		logger.Debug("Checks per 100 msg",
+			logger.Uint("session_id", gs.ID),
+			logger.Float64("checks_per_100", checksPer100),
+		)
+	}
+
 	return &PerformAbilityCheckResult{
 		Message:        message,
 		Ability:        ability,

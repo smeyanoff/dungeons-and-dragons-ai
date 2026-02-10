@@ -56,6 +56,8 @@ func GenerateLocationsPrompt(worldTheme, mainQuestTitle string) string {
 
 Создай 3-5 локаций, которые важны для главного квеста.
 
+ОБЯЗАТЕЛЬНО: первая локация в списке — низкоуровневая, мирная, оживлённая стартовая точка: деревня, таверна у дороги, приграничное поселение, портовый квартал и т.п. Игрок начинает игру именно в ней. Остальные локации — по нарастанию опасности/важности для квеста.
+
 ВАЖНО: 
 - Описание каждой локации должно быть КРАТКИМ (максимум 1 предложение, до 100 символов)
 - Ответь ТОЛЬКО валидным JSON без markdown блоков
@@ -81,6 +83,8 @@ func GenerateLocationsPromptStrict(worldTheme, mainQuestTitle string) string {
 
 Тематика мира: %s
 Главный квест: %s
+
+ОБЯЗАТЕЛЬНО: первая локация — мирная низкоуровневая стартовая точка (деревня, таверна, приграничное поселение и т.п.). Остальные — по нарастанию.
 
 Создай РОВНО 3 локации. Описание каждой локации - МАКСИМУМ 80 символов (одно короткое предложение).
 
@@ -196,4 +200,34 @@ func GenerateConnectionsPromptStrict(locations []LocationDTO) string {
 - Используй только названия из списка
 - direction строго из перечисления
 - description до 80 символов`, strings.Join(locationNames, "\n- "))
+}
+
+// GenerateLocationPlaybookPrompt создаёт промпт для генерации playbook локации: hook → 2–4 сцены → критический выбор → последствия.
+func GenerateLocationPlaybookPrompt(locName, locDesc string, npcNames, questItemNames []string) string {
+	npcsStr := "нет"
+	if len(npcNames) > 0 {
+		npcsStr = strings.Join(npcNames, ", ")
+	}
+	itemsStr := "нет"
+	if len(questItemNames) > 0 {
+		itemsStr = strings.Join(questItemNames, ", ")
+	}
+	return fmt.Sprintf(`Ты — Dungeon Master в D&D. Создай короткий playbook для локации: зацепка (hook) → 2–4 сцены (key_events) → критический выбор → последствия (possible_outcomes). Свяжи сценарий с NPC и квестовыми предметами, если они указаны.
+
+Локация: %s
+Описание: %s
+NPC в локации: %s
+Квестовые предметы (для связи): %s
+
+Ответь ТОЛЬКО валидным JSON без markdown:
+{
+  "hook": "1–2 предложения: зацепка, открывающая ситуацию в локации",
+  "key_events": ["сцена 1", "сцена 2", "сцена 3 или 4"],
+  "critical_choice": "описание критического выбора, который должен принять игрок",
+  "possible_outcomes": ["исход 1", "исход 2"],
+  "related_npc_names": ["имя NPC из списка или пустой массив"],
+  "related_quest_item_names": ["имя предмета из списка или пустой массив"]
+}
+
+Требования: key_events — 2–4 элемента; possible_outcomes — 2–3; related_npc_names и related_quest_item_names — подмножества указанных выше списков или [].`, locName, locDesc, npcsStr, itemsStr)
 }

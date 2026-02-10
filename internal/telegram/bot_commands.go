@@ -52,6 +52,8 @@ func (b *Bot) isKnownCommand(command string) bool {
 		"join":            true,
 		"leave":           true,
 		"coopstatus":      true,
+		"summary":         true,
+		"resume":          true,
 	}
 	return knownCommands[strings.ToLower(command)]
 }
@@ -138,6 +140,8 @@ func (b *Bot) handleCommand(ctx context.Context, chatID int64, command, args str
 		return b.handleLeave(ctx, chatID, tgUserID)
 	case "coopstatus":
 		return b.handleCoopStatus(ctx, chatID)
+	case "summary", "resume":
+		return b.handleSessionSummary(ctx, chatID, tgUserID)
 	default:
 		msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Используйте /help для списка команд")
 		return b.sendMessage(msg)
@@ -173,6 +177,7 @@ func (b *Bot) handleHelp(ctx context.Context, chatID int64) error {
 
 🎲 Игра:
 /roll <выражение> - бросить кубик (например: /roll d20, /roll 2d6+3)
+/summary или /resume - краткое резюме сессии (где мы и что дальше)
 /history - посмотреть историю игры
 /quests - посмотреть активные квесты
 /map - посмотреть карту мира

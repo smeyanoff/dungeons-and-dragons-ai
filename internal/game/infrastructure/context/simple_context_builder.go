@@ -128,16 +128,51 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 
 		// Предопределенные проверки удалены - система использует естественное распознавание проверок
 
-		// Информация о сценарии локации
+		// Информация о сценарии локации (полный playbook для DM)
 		if scenario := currentLoc.GetScenario(); scenario != nil {
 			parts = append(parts, "")
 			parts = append(parts, fmt.Sprintf("🎯 Сценарий: %s", scenario.Title))
 			if scenario.Objective != "" {
 				parts = append(parts, fmt.Sprintf("Цель: %s", scenario.Objective))
 			}
-			if scenario.Status != "not_started" {
+			if scenario.Hook != "" {
+				parts = append(parts, fmt.Sprintf("Зацепка: %s", scenario.Hook))
+			}
+			if len(scenario.KeyEvents) > 0 {
+				parts = append(parts, "Ключевые события (разыгрывай по порядку, по мере уместности):")
+				for i, ev := range scenario.KeyEvents {
+					if ev != "" {
+						parts = append(parts, fmt.Sprintf("  %d) %s", i+1, ev))
+					} else {
+						parts = append(parts, fmt.Sprintf("  %d) —", i+1))
+					}
+				}
+			}
+			if scenario.CriticalChoice != "" {
+				parts = append(parts, fmt.Sprintf("Критический выбор: %s", scenario.CriticalChoice))
+			}
+			if len(scenario.PossibleOutcomes) > 0 {
+				outcomes := strings.Join(scenario.PossibleOutcomes, "; ")
+				if outcomes != "" {
+					parts = append(parts, "Возможные последствия: "+outcomes)
+				}
+			}
+			if scenario.Status != "" && scenario.Status != "not_started" {
 				parts = append(parts, fmt.Sprintf("Статус: %s", scenario.Status))
 			}
+			if len(scenario.RelatedNPCNames) > 0 || len(scenario.RelatedQuestItemNames) > 0 {
+				extra := []string{}
+				if len(scenario.RelatedNPCNames) > 0 {
+					extra = append(extra, "NPC сценария: "+strings.Join(scenario.RelatedNPCNames, ", "))
+				}
+				if len(scenario.RelatedQuestItemNames) > 0 {
+					extra = append(extra, "Квестовые предметы: "+strings.Join(scenario.RelatedQuestItemNames, ", "))
+				}
+				if len(extra) > 0 {
+					parts = append(parts, strings.Join(extra, "; "))
+				}
+			}
+			parts = append(parts, "По статусу сценария и по «Релевантная история игры» понимай, какие задачи/сцены уже прошли, какие можно предложить дальше. Если диалог застопорился — намеренно подтолкни сюжет: зацепкой или следующим ключевым событием из списка.")
 		}
 	}
 

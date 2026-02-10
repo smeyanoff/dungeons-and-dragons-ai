@@ -34,6 +34,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 	dmcache "dungeons-and-dragons-ai/internal/game/infrastructure/cache"
 	"dungeons-and-dragons-ai/internal/llm/domain"
+	"dungeons-and-dragons-ai/internal/metrics"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 	gigachat "dungeons-and-dragons-ai/pkg/gigachat"
@@ -359,17 +360,16 @@ func (uc *HandleActionUseCase) Execute(
 		return "Сейчас не ваш ход. Подождите, пока другой игрок завершит свой ход.", nil
 	}
 
-	// OOC мета-интенты: быстрый ответ без LLM и без cooldown/проверок
-	if isNavigationMetaQuery(playerMessage) {
-		if oocResponse := uc.buildOOCResponse(ctx, gs, playerMessage); oocResponse != "" {
-			return oocResponse, nil
-		}
-	}
-
 	// Добавляем контекст с chat_id и tg_user_id для мониторинга LLM запросов
 	llmCtx := context.WithValue(ctx, "chat_id", chatID)
 	llmCtx = context.WithValue(llmCtx, "tg_user_id", player.TgUserID)
 	llmCtx = context.WithValue(llmCtx, "session_id", gs.ID)
+
+	// Счётчик сообщений игрока для метрики checks per 100 msg (целевое <5)
+	gs.SessionMessageCount++
+	if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+		logger.Warn("Failed to save session message count", logger.ErrorField(err), logger.Uint("session_id", gs.ID))
+	}
 
 	// Информация об активном бое уже включена в контекст RAG
 	// DM сам определит, нужно ли использовать combat tool для обработки атаки
@@ -463,7 +463,8 @@ func (uc *HandleActionUseCase) Execute(
 		return uc.handleTimeChange(ctx, gs, timeChange)
 	}
 
-	isNavigationQuery := isNavigationMetaQuery(playerMessage)
+	// OOC/мета-интенты: "где я", "что вокруг", "резюме" и т.п. — ответ DM без проверок и без cooldown
+	isOOCQuery := isOOCMetaQuery(playerMessage)
 
 	// Анализируем действие игрока для определения необходимости проверок
 	// Пропускаем анализ для системных сообщений (результаты проверок, технические сообщения)
@@ -494,12 +495,12 @@ func (uc *HandleActionUseCase) Execute(
 		}
 	}
 
-	if isNavigationQuery && actionAnalysis != nil {
+	if isOOCQuery && actionAnalysis != nil {
 		actionAnalysis.NeedsAbilityCheck = false
 		actionAnalysis.NeedsPredefinedCheck = false
 		actionAnalysis.NeedsRandomRoll = false
 		actionAnalysis.SimpleAction = true
-		actionAnalysis.Recommendation = "Навигационный/мета запрос: опиши окружение без проверок."
+		actionAnalysis.Recommendation = "OOC/мета запрос: опиши окружение без проверок и без cooldown."
 	}
 
 	// Сохраняем событие действия игрока ДО вызова LLM
@@ -523,10 +524,6 @@ func (uc *HandleActionUseCase) Execute(
 			logger.Uint("session_id", gs.ID),
 			logger.Uint("event_id", playerEvent.ID),
 		)
-		gs.SessionMessageCount++
-		if saveErr := uc.sessionRepo.Save(ctx, gs); saveErr != nil {
-			logger.Warn("Failed to update session message count", logger.ErrorField(saveErr), logger.Uint("session_id", gs.ID))
-		}
 		// Индексируем событие игрока в RAG с таймаутом и повторными попытками
 		doc := ragdomain.Document{
 			ID:        uuid.New().String(),
@@ -537,13 +534,13 @@ func (uc *HandleActionUseCase) Execute(
 		}
 		// Пытаемся проиндексировать с повторными попытками
 		if err := uc.indexDocUC.Execute(ragCtx, doc); err != nil {
+			metrics.IncrementRAGFailure()
 			logger.Warn("Failed to index player event after retries (event saved in DB, but not indexed in RAG)",
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
 				logger.Uint("event_id", playerEvent.ID),
 				logger.String("doc_source", string(doc.Source)),
 				logger.String("doc_timestamp", doc.Timestamp.Format(time.RFC3339)),
-				logger.String("metric", "rag_index_failure"),
 			)
 			// Событие сохранено в БД, но не проиндексировано в RAG
 			// Это не критично - событие все равно доступно через историю
@@ -557,7 +554,8 @@ func (uc *HandleActionUseCase) Execute(
 
 	// Если анализатор решил, что нужна проверка навыка — создаем pending check СИСТЕМОЙ
 	// и сразу возвращаем игроку текстовую подсказку. LLM-DM не участвует и не должен просить /roll.
-	if actionAnalysis != nil && actionAnalysis.NeedsAbilityCheck && actionAnalysis.AbilityCheck != nil && !actionAnalysis.SimpleAction && !isNavigationQuery {
+	// OOC-запросы не создают проверку — ответ DM без cooldown и без бросков.
+	if actionAnalysis != nil && actionAnalysis.NeedsAbilityCheck && actionAnalysis.AbilityCheck != nil && !actionAnalysis.SimpleAction && !isOOCQuery {
 		checkMsg, handled, err := uc.createAbilityCheckFromAnalyzer(ctx, gs, actionAnalysis.AbilityCheck)
 		if err != nil {
 			logger.Warn("Failed to create pending ability check from analyzer",
@@ -586,6 +584,7 @@ func (uc *HandleActionUseCase) Execute(
 					Timestamp: time.Now(),
 				}
 				if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
+					metrics.IncrementRAGFailure()
 					logger.Warn("Failed to index analyzer ability check prompt in RAG",
 						logger.ErrorField(err),
 						logger.Uint("session_id", gs.ID),
@@ -654,12 +653,11 @@ func (uc *HandleActionUseCase) Execute(
 		}
 
 		// Получаем ответ от DM с поддержкой tools через multi-step loop
-		// Увеличенный таймаут при использовании инструментов (генерация изображений может занимать 1–3 мин)
 		logger.Info("Generating DM response with tools",
 			logger.Uint("session_id", gs.ID),
 			logger.Int("prompt_length", len(prompt)),
 		)
-		llmCtx, llmCancel := context.WithTimeout(llmCtx, 5*time.Minute)
+		llmCtx, llmCancel := context.WithTimeout(llmCtx, 60*time.Second)
 		defer llmCancel()
 		startTime := time.Now()
 
@@ -673,7 +671,6 @@ func (uc *HandleActionUseCase) Execute(
 				logger.Warn("GigaChat payment required, switching to simplified mode",
 					logger.ErrorField(err),
 					logger.Uint("session_id", gs.ID),
-					logger.String("metric", "gigachat_402"),
 				)
 				return fallback, nil
 			}
@@ -735,10 +732,6 @@ func (uc *HandleActionUseCase) Execute(
 			logger.Uint("session_id", gs.ID),
 			logger.Uint("event_id", dmEvent.ID),
 		)
-		gs.SessionMessageCount++
-		if saveErr := uc.sessionRepo.Save(ctx, gs); saveErr != nil {
-			logger.Warn("Failed to update session message count", logger.ErrorField(saveErr), logger.Uint("session_id", gs.ID))
-		}
 		// Индексируем ответ DM в RAG с новым контекстом, таймаутом и повторными попытками
 		// Создаем новый контекст, так как ragCtx мог быть просрочен после долгого вызова LLM
 		indexCtx, indexCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -761,13 +754,13 @@ func (uc *HandleActionUseCase) Execute(
 		}
 		// Пытаемся проиндексировать с повторными попытками
 		if err := uc.indexDocUC.Execute(indexCtx, doc); err != nil {
+			metrics.IncrementRAGFailure()
 			logger.Warn("Failed to index DM event after retries (event saved in DB, but not indexed in RAG)",
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),
 				logger.Uint("event_id", dmEvent.ID),
 				logger.String("doc_source", string(doc.Source)),
 				logger.String("doc_timestamp", doc.Timestamp.Format(time.RFC3339)),
-				logger.String("metric", "rag_index_failure"),
 			)
 			// Событие сохранено в БД, но не проиндексировано в RAG
 			// Это не критично - событие все равно доступно через историю
@@ -780,15 +773,31 @@ func (uc *HandleActionUseCase) Execute(
 	}
 
 	// Анализируем ответ DM для автоматического определения боевых ситуаций, квестов и опыта
-	// Получаем модифицированный response с маркерами изображений и сообщение о начале боя
-	modifiedResponse, combatStartMessage := uc.analyzeDMResponse(llmCtx, gs, response)
+	modifiedResponse, combatStartMessage, combatFallbackMessage, imageLimitReachedMessage, imagesGeneratedInSession := uc.analyzeDMResponse(llmCtx, gs, response)
 
 	// Используем модифицированный response (с маркерами изображений)
 	response = modifiedResponse
 
+	// Сохраняем счётчик изображений сессии и обновляем сессию
+	gs.ImagesGeneratedInSession = imagesGeneratedInSession
+	if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+		logger.Warn("Failed to save session after image count update",
+			logger.ErrorField(err),
+			logger.Uint("session_id", gs.ID),
+		)
+	}
+
 	// Добавляем сообщение о порядке ходов к ответу DM, если бой начался
 	if combatStartMessage != "" {
 		response = fmt.Sprintf("%s\n\n%s", response, combatStartMessage)
+	}
+	// При combat_detected и пустом списке врагов — fallback, чтобы игрок понимал ситуацию
+	if combatFallbackMessage != "" {
+		response = fmt.Sprintf("%s\n\n%s", response, combatFallbackMessage)
+	}
+	// При достижении лимита изображений на сессию — мягкое сообщение
+	if imageLimitReachedMessage != "" {
+		response = fmt.Sprintf("%s\n\n%s", response, imageLimitReachedMessage)
 	}
 
 	// Проверяем активный бой и автоматически выполняем ходы врагов
@@ -866,20 +875,20 @@ func (uc *HandleActionUseCase) Execute(
 }
 
 // analyzeDMResponse анализирует ответ DM и выполняет автоматические действия
-// Возвращает модифицированный response с добавленными маркерами изображений и сообщение о начале боя
+// Возвращает модифицированный response, сообщения о бое/лимите изображений и новый счётчик изображений сессии.
 func (uc *HandleActionUseCase) analyzeDMResponse(
 	ctx context.Context,
 	gs *session.GameSession,
 	dmResponse string,
-) (modifiedResponse string, combatStartMessage string) {
+) (modifiedResponse string, combatStartMessage string, combatFallbackMessage string, imageLimitReachedMessage string, imagesGeneratedInSession int) {
 	// Получаем игрока (используем первого игрока для обратной совместимости)
 	player := gs.GetFirstPlayer()
 	if player == nil {
 		// Нет игрока, нечего анализировать
-		return dmResponse, ""
+		return dmResponse, "", "", "", gs.ImagesGeneratedInSession
 	}
 
-	// Создаем анализатор
+	// Создаем анализатор (передаём текущий счётчик изображений сессии для лимита)
 	analyzer := dm_analyzer.NewAnalyzeDMResponseUseCase(
 		uc.llm,
 		uc.combatRepo,
@@ -889,8 +898,9 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		gs.ChatID, // Передаем chatID для отправки уведомлений
 		gs.WorldID,
 		player.CharacterID,
-		player.ID,             // Передаем playerID для проверки достижений
-		gs.AutoGenerateImages, // Используем настройку из сессии
+		player.ID,                      // Передаем playerID для проверки достижений
+		gs.AutoGenerateImages,          // Используем настройку из сессии
+		gs.ImagesGeneratedInSession,    // Текущее число изображений в сессии (лимит на сессию)
 	)
 
 	// Настраиваем проверку достижений и уведомления в AnalyzeDMResponseUseCase
@@ -945,7 +955,7 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 			logger.ErrorField(err),
 			logger.Uint("session_id", gs.ID),
 		)
-		return dmResponse, ""
+		return dmResponse, "", "", "", gs.ImagesGeneratedInSession
 	}
 
 	// Обновляем рейтинг при завершении квеста
@@ -963,8 +973,11 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		}
 	}
 
-	// Сохраняем сообщение о начале боя для возврата
+	// Сохраняем сообщение о начале боя, fallback при пустом списке врагов и лимит изображений для возврата
 	combatStartMessage = analysis.CombatStartMessage
+	combatFallbackMessage = analysis.CombatFallbackMessage
+	imageLimitReachedMessage = analysis.ImageLimitReachedMessage
+	imagesGeneratedInSession = analysis.ImagesGeneratedInSession
 
 	// Добавляем маркеры автоматически сгенерированных изображений в ответ DM
 	// Изображения будут отправлены автоматически через extractImageMarkers в bot.go
@@ -978,12 +991,6 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		for _, img := range analysis.GeneratedImages {
 			modifiedResponse += fmt.Sprintf("\n[IMAGE:%s]", img.ImagePath)
 		}
-	}
-	if analysis.CombatEmptyEnemiesFallback != "" {
-		modifiedResponse += "\n\n" + analysis.CombatEmptyEnemiesFallback
-	}
-	if analysis.ImageLimitReachedMessage != "" {
-		modifiedResponse += "\n\n" + analysis.ImageLimitReachedMessage
 	}
 
 	// Начисляем опыт, если он был получен
@@ -1015,8 +1022,8 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	// Обновляем прогресс сессионных целей
 	uc.updateSessionGoalsProgress(ctx, gs, analysis)
 
-	// Возвращаем модифицированный response с маркерами изображений и сообщение о начале боя
-	return modifiedResponse, combatStartMessage
+	// Возвращаем модифицированный response, сообщения о бое/лимите и счётчик изображений сессии
+	return modifiedResponse, combatStartMessage, combatFallbackMessage, imageLimitReachedMessage, imagesGeneratedInSession
 }
 
 // generateEnemyTurn генерирует автоматический ход врага в бою
@@ -1223,14 +1230,6 @@ func sanitizePlayerFacingResponse(text string) string {
 	result := strings.TrimSpace(strings.Join(filtered, "\n"))
 	if result == "" {
 		return ""
-	}
-
-	// Мониторинг утечек (P2.7): логируем, если output guard что-то отфильтровал
-	if len(filtered) < len(lines) {
-		logger.Info("Output guard stripped lines from player-facing response",
-			logger.Int("filtered_out", len(lines)-len(filtered)),
-			logger.String("metric", "output_guard_stripped"),
-		)
 	}
 
 	// Удаляем множественные пустые строки после фильтрации
@@ -1701,6 +1700,12 @@ func formatAbilityNameForPlayer(ability string) string {
 	}
 }
 
+// isOOCMetaQuery распознаёт мета/OOC-запросы ("где я", "что вокруг", "резюме" и т.п.).
+// Для таких запросов DM даёт быстрый информативный ответ без проверок и без cooldown.
+func isOOCMetaQuery(message string) bool {
+	return isNavigationMetaQuery(message)
+}
+
 func isNavigationMetaQuery(message string) bool {
 	lower := strings.ToLower(strings.TrimSpace(message))
 	if lower == "" {
@@ -1734,68 +1739,6 @@ func isNavigationMetaQuery(message string) bool {
 		}
 	}
 	return false
-}
-
-// buildOOCResponse формирует короткий ответ на мета-запрос (где я / что вокруг / резюме) без вызова LLM.
-func (uc *HandleActionUseCase) buildOOCResponse(ctx context.Context, gs *session.GameSession, playerMessage string) string {
-	lower := strings.ToLower(strings.TrimSpace(playerMessage))
-	var parts []string
-
-	// Текущая локация
-	var locName string
-	if gs.CurrentLocationID != nil {
-		for i := range gs.World.Locations {
-			if gs.World.Locations[i].ID == *gs.CurrentLocationID {
-				locName = gs.World.Locations[i].Name
-				break
-			}
-		}
-	}
-	// Резюме/сводка: 2–3 предложения «где мы и что дальше» (P2.5)
-	isSummary := strings.Contains(lower, "резюме") || strings.Contains(lower, "сводка") ||
-		strings.Contains(lower, "summary") || strings.Contains(lower, "recap")
-	if isSummary && uc.eventRepo != nil {
-		events, err := uc.eventRepo.GetBySessionID(ctx, gs.ID, 7)
-		if err == nil && len(events) > 0 {
-			var summarySentences []string
-			if locName != "" {
-				summarySentences = append(summarySentences, fmt.Sprintf("Ты в локации «%s».", locName))
-			}
-			// Последнее значимое сообщение (приоритет — последний ответ DM)
-			for i := len(events) - 1; i >= 0; i-- {
-				e := events[i]
-				preview := strings.TrimSpace(e.Content)
-				if preview == "" {
-					continue
-				}
-				if utf8.RuneCountInString(preview) > 120 {
-					preview = string([]rune(preview)[:120]) + "…"
-				}
-				if e.AuthorType == event.AuthorTypeDM {
-					summarySentences = append(summarySentences, "Последнее: "+preview)
-				} else {
-					summarySentences = append(summarySentences, "Ты: "+preview)
-				}
-				break // одно предложение из последнего события
-			}
-			summarySentences = append(summarySentences, "Дальше: продолжай действие в игре — ведущий подхватит.")
-			parts = append(parts, strings.Join(summarySentences, " "))
-		} else if locName != "" {
-			parts = append(parts, fmt.Sprintf("Ты в локации «%s». Продолжай действие — ведущий подхватит.", locName))
-		}
-	}
-	if !isSummary {
-		if locName != "" {
-			parts = append(parts, fmt.Sprintf("**Ты находишься:** %s", locName))
-		} else if len(gs.World.Locations) > 0 {
-			parts = append(parts, "Текущая локация не установлена (используй действие для перемещения).")
-		}
-	}
-
-	if len(parts) == 0 {
-		return "Пока нет данных о локации. Сделай ход в игре — ведущий опишет окружение."
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 // createAbilityCheckFromAnalyzer создает pending ability check на основе вывода анализатора,
@@ -2219,6 +2162,7 @@ func (uc *HandleActionUseCase) resolveLocationEventFromCheck(
 			Timestamp: time.Now(),
 		}
 		if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
+			metrics.IncrementRAGFailure()
 			logger.Warn("Failed to index location outcome in RAG, continuing with DB storage only",
 				logger.ErrorField(err),
 				logger.Uint("session_id", gs.ID),

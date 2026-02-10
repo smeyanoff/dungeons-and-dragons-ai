@@ -3,7 +3,6 @@ package player_action
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -625,79 +624,6 @@ func TestHandleActionUseCase_Execute(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestHandleActionUseCase_Execute_OOCMetaQuery проверяет, что мета-запросы (где я / что вокруг)
-// обрабатываются без вызова LLM и BuildContext — быстрый ответ из сессии.
-func TestHandleActionUseCase_Execute_OOCMetaQuery(t *testing.T) {
-	buildContextCalled := false
-	locID := uint(1)
-	locName := "Таверна у дракона"
-	sessionRepo := &mockSessionRepo{
-		getByChatIDFunc: func(ctx context.Context, chatID int64) (*session.GameSession, error) {
-			return &session.GameSession{
-				ChatID:            chatID,
-				State:             session.StateActive,
-				WorldID:           1,
-				CurrentLocationID: &locID,
-				World: world.World{
-					ID:   1,
-					Name: "Test World",
-					Locations: []world.Location{
-						{ID: 1, Name: locName},
-					},
-					StartedAt: time.Now(),
-				},
-				Players: []player.Player{
-					{
-						ID:       1,
-						TgUserID: 11111,
-						Character: character.Character{Name: "Hero", Race: character.RaceHuman, Class: character.ClassFighter},
-					},
-				},
-			}, nil
-		},
-	}
-	ctxBuilder := &mockContextBuilder{
-		buildContextFunc: func(ctx context.Context, gs *session.GameSession, playerMessage string) (string, error) {
-			buildContextCalled = true
-			return "context", nil
-		},
-	}
-	eventRepo := &mockEventRepo{}
-	mockEmbedder := &mockEmbedder{}
-	mockVectorStore := &mockVectorStore{}
-	indexDoc := ragapp.NewIndexDocument(mockEmbedder, mockVectorStore)
-	uc := NewHandleActionUseCase(
-		&mockLLM{},
-		sessionRepo,
-		ctxBuilder,
-		eventRepo,
-		indexDoc,
-		&mockCombatRepo{},
-		&mockQuestRepo{},
-		&mockInventoryRepo{},
-		characterapp.NewAddExperienceUseCase(&mockPlayerRepo{}, sessionRepo),
-		worldeventapp.NewCheckWorldEventsUseCase(&mockWorldEventRepo{}),
-		nil, nil, nil, nil, nil, nil, &mockDailyQuestProgressChecker{}, nil, nil, nil, nil,
-	)
-
-	result, err := uc.Execute(context.Background(), 12345, 11111, "что вокруг?")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if buildContextCalled {
-		t.Error("OOC meta-query must not call BuildContext (answer from session only)")
-	}
-	if result == "" {
-		t.Error("expected non-empty OOC response")
-	}
-	if !strings.Contains(result, "Ты находишься") {
-		t.Errorf("expected OOC response to contain 'Ты находишься', got: %s", result)
-	}
-	if !strings.Contains(result, locName) {
-		t.Errorf("expected OOC response to contain location name %q, got: %s", locName, result)
 	}
 }
 

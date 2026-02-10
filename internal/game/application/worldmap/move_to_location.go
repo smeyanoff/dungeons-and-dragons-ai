@@ -491,26 +491,16 @@ func (uc *MoveToLocationUseCase) generateSimpleLocationScenario(location world.L
 		reward = "Ценный предмет или важная информация"
 	}
 
-	hook := description
-	if len(hook) > 120 {
-		hook = hook[:117] + "..."
-	}
-	criticalChoice := objective
-	if criticalChoice == "" {
-		criticalChoice = "Выбрать, как действовать в ключевой момент"
-	}
 	return &world.LocationScenario{
-		ID:                fmt.Sprintf("scenario_%d_%d", location.ID, time.Now().Unix()),
-		Title:             title,
-		Description:       description,
-		Hook:              hook,
-		Objective:         objective,
-		KeyEvents:         keyEvents,
-		CriticalChoice:    criticalChoice,
-		PossibleOutcomes:  possibleOutcomes,
-		Reward:            reward,
-		Status:            "not_started",
-		CreatedAt:         time.Now().Format(time.RFC3339),
+		ID:               fmt.Sprintf("scenario_%d_%d", location.ID, time.Now().Unix()),
+		Title:            title,
+		Description:      description,
+		Objective:        objective,
+		KeyEvents:        keyEvents,
+		PossibleOutcomes: possibleOutcomes,
+		Reward:           reward,
+		Status:           "not_started",
+		CreatedAt:        time.Now().Format(time.RFC3339),
 	}
 }
 

@@ -144,6 +144,12 @@ func FormatToolResults(results []ToolResult) string {
 				}
 			}
 
+			// generate_image: короткая пометка, чтобы DM не пересказывал технический результат и не ломал повествование
+			if result.ToolName == "generate_image" {
+				parts = append(parts, "generate_image: изображение создано. Продолжи описание сцены естественно; картинка будет показана игроку отдельно.")
+				continue
+			}
+
 			// Для остальных tools - стандартное форматирование
 			resultJSON, _ := json.Marshal(result.Result)
 			parts = append(parts, fmt.Sprintf("Инструмент %s выполнен успешно: %s", result.ToolName, string(resultJSON)))

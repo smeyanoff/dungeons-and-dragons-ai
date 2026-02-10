@@ -27,10 +27,11 @@ type Client struct {
 	imageClient    *http.Client  // HTTP client with extended timeout for image operations
 	semaphore      chan struct{} // Concurrency control semaphore
 	rateLimiter    *rate.Limiter // Global rate limiter for all requests (10 RPS by default)
-	requestCount   int64         // Counter for metrics
-	errorCount     int64         // Counter for error metrics
-	rateLimitCount int64         // Counter for 429 responses
-	startTime      time.Time     // Time when client was created for RPS calculation
+	requestCount        int64     // Counter for metrics
+	errorCount          int64     // Counter for error metrics
+	rateLimitCount      int64     // Counter for 429 responses
+	paymentRequiredCount int64    // Counter for 402 responses (GigaChat quota/billing)
+	startTime           time.Time // Time when client was created for RPS calculation
 
 	// Circuit breaker fields
 	circuitBreakerFailures int64        // Number of consecutive failures
@@ -40,32 +41,25 @@ type Client struct {
 }
 
 func NewClient(cfg Config) *Client {
-	// Базовый Transport для обычных запросов (LLM, embeddings)
 	transport := &http.Transport{
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   30 * time.Second,
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 30 * time.Second, // Increased from 10s to handle slow TLS handshakes
+		// Add connection pooling and keep-alive
 		MaxIdleConnsPerHost:   10,
 		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		DisableKeepAlives:     false,
-	}
-	// Отдельный Transport для генерации/скачивания изображений (GigaChat может отвечать 1–3 мин)
-	imageTransport := &http.Transport{
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   30 * time.Second,
-		MaxIdleConnsPerHost:   10,
-		ResponseHeaderTimeout: 5 * time.Minute, // Генерация изображений часто >30s
-		ExpectContinueTimeout: 1 * time.Second,
-		DisableKeepAlives:     false,
+		// Enable keep-alive
+		DisableKeepAlives: false,
 	}
 
 	// Если нужно пропустить проверку TLS (только для тестов)
-	// #nosec G402 - преднамеренно отключаем проверку TLS для работы с GigaChat API
+	// #nosec G402 - преднамеренно отключаем проверку TLS для работы с GigaChat API,
+	// который использует корневые сертификаты Сбербанка, устанавливаемые отдельно в образе
 	if cfg.SkipTLSVerify {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		imageTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
 	}
 
 	// Concurrency limit: уменьшаем до 2 для предотвращения rate limiting
@@ -94,7 +88,7 @@ func NewClient(cfg Config) *Client {
 		},
 		imageClient: &http.Client{
 			Timeout:   5 * time.Minute, // Extended timeout for image generation and download
-			Transport: imageTransport,
+			Transport: transport,
 		},
 		semaphore:              make(chan struct{}, concurrencyLimit),
 		rateLimiter:            rateLimiter,
@@ -117,10 +111,11 @@ func (c *Client) GetToken(ctx context.Context) (string, error) {
 // GetMetrics возвращает текущие метрики клиента
 func (c *Client) GetMetrics() map[string]int64 {
 	metrics := map[string]int64{
-		"requests":    atomic.LoadInt64(&c.requestCount),
-		"errors":      atomic.LoadInt64(&c.errorCount),
-		"rate_limits": atomic.LoadInt64(&c.rateLimitCount),
-		"rps":         c.calculateRPS(), // Добавляем RPS метрику
+		"requests":             atomic.LoadInt64(&c.requestCount),
+		"errors":               atomic.LoadInt64(&c.errorCount),
+		"rate_limits":           atomic.LoadInt64(&c.rateLimitCount),
+		"payment_required_402":  atomic.LoadInt64(&c.paymentRequiredCount),
+		"rps":                  c.calculateRPS(), // Добавляем RPS метрику
 	}
 
 	// Add rate limiter tokens info if available
@@ -416,6 +411,7 @@ func (c *Client) doRequestWithClient(ctx context.Context, client *http.Client, m
 
 		// Если получили 402 Payment Required (обычно лимит/квота исчерпаны)
 		if resp.StatusCode == 402 {
+			atomic.AddInt64(&c.paymentRequiredCount, 1)
 			data, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			log.Printf("GigaChat: Payment required (402) for %s %s. Response: %s", method, url, string(data))
@@ -739,6 +735,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body []byte)
 
 		// Если получили 402 Payment Required (обычно лимит/квота исчерпаны)
 		if resp.StatusCode == 402 {
+			atomic.AddInt64(&c.paymentRequiredCount, 1)
 			data, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			log.Printf("GigaChat: Payment required (402) for %s %s. Response: %s", method, url, string(data))

@@ -12,6 +12,7 @@ import (
 
 	"dungeons-and-dragons-ai/internal/game/domain/llm_log"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
+	"dungeons-and-dragons-ai/internal/metrics"
 	"dungeons-and-dragons-ai/pkg/logger"
 )
 
@@ -120,6 +121,7 @@ func NewServer(addr string, logRepo LLMLogRepository) *Server {
 	mux.HandleFunc("/api/log/", s.handleAPILogDetail)
 	mux.HandleFunc("/api/stats", s.handleAPIStats)
 	mux.HandleFunc("/api/branches", s.handleAPIBranches)
+	mux.HandleFunc("/api/metrics", s.handleAPIMetrics)
 
 	// Оборачиваем в middleware цепочку: tracing -> cors -> mux
 	s.httpServer = &http.Server{
@@ -631,6 +633,16 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, stats)
+}
+
+// handleAPIMetrics возвращает счётчики мониторинга: RAG-failures, утечки системного текста (output-guard).
+// GigaChat 402 доступен через GetMetrics() клиента GigaChat при наличии доступа к нему.
+func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
+	out := map[string]int64{
+		"rag_failure_count":  metrics.RAGFailureCount(),
+		"output_leak_count":  metrics.OutputLeakCount(),
+	}
+	respondJSON(w, http.StatusOK, out)
 }
 
 // Helper functions

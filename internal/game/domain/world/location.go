@@ -10,20 +10,23 @@ type PredefinedCheck struct {
 	LocationHint string `json:"location_hint"` // Подсказка о том, где в локации находится проверка
 }
 
-// LocationScenario представляет playbook локации (P2.1): hook → 2–4 сцены → критический выбор → последствия.
-// Связь с NPC и квестовыми предметами задаётся через локацию (Location.NPCs) и контекст квеста.
+// LocationScenario представляет playbook локации: hook → 2–4 сцены (KeyEvents) → критический выбор → последствия (PossibleOutcomes).
+// Связь с NPC и квестовыми предметами задаётся через RelatedNPCNames и RelatedQuestItemNames.
 type LocationScenario struct {
-	ID                string   `json:"id"`                  // Уникальный ID сценария
-	Title             string   `json:"title"`                // Название сценария
-	Description       string   `json:"description"`         // Подробное описание (зацепка / hook)
-	Hook              string   `json:"hook,omitempty"`      // Зацепка: с чего начинается сцена (явный вход в сцену)
-	Objective         string   `json:"objective"`           // Цель сценария
-	KeyEvents         []string `json:"key_events"`           // Ключевые события (2–4 сцены)
-	CriticalChoice    string   `json:"critical_choice,omitempty"` // Критический выбор игрока
-	PossibleOutcomes  []string `json:"possible_outcomes"`  // Последствия / возможные исходы
-	Reward            string   `json:"reward"`               // Награда за успешное завершение
-	Status            string   `json:"status"`              // Статус: "not_started", "in_progress", "completed", "failed"
-	CreatedAt         string   `json:"created_at"`          // Время создания
+	ID               string   `json:"id"`                // Уникальный ID сценария
+	Title            string   `json:"title"`             // Название сценария
+	Description      string   `json:"description"`       // Подробное описание
+	Objective        string   `json:"objective"`         // Цель, которую нужно достичь
+	Hook             string   `json:"hook"`              // Зацепка: открывающая ситуация для локации (1–2 предложения)
+	KeyEvents        []string `json:"key_events"`        // 2–4 сцены (ключевые события)
+	CriticalChoice   string   `json:"critical_choice"`   // Критический выбор: описание решения, которое должен принять игрок
+	PossibleOutcomes []string `json:"possible_outcomes"` // Последствия (исходы в зависимости от выбора)
+	Reward           string   `json:"reward"`            // Награда за успешное завершение
+	Status           string   `json:"status"`            // Статус: "not_started", "in_progress", "completed", "failed"
+	CreatedAt        string   `json:"created_at"`        // Время создания
+	// Связь с NPC и квестовыми предметами
+	RelatedNPCNames      []string `json:"related_npc_names"`      // Имена NPC, задействованных в сценарии
+	RelatedQuestItemNames []string `json:"related_quest_item_names"` // Имена квестовых предметов, связанных с локацией
 }
 
 type Location struct {

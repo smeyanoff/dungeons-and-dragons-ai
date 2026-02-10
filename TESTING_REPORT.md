@@ -96,6 +96,7 @@ chat_id=1770290740524597943, логов=11
 
 ## Проблемы, найденные при интеграционном тестировании (2026-02-05 14:26:40)
 
-1. в llm_logs не нашли tool вызов request_ability_check (ожидали tool-first ability check)
+1. в llm_logs не нашли tool вызов request_ability_check (ожидали tool-first ability check)  
+   **Уточнение (2026-02-09):** текущий флоу — analyzer-first: проверка решается отдельным LLM-анализом действия (`needs_ability_check` в JSON), а не вызовом tool DM. Ожидание «request_ability_check в llm_logs» может быть неверным; см. CODE_REVIEW.md P1 п.3 — уточнить тест или документацию.
 
 ---
