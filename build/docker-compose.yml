@@ -1,0 +1,103 @@
+version: '3.8'
+
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:16-alpine
+    container_name: dnd-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dnd_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dnd_password}
+      POSTGRES_DB: ${POSTGRES_DB:-dnd}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dnd_user} -d ${POSTGRES_DB:-dnd}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Graceful shutdown configuration
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
+    networks:
+      - dnd-network
+
+  # Qdrant векторное хранилище
+  qdrant:
+    image: qdrant/qdrant:v1.16.2
+    container_name: dnd-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6334}:6333"  # HTTP API
+      - "${QDRANT_GRPC_PORT:-6335}:6334"  # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333; printf \"GET /healthz HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \"200\"'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - dnd-network
+
+  # Telegram Bot приложение
+  bot:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile
+    container_name: dnd-bot
+    restart: "no"
+    profiles: ["bot"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      # Telegram
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      
+      # Database
+      - DATABASE_URL=postgres://${POSTGRES_USER:-dnd_user}:${POSTGRES_PASSWORD:-dnd_password}@postgres:5432/${POSTGRES_DB:-dnd}?sslmode=disable
+      
+      # GigaChat
+      - GIGACHAT_CLIENT_ID=${GIGACHAT_CLIENT_ID}
+      - GIGACHAT_CLIENT_SECRET=${GIGACHAT_CLIENT_SECRET}
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat}
+      - GIGACHAT_AUTH_URL=${GIGACHAT_AUTH_URL:-https://ngw.devices.sberbank.ru:9443}
+      - GIGACHAT_API_URL=${GIGACHAT_API_URL:-https://gigachat.devices.sberbank.ru/api/v1}
+      - GIGACHAT_SCOPE=${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      - GIGACHAT_SKIP_TLS_VERIFY=${GIGACHAT_SKIP_TLS_VERIFY:-false}
+      
+      # Qdrant
+      - QDRANT_HOST=${QDRANT_HOST:-qdrant}
+      - QDRANT_PORT=${QDRANT_PORT:-6334}
+      
+      # Monitoring
+      - MONITORING_PORT=${MONITORING_PORT:-8081}
+    networks:
+      - dnd-network
+    ports:
+      - "${MONITORING_PORT:-8081}:${MONITORING_PORT:-8081}"  # LLM Monitoring UI
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+    driver: local
+  qdrant_data:
+    driver: local
+
+networks:
+  dnd-network:
+    driver: bridge

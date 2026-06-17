@@ -1,0 +1,195 @@
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:16-alpine
+    container_name: dnd-postgres-prod
+    restart: always
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=ru_RU.UTF-8"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # Graceful shutdown configuration
+    stop_grace_period: 60s
+    stop_signal: SIGTERM
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
+    networks:
+      - dnd-network
+    # Production security settings
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+        compress: "true"
+
+  # Qdrant векторное хранилище
+  qdrant:
+    image: qdrant/qdrant:v1.16.2
+    container_name: dnd-qdrant-prod
+    restart: always
+    ports:
+      - "${QDRANT_PORT:-6334}:6333"  # HTTP API
+      - "${QDRANT_GRPC_PORT:-6335}:6334"  # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ../backups:/backups
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__LOG_LEVEL=${LOG_LEVEL:-info}
+    # Health check - проверяем доступность HTTP API
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333; printf \"GET /healthz HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n\" >&3; head -n 1 <&3 | grep -q \"200\"'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dnd-network
+    # Production security settings
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+        compress: "true"
+
+  # Telegram Bot приложение
+  bot:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+    image: dnd-bot:latest
+    container_name: dnd-bot-prod
+    restart: always
+    env_file:
+      - ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    environment:
+      # Telegram
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      
+      # Database
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      
+      # GigaChat
+      - GIGACHAT_CLIENT_ID=${GIGACHAT_CLIENT_ID}
+      - GIGACHAT_CLIENT_SECRET=${GIGACHAT_CLIENT_SECRET}
+      - GIGACHAT_MODEL=${GIGACHAT_MODEL:-GigaChat}
+      - GIGACHAT_AUTH_URL=${GIGACHAT_AUTH_URL:-https://ngw.devices.sberbank.ru:9443}
+      - GIGACHAT_API_URL=${GIGACHAT_API_URL:-https://gigachat.devices.sberbank.ru/api/v1}
+      - GIGACHAT_SCOPE=${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      - GIGACHAT_SKIP_TLS_VERIFY=${GIGACHAT_SKIP_TLS_VERIFY:-false}
+      
+      # Qdrant
+      - QDRANT_HOST=${QDRANT_HOST:-qdrant}
+      - QDRANT_PORT=${QDRANT_PORT:-6334}
+      
+      # Application
+      - TZ=${TZ:-Europe/Moscow}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      
+      # Image storage - используем /tmp для read-only файловой системы
+      - IMAGE_STORAGE_PATH=/tmp/images
+      
+      # Monitoring
+      - MONITORING_PORT=${MONITORING_PORT:-8082}
+    networks:
+      - dnd-network
+    # Production security settings
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Expose monitoring port
+    ports:
+      - "${MONITORING_PORT:-8081}:${MONITORING_PORT:-8081}"  # LLM Monitoring UI
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+        compress: "true"
+    # Graceful shutdown
+    stop_grace_period: 30s
+
+volumes:
+  postgres_data:
+    driver: local
+  qdrant_data:
+    driver: local
+
+networks:
+  dnd-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

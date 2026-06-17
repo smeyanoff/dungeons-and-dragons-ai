@@ -26,7 +26,31 @@ go.work.sum
 
 # env file
 .env
+# but keep .env.example
+!.env.example
 
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Build artifacts
+/bin/
+bot
+main
+
+# Security scan reports
+*-report.json
+gosec-report.json
+trivy-image-report.json
+hadolint-report.json
+security-scan-output.log
+
+# Test output files
+test_output.log
+test_results_summary.txt
+
+# Runtime data directories (created by scripts, should not be committed)
+backups/
+data/postgres/
+data/qdrant/
+*.log

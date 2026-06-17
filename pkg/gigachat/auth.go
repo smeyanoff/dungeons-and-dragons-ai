@@ -1,0 +1,402 @@
+package gigachat
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"golang.org/x/time/rate"
+)
+
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+	ExpiresAt   int64  `json:"expires_at"` // unix timestamp
+}
+
+type authClient struct {
+	cfg              Config
+	token            *TokenResponse
+	lastTokenRefresh time.Time
+	mu               sync.RWMutex
+	client           *http.Client
+	rateLimiter      *rate.Limiter // Rate limiter for auth requests
+}
+
+func newAuthClient(cfg Config) *authClient {
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+
+	// Если нужно пропустить проверку TLS (только для тестов)
+	// #nosec G402 - преднамеренно отключаем проверку TLS для работы с GigaChat API,
+	// который использует корневые сертификаты Сбербанка, устанавливаемые отдельно в образе
+	if cfg.SkipTLSVerify {
+		transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+	}
+
+	// Rate limiter for auth requests: more conservative (2 RPS, burst 1)
+	// Auth requests should be limited to prevent token refresh storms
+	authRateLimiter := rate.NewLimiter(2, 1)
+
+	return &authClient{
+		cfg: cfg,
+		client: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: transport,
+		},
+		rateLimiter: authRateLimiter,
+	}
+}
+
+// getToken получает новый токен и кэширует его.
+// Автоматически перезапрашивает токен при истечении (expires_at).
+func (a *authClient) getToken(ctx context.Context) (string, error) {
+	a.mu.RLock()
+	// Проверяем, есть ли валидный токен
+	if a.token != nil {
+		// Проверяем expires_at (оставляем запас 30 секунд для частого обновления)
+		now := time.Now().Unix()
+		if a.token.ExpiresAt > 0 {
+			// Токен валиден, если до истечения остается больше 30 секунд
+			timeUntilExpiry := a.token.ExpiresAt - now
+			if timeUntilExpiry > 30 {
+				token := a.token.AccessToken
+				a.mu.RUnlock()
+				return token, nil
+			}
+			// Токен истекает или истек, логируем это
+			if timeUntilExpiry > 0 {
+				log.Printf("GigaChat token expires soon (in %d seconds), refreshing...", timeUntilExpiry)
+			} else {
+				log.Printf("GigaChat token expired (%d seconds ago), refreshing...", -timeUntilExpiry)
+			}
+		} else {
+			// expires_at не установлен, используем токен (но лучше перезапросить)
+			log.Printf("GigaChat token has no expires_at, using cached token (may be invalid)")
+			token := a.token.AccessToken
+			a.mu.RUnlock()
+			return token, nil
+		}
+	}
+	a.mu.RUnlock()
+
+	// Токена нет или он истек, получаем новый
+	log.Printf("[GigaChat Auth] Requesting new token (no cached or expired token)")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Проверяем cooldown между обновлениями токенов (минимум 30 секунд)
+	timeSinceLastRefresh := time.Since(a.lastTokenRefresh)
+	if timeSinceLastRefresh < 30*time.Second {
+		log.Printf("GigaChat: Token refresh cooldown active (last refresh: %v ago), using cached token", timeSinceLastRefresh.Round(time.Second))
+		if a.token != nil {
+			return a.token.AccessToken, nil
+		}
+	}
+
+	// Двойная проверка (double-check locking)
+	now := time.Now().Unix()
+	if a.token != nil && a.token.ExpiresAt > 0 {
+		timeUntilExpiry := a.token.ExpiresAt - now
+		if timeUntilExpiry > 60 {
+			return a.token.AccessToken, nil
+		}
+	}
+
+	// Логируем перезапрос токена
+	if a.token != nil {
+		log.Printf("GigaChat: Requesting new token (old token expired or expiring soon)")
+	} else {
+		log.Printf("GigaChat: Requesting new token (no cached token)")
+	}
+
+	// Валидация credentials перед запросом
+	if a.cfg.ClientID == "" || a.cfg.ClientSecret == "" {
+		return "", fmt.Errorf("gigachat credentials are empty: ClientID or ClientSecret is missing")
+	}
+
+	if a.cfg.Scope == "" {
+		return "", fmt.Errorf("gigachat scope is empty")
+	}
+
+	// Обрезаем пробелы и переносы строк из credentials (могут появиться при чтении из .env)
+	clientID := strings.TrimSpace(a.cfg.ClientID)
+	clientSecret := strings.TrimSpace(a.cfg.ClientSecret)
+	scope := strings.TrimSpace(a.cfg.Scope)
+
+	// Согласно документации GigaChat API, CLIENT_SECRET в .env уже содержит
+	// base64-закодированную строку формата "client_id:real_secret"
+	// Поэтому используем CLIENT_SECRET напрямую как ключ авторизации
+	authHeader := clientSecret
+
+	// Логируем информацию для диагностики (без самих credentials)
+	log.Printf("GigaChat auth: ClientID length=%d, ClientSecret (auth key) length=%d, Scope='%s'",
+		len(clientID), len(authHeader), scope)
+	clientIDPreview := clientID
+	if len(clientID) > 10 {
+		clientIDPreview = clientID[:10] + "..."
+	}
+	authHeaderPreview := authHeader
+	if len(authHeader) > 10 {
+		authHeaderPreview = authHeader[:10] + "..."
+	}
+	log.Printf("GigaChat auth: ClientID starts with: %s", clientIDPreview)
+	log.Printf("GigaChat auth: ClientSecret starts with: %s", authHeaderPreview)
+
+	// Пытаемся получить токен с retry механизмом
+	token, err := a.getTokenWithRetry(ctx, clientID, authHeader, scope)
+	if err != nil {
+		return "", err
+	}
+
+	// Сохраняем токен в кэш
+	a.token = token
+	a.lastTokenRefresh = time.Now()
+
+	// Логируем успешное получение токена с информацией об истечении
+	if token.ExpiresAt > 0 {
+		now := time.Now().Unix()
+		// Безопасное вычисление разницы времени (может быть отрицательным, если токен уже истек)
+		expiresIn := token.ExpiresAt - now
+		log.Printf("[GigaChat Auth] New token obtained, expires in %d seconds (at %s)",
+			expiresIn, time.Unix(token.ExpiresAt, 0).Format(time.RFC3339))
+	} else {
+		log.Printf("[GigaChat Auth] New token obtained (expires_at not provided by API)")
+	}
+
+	return token.AccessToken, nil
+}
+
+// getTokenWithRetry получает токен с retry механизмом и exponential backoff
+// Retry применяется только для временных ошибок (400, 401, 429) и сетевых ошибок
+func (a *authClient) getTokenWithRetry(ctx context.Context, clientID, authHeader, scope string) (*TokenResponse, error) {
+	const maxRetries = 3
+	const initialBackoff = 1 * time.Second
+	const maxBackoff = 10 * time.Second
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Вычисляем exponential backoff: 1s, 2s, 4s
+			// Проверяем на overflow перед конвертацией int -> uint
+			// attempt-1 всегда >= 0, так как attempt > 0
+			shift := attempt - 1
+			// Защита от overflow: ограничиваем сдвиг безопасными пределами (максимум 30 для time.Duration)
+			// time.Duration это int64, поэтому 1<<30 безопасно
+			const maxSafeShift = 30
+			if shift < 0 {
+				shift = 0
+			} else if shift > maxSafeShift {
+				shift = maxSafeShift
+			}
+			// #nosec G115 - защита от overflow реализована выше: shift ограничен до maxSafeShift=30
+			// что безопасно для int64/time.Duration (максимальный безопасный сдвиг для int64)
+			backoff := initialBackoff * time.Duration(1<<uint(shift))
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+			log.Printf("GigaChat auth: Retry attempt %d/%d after %v...", attempt, maxRetries, backoff)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		token, err := a.requestToken(ctx, clientID, authHeader, scope)
+		if err == nil {
+			return token, nil
+		}
+
+		lastErr = err
+
+		// Проверяем, стоит ли повторять попытку
+		// Retry для: сетевых ошибок, 400 (Bad Request - может быть временная проблема),
+		// 401 (Unauthorized - может быть проблема с форматом), 429 (Too Many Requests)
+		errStr := err.Error()
+		shouldRetry := false
+		if strings.Contains(errStr, "context deadline exceeded") ||
+			strings.Contains(errStr, "timeout") ||
+			strings.Contains(errStr, "connection") ||
+			strings.Contains(errStr, "status: 400") ||
+			strings.Contains(errStr, "status: 401") ||
+			strings.Contains(errStr, "status: 429") {
+			shouldRetry = true
+		}
+
+		if !shouldRetry || attempt >= maxRetries {
+			// Не retry или исчерпаны попытки
+			if attempt >= maxRetries {
+				log.Printf("GigaChat auth: Max retries (%d) exceeded", maxRetries)
+			}
+			break
+		}
+	}
+
+	return nil, lastErr
+}
+
+// requestToken выполняет один запрос на получение токена
+func (a *authClient) requestToken(ctx context.Context, clientID, authHeader, scope string) (*TokenResponse, error) {
+	// Генерируем уникальный идентификатор запроса (RqUID) в формате UUID v4
+	// Это обязательный заголовок согласно документации GigaChat API
+	rqUID := uuid.New().String()
+
+	form := url.Values{}
+	form.Set("scope", scope)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s/api/v2/oauth", a.cfg.AuthBaseURL),
+		strings.NewReader(form.Encode()),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Устанавливаем обязательные заголовки согласно документации GigaChat API
+	req.Header.Set("Authorization", "Basic "+authHeader)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("RqUID", rqUID) // Обязательный заголовок - уникальный идентификатор запроса в формате UUID v4
+
+	// X-Client-ID может требоваться для всех запросов
+	if a.cfg.ClientID != "" {
+		req.Header.Set("X-Client-ID", a.cfg.ClientID)
+		log.Printf("[GigaChat Auth] Set X-Client-ID for token request: %s", a.cfg.ClientID)
+	}
+
+	// Логируем детали запроса для диагностики (без credentials)
+	log.Printf("GigaChat auth request: Method=%s, URL=%s, Scope=%s, RqUID=%s, Content-Type=%s, Authorization header present=%v",
+		req.Method, req.URL.String(), scope, rqUID, req.Header.Get("Content-Type"), req.Header.Get("Authorization") != "")
+	log.Printf("GigaChat auth: Using scope '%s' - ensure it matches your GigaChat plan (PERS/CORP/B2B)", scope)
+
+	// Apply rate limiter before making the request
+	authRateLimiterTokens := a.rateLimiter.Tokens()
+	log.Printf("[GigaChat Auth] Token request, rate limiter tokens=%.1f", authRateLimiterTokens)
+
+	if err := a.rateLimiter.Wait(ctx); err != nil {
+		log.Printf("[GigaChat Auth] Rate limiter wait failed for token request: %v", err)
+		return nil, fmt.Errorf("auth rate limiter wait failed: %w", err)
+	}
+
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("network error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		// Читаем тело ответа для диагностики ошибки
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		bodyStr := ""
+		if readErr == nil {
+			if len(bodyBytes) > 0 {
+				bodyStr = string(bodyBytes)
+			}
+		} else {
+			log.Printf("GigaChat auth error: failed to read response body: %v", readErr)
+		}
+
+		// Логируем заголовки ответа для диагностики
+		log.Printf("GigaChat auth error: Response headers: %v", resp.Header)
+
+		// Пытаемся распарсить JSON ошибку для более понятного сообщения
+		var errorDetail string
+		if bodyStr != "" {
+			// Всегда логируем полное тело ответа для диагностики
+			log.Printf("GigaChat auth error: Full response body (%d bytes): %s", len(bodyBytes), bodyStr)
+
+			// Проверяем, это JSON или просто текст
+			trimmedBody := strings.TrimSpace(bodyStr)
+			if strings.HasPrefix(trimmedBody, "{") || strings.HasPrefix(trimmedBody, "[") {
+				var errorJSON map[string]interface{}
+				if err := json.Unmarshal(bodyBytes, &errorJSON); err == nil {
+					// Форматируем JSON ошибку
+					if msg, ok := errorJSON["message"].(string); ok {
+						errorDetail = msg
+					} else if errDesc, ok := errorJSON["error_description"].(string); ok {
+						errorDetail = errDesc
+					} else if errMsg, ok := errorJSON["error"].(string); ok {
+						errorDetail = errMsg
+					} else {
+						// Если не нашли стандартные поля, используем весь JSON
+						errorDetail = bodyStr
+					}
+				} else {
+					log.Printf("GigaChat auth error: Failed to parse JSON response: %v", err)
+					errorDetail = bodyStr
+				}
+			} else {
+				// Не JSON, используем как есть
+				errorDetail = bodyStr
+			}
+		} else {
+			log.Printf("GigaChat auth error: Response body is empty")
+		}
+
+		// Логируем детали ошибки (без credentials)
+		log.Printf("GigaChat auth error: %s (status: %d). URL: %s, Scope: %s, ClientID length: %d",
+			resp.Status, resp.StatusCode, req.URL.String(), a.cfg.Scope, len(a.cfg.ClientID))
+
+		// Возвращаем ошибку с деталями
+		if errorDetail != "" {
+			return nil, fmt.Errorf("gigachat auth error: %s - %s", resp.Status, errorDetail)
+		}
+		return nil, fmt.Errorf("gigachat auth error: %s (empty response body)", resp.Status)
+	}
+
+	var token TokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&token); err != nil {
+		return nil, fmt.Errorf("failed to decode token response: %w", err)
+	}
+
+	if token.ExpiresAt > 0 {
+		token.ExpiresAt = normalizeExpiresAt(token.ExpiresAt, time.Now().Unix())
+	}
+
+	return &token, nil
+}
+
+func normalizeExpiresAt(expiresAt int64, now int64) int64 {
+	if expiresAt <= 0 {
+		return expiresAt
+	}
+
+	// Если приходит в миллисекундах (типично > 1e12), нормализуем в секунды
+	if expiresAt > 1_000_000_000_000 {
+		return expiresAt / 1000
+	}
+
+	// Санити-чек: слишком далекое будущее (например, год 58022) → трактуем как миллисекунды
+	const maxReasonableFutureSeconds = 60 * 60 * 24 * 365 * 10 // 10 лет
+	if expiresAt-now > maxReasonableFutureSeconds {
+		return expiresAt / 1000
+	}
+
+	return expiresAt
+}
+
+// invalidateToken инвалидирует текущий токен, заставляя перезапросить его при следующем вызове
+func (a *authClient) invalidateToken() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.token != nil {
+		log.Printf("GigaChat: Invalidating cached token")
+		a.token = nil
+		a.lastTokenRefresh = time.Time{} // Сбрасываем время последнего обновления
+	}
+}

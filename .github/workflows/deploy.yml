@@ -1,0 +1,98 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+      
+      - name: Set version info
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="main-${{ github.sha }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "commit=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ steps.version.outputs.commit }}
+            BUILD_TIME=${{ steps.version.outputs.build_time }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Output version info
+        run: |
+          echo "📦 Built version: ${{ steps.version.outputs.version }}"
+          echo "🔖 Commit: ${{ steps.version.outputs.commit }}"
+          echo "⏰ Build time: ${{ steps.version.outputs.build_time }}"
+      
+      # Пример деплоя на сервер через SSH
+      # Раскомментируйте и настройте под вашу инфраструктуру
+      # - name: Deploy to server
+      #   uses: appleboy/ssh-action@master
+      #   with:
+      #     host: ${{ secrets.DEPLOY_HOST }}
+      #     username: ${{ secrets.DEPLOY_USER }}
+      #     key: ${{ secrets.DEPLOY_SSH_KEY }}
+      #     script: |
+      #       cd /opt/dnd-ai
+      #       docker-compose -f docker-compose.prod.yml pull
+      #       docker-compose -f docker-compose.prod.yml up -d
+      
+      # Или деплой в Kubernetes
+      # - name: Deploy to Kubernetes
+      #   uses: azure/k8s-deploy@v4
+      #   with:
+      #     manifests: |
+      #       k8s/namespace.yaml
+      #       k8s/postgres.yaml
+      #       k8s/qdrant.yaml
+      #       k8s/bot.yaml
+      #     images: |
+      #       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}

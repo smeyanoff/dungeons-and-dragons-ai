@@ -1,0 +1,46 @@
+services:
+  gosec:
+    image: securego/gosec:latest
+    working_dir: /app
+    volumes:
+      - ..:/app
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      cd /app && gosec -fmt json -out gosec-report.json ./... 2>/dev/null || true &&
+      cd /app && gosec -fmt text ./... 2>/dev/null || true
+  trivy:
+    image: aquasec/trivy:0.54.1
+    working_dir: /app
+    volumes:
+      - ..:/app
+      - trivy-cache:/root/.cache/
+    command: ["sh", "-c", "trivy fs --format json . > trivy-report.json 2>/dev/null || true"]
+  semgrep:
+    image: semgrep/semgrep:latest
+    working_dir: /app
+    volumes:
+      - ..:/app
+    command: ["semgrep", "scan", "--config", "auto", "--json", "--output", "semgrep-report.json", "."]
+
+  # Snyk - сканирование зависимостей на уязвимости
+  snyk:
+    image: snyk/snyk:alpine
+    working_dir: /app
+    volumes:
+      - ..:/app
+    environment:
+      - SNYK_TOKEN=${SNYK_TOKEN:-}
+    command: ["snyk", "test", "--json", "--json-file-output", "snyk-report.json", "--severity-threshold", "medium"]
+    # Если токен не установлен, пропускаем сканирование
+    profiles: ["with-snyk-token"]
+
+  # TruffleHog - поиск секретов и чувствительных данных
+  trufflehog:
+    image: trufflesecurity/trufflehog:latest
+    working_dir: /app
+    volumes:
+      - ..:/app
+    command: ["trufflehog", "filesystem", "/app", "--json", "--output", "trufflehog-report.json"]
+
+volumes:
+  trivy-cache:
