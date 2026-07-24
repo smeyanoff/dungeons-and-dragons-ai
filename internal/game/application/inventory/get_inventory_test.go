@@ -78,8 +78,8 @@ func TestGetInventoryUseCase_Execute(t *testing.T) {
 				}
 				inventoryRepo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					inv := inventory.NewInventory(characterID)
-					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon)
-					inv.AddItem("Зелье лечения", "Восстанавливает HP", 0.5, 2, inventory.ItemTypePotion)
+					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon, 0)
+					inv.AddItem("Зелье лечения", "Восстанавливает HP", 0.5, 2, inventory.ItemTypePotion, 0)
 					return inv, nil
 				}
 			},

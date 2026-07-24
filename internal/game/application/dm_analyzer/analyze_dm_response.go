@@ -83,11 +83,12 @@ type Enemy struct {
 
 // Item представляет предмет, полученный игроком
 type Item struct {
-	Name        string  `json:"name"`        // Название предмета
-	Description string  `json:"description"` // Описание предмета
-	Weight      float64 `json:"weight"`      // Вес в кг (оценка, если не указано)
-	Quantity    int     `json:"quantity"`    // Количество (по умолчанию 1)
-	Type        string  `json:"type"`        // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
+	Name          string  `json:"name"`        // Название предмета
+	Description   string  `json:"description"` // Описание предмета
+	Weight        float64 `json:"weight"`      // Вес в кг (оценка, если не указано)
+	Quantity      int     `json:"quantity"`    // Количество (по умолчанию 1)
+	Type          string  `json:"type"`        // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
+	HealingAmount int     `json:"healing_amount"` // Сколько HP восстанавливает ОДНА единица предмета при использовании (0 - не лечит)
 }
 
 // Location представляет локацию, которую игрок посетил
@@ -1756,7 +1757,7 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 		}
 
 		// Добавляем предмет в инвентарь
-		if err := inv.AddItem(item.Name, description, weight, quantity, itemType); err != nil {
+		if err := inv.AddItem(item.Name, description, weight, quantity, itemType, item.HealingAmount); err != nil {
 			log.Printf("Failed to add item '%s' to inventory: %v", item.Name, err)
 			// Продолжаем добавление остальных предметов даже при ошибке
 			continue
@@ -1810,7 +1811,8 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
       "description": "описание предмета",
       "weight": число,
       "quantity": число,
-      "type": "weapon|armor|potion|tool|consumable|misc"
+      "type": "weapon|armor|potion|tool|consumable|misc",
+      "healing_amount": число
     }
   ],
   "location_visited": {
@@ -1877,8 +1879,11 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
 - experience_reason - кратко объясни причину
 
 ПРЕДМЕТЫ (items_received):
-- Добавляй ТОЛЬКО если игрок явно получил предмет (слова: "получаешь", "находишь", "поднимаешь", "вручает", "дает", "дарит")
+- Добавляй ТОЛЬКО если игрок явно получил НОВЫЙ предмет (слова: "получаешь", "находишь", "поднимаешь", "вручает", "дает", "дарит")
 - НЕ добавляй если предмет только упоминается или игрок его еще не получил
+- НЕ добавляй, если игрок ИСПОЛЬЗУЕТ/ПОТРЕБЛЯЕТ уже имеющийся у него предмет (слова: "пьешь", "выпиваешь", "используешь", "применяешь", "съедаешь", "расходуешь") - это НЕ получение предмета, а его расход, items_received для этого не предназначен
+- Примеры, когда items_received НЕ добавляется: "Ты выпиваешь зелье лечения, тепло разливается по телу" / "Ты используешь последний факел" / "Ты съедаешь кусок хлеба из своих запасов"
+- Если у полученного предмета есть эффект восстановления здоровья (лечебное зелье и т.п.) - обязательно укажи healing_amount (сколько HP восстанавливает ОДНА единица), иначе 0
 
 ЛОКАЦИИ (location_visited):
 - Устанавливай только при первом посещении новой локации
