@@ -1892,7 +1892,7 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 	if uc.inventoryRepo != nil && player.CharacterID > 0 {
 		registry.Register(dm_tools.NewGetInventoryTool(uc.inventoryRepo, player.CharacterID))
 		registry.Register(dm_tools.NewAddItemTool(uc.inventoryRepo, player.CharacterID))
-		registry.Register(dm_tools.NewRemoveItemTool(uc.inventoryRepo, player.CharacterID))
+		registry.Register(dm_tools.NewRemoveItemTool(uc.inventoryRepo, uc.sessionRepo, player.CharacterID, gs.ChatID))
 		// Регистрируем инструменты для валидации действий
 		registry.Register(dm_tools.NewValidateItemUsageTool(uc.inventoryRepo, player.CharacterID))
 	}
