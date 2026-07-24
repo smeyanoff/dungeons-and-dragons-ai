@@ -74,7 +74,15 @@ Production версия docker-compose с улучшенными настрой�
 **Опциональные:**
 - `POSTGRES_USER` - пользователь БД (по умолчанию: `dnd_user`)
 - `POSTGRES_DB` - имя БД (по умолчанию: `dnd`)
-- `GIGACHAT_MODEL` - модель GigaChat (по умолчанию: `GigaChat`)
+- `GIGACHAT_MODEL` - модель GigaChat для генерации текста DM (по умолчанию: `GigaChat`).
+  Доступные модели: `GigaChat`, `GigaChat-Plus`, `GigaChat-Pro`, `GigaChat-Max`,
+  `GigaChat-2`, `GigaChat-2-Pro`, `GigaChat-2-Max` (см. `pkg/gigachat/models.go`)
+- `GIGACHAT_ANALYZER_MODEL` - отдельная (обычно более дешёвая) модель для
+  "проверочных" LLM-вызовов dm_analyzer (бой/квесты/предметы, pre-check проверок
+  навыков) — не творческая генерация, поэтому топовая модель DM здесь не нужна
+  (по умолчанию: `GigaChat-2`)
+- `GIGACHAT_EMBEDDINGS_MODEL` - модель GigaChat для эмбеддингов/RAG (по умолчанию: `Embeddings`).
+  Доступные модели: `Embeddings`, `EmbeddingsGigaR`
 - `LOG_LEVEL` - уровень логирования (по умолчанию: `info`)
 
 ## Деплой в Kubernetes

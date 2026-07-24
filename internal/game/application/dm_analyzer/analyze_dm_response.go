@@ -59,6 +59,16 @@ type DMResponseAnalysis struct {
 	ImageLimitReachedMessage string `json:"image_limit_reached_message,omitempty"`
 	// ImagesGeneratedInSession — число изображений в сессии после этого ответа (для сохранения в GameSession)
 	ImagesGeneratedInSession int `json:"images_generated_in_session,omitempty"`
+
+	// KeyFacts — устойчивые факты кампании (репутация, вехи квеста, решения с долгими
+	// последствиями), которые должны быть видны DM независимо от текущей локации.
+	KeyFacts []KeyFact `json:"key_facts,omitempty"`
+}
+
+// KeyFact представляет один устойчивый факт кампании, извлечённый из ответа DM.
+type KeyFact struct {
+	Category string `json:"category"` // reputation|quest|decision|relationship
+	Text     string `json:"text"`     // Краткая формулировка факта
 }
 
 var invalidAnalyzerJSONCount uint64
@@ -146,6 +156,7 @@ type AnalyzeDMResponseUseCase struct {
 	fullSessionRepo          FullSessionRepository     // Репозиторий для доступа к полной сессии (для pending проверок)
 	eventRepo                StoryEventRepository      // Репозиторий для записи событий истории
 	indexDocUC               RAGIndexer                // Индексатор RAG для событий
+	campaignFactRepo         CampaignFactRepository    // Репозиторий для записи ключевых фактов кампании
 	imagesGeneratedInSession int                       // Счетчик изображений, сгенерированных в этой сессии
 	maxImagesPerSession      int                       // Максимальное количество изображений за сессию
 	autoGenerateImages       bool                      // Включить/отключить автоматическую генерацию изображений
@@ -255,6 +266,7 @@ type GenerateImageRequest struct {
 	EntityName      string // Уникальное имя сущности для кэширования
 	ForceRegenerate bool
 	UserID          int64
+	ChatID          int64 // ID игры (сессии), к которой привязан лимит "изображений за игру"
 	SkipLimitCheck  bool
 }
 
@@ -360,6 +372,16 @@ func (uc *AnalyzeDMResponseUseCase) SetStoryEventRepository(eventRepo StoryEvent
 // SetRAGIndexer устанавливает индексатор RAG для событий
 func (uc *AnalyzeDMResponseUseCase) SetRAGIndexer(indexer RAGIndexer) {
 	uc.indexDocUC = indexer
+}
+
+// CampaignFactRepository интерфейс для записи ключевых фактов кампании
+type CampaignFactRepository interface {
+	Save(ctx context.Context, fact *world.CampaignFact) error
+}
+
+// SetCampaignFactRepository устанавливает репозиторий ключевых фактов кампании
+func (uc *AnalyzeDMResponseUseCase) SetCampaignFactRepository(repo CampaignFactRepository) {
+	uc.campaignFactRepo = repo
 }
 
 // Execute анализирует ответ DM и выполняет необходимые действия
@@ -482,7 +504,8 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 		len(analysis.ItemsReceived) == 0 &&
 		analysis.LocationVisited == nil &&
 		analysis.NPCMet == nil &&
-		len(analysis.GeneratedImages) == 0
+		len(analysis.GeneratedImages) == 0 &&
+		len(analysis.KeyFacts) == 0
 
 	if isEmptyAnalysis {
 		log.Printf("[DM Analyzer] Analysis appears to be empty/default values, this may indicate LLM parsing issues")
@@ -880,22 +903,20 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 		return fallbackAnalysisFromResponse(dmResponse), nil
 	}
 
+	// Пустой анализ (все поля false/пусто) — легитимный результат для обычного
+	// повествовательного хода без механических последствий, а не признак сбоя парсинга:
+	// JSON успешно и строго распарсился (decodeStrictAnalysis выше не вернул ошибку).
+	// Раньше это трактовалось как невалидный ответ и приводило к 5 лишним retry на
+	// каждый обычный ход (доп. задержка и расход токенов на большинстве ходов, где
+	// объективно ничего не произошло). Сохраняем только текстовый fallback как
+	// подстраховку на случай, если DM явно описал бой, а анализатор его не заметил —
+	// но без повторных вызовов LLM, сразу по первому пустому результату.
 	if isEmptyAnalysis(analysis) {
-		// Пустой анализ считаем невалидным и делаем retry до maxRetries раз
-		if attempt < maxRetries {
-			log.Printf("[DM Analyzer] Empty analysis (attempt: %d), retrying...", attempt+1)
-			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
-		}
-
-		// После всех retry используем fallback если есть маркеры боя
 		if detectsCombatMarker(dmResponse) {
-			log.Printf("[DM Analyzer] Empty analysis after all retries but combat markers detected, using fallback analysis")
+			log.Printf("[DM Analyzer] Empty analysis but combat markers found in DM text, using text-based fallback (attempt: %d)", attempt+1)
 			return fallbackAnalysisFromResponse(dmResponse), nil
 		}
-
-		// Если нет маркеров боя, возвращаем пустой анализ
-		log.Printf("[DM Analyzer] Empty analysis after all retries, no combat markers detected")
-		return analysis, nil
+		log.Printf("[DM Analyzer] Empty analysis, no combat markers — trusting parsed result (attempt: %d)", attempt+1)
 	}
 
 	// Валидируем анализ боя
@@ -1135,7 +1156,44 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 		}
 	}
 
+	// Сохраняем ключевые факты кампании (глобальная память, не привязанная к локации)
+	if len(analysis.KeyFacts) > 0 {
+		uc.recordCampaignFacts(ctx, analysis.KeyFacts)
+	}
+
 	return nil
+}
+
+// recordCampaignFacts сохраняет устойчивые факты кампании, извлечённые из ответа DM.
+// Ошибки записи не прерывают обработку ответа — эта память является дополнительной.
+func (uc *AnalyzeDMResponseUseCase) recordCampaignFacts(ctx context.Context, facts []KeyFact) {
+	if uc.campaignFactRepo == nil || uc.worldID == 0 {
+		return
+	}
+
+	for _, kf := range facts {
+		text := strings.TrimSpace(kf.Text)
+		if text == "" {
+			continue
+		}
+
+		category := world.CampaignFactCategory(strings.TrimSpace(kf.Category))
+		switch category {
+		case world.FactCategoryReputation, world.FactCategoryQuest, world.FactCategoryDecision, world.FactCategoryRelationship:
+			// валидная категория
+		default:
+			category = world.FactCategoryDecision
+		}
+
+		fact := &world.CampaignFact{
+			WorldID:  uc.worldID,
+			Category: category,
+			Text:     text,
+		}
+		if err := uc.campaignFactRepo.Save(ctx, fact); err != nil {
+			log.Printf("[DM Analyzer] Failed to save campaign fact: %v", err)
+		}
+	}
 }
 
 // generateImagesForItems автоматически генерирует изображения для полученных предметов
@@ -1180,6 +1238,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 			EntityName:      item.Name, // Используем имя предмета для кэширования
 			ForceRegenerate: false,
 			UserID:          uc.userID,
+			ChatID:          uc.chatID,
 			SkipLimitCheck:  false, // Проверяем лимиты
 		}
 
@@ -1280,6 +1339,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 		EntityName:      location.Name, // Используем имя локации для кэширования
 		ForceRegenerate: false,
 		UserID:          uc.userID,
+		ChatID:          uc.chatID,
 		SkipLimitCheck:  false, // Проверяем лимиты
 	}
 
@@ -1381,6 +1441,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 		EntityName:      npc.Name, // Используем имя NPC для кэширования
 		ForceRegenerate: false,
 		UserID:          uc.userID,
+		ChatID:          uc.chatID,
 		SkipLimitCheck:  false, // Проверяем лимиты
 	}
 
@@ -1432,6 +1493,7 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForCombatEnd(ctx context.Contex
 		EntityName:      "combat_end",
 		ForceRegenerate: false,
 		UserID:          uc.userID,
+		ChatID:          uc.chatID,
 		SkipLimitCheck:  false,
 	}
 	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
@@ -1776,7 +1838,7 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 
 // buildAnalysisPrompt создает промпт для анализа ответа DM
 func buildAnalysisPrompt(dmResponse string, strict bool) string {
-	skeleton := `{"combat_detected":false,"combat_ended":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
+	skeleton := `{"combat_detected":false,"combat_ended":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[],"key_facts":[]}`
 	criticalFooter := ""
 	if strict {
 		criticalFooter = "\n\nСТРОГОЕ ПРАВИЛО ДЛЯ РЕТРАЯ:\n- НЕ возвращай пустой JSON {} или пустой ответ\n- Если нет событий, верни этот скелет без изменений: " + skeleton
@@ -1823,7 +1885,13 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
     "description": "описание NPC",
     "is_first_meeting": true/false
   },
-  "generated_images": []
+  "generated_images": [],
+  "key_facts": [
+    {
+      "category": "reputation|quest|decision|relationship",
+      "text": "краткая формулировка факта"
+    }
+  ]
 }
 
 БОЙ И ВРАГИ (combat_detected):
@@ -1909,6 +1977,16 @@ NPC (npc_met):
 - Устанавливай combat_ended=true ТОЛЬКО когда в ответе DM явно описан КОНЕЦ боя: победа, враги повержены, отступление, разгром, бой завершён.
 - Ключевые слова: "победа", "повержен", "побеждаете", "враг пал", "бой окончен", "закончился бой", "отступают", "разгром", "триумф".
 - combat_ended=false во время боя или когда бой только начинается.
+
+КЛЮЧЕВЫЕ ФАКТЫ КАМПАНИИ (key_facts):
+- Добавляй запись, ТОЛЬКО если произошло что-то значимое для ВСЕЙ кампании, а не только для текущей локации:
+  устойчивое изменение репутации, важное решение с долгими последствиями, веха главного или побочного квеста,
+  заметный сдвиг в отношениях с NPC/фракцией
+- category: "reputation" (репутация), "quest" (веха квеста), "decision" (решение с последствиями),
+  "relationship" (отношения с NPC/фракцией)
+- text — 1 короткое предложение, без пересказа диалога
+- НЕ добавляй факты о рутинных или локальных действиях (осмотр комнаты, обычный диалог, находка мелкого предмета)
+- Если ничего значимого для кампании не произошло, оставь key_facts пустым массивом []
 
 ЗНАЧИМЫЕ СОБЫТИЯ ДЛЯ АВТОГЕНА ИЗОБРАЖЕНИЙ (только эти три; предметы — нет):
 - Новая локация (location_visited с is_first_visit=true)
@@ -2382,13 +2460,30 @@ func detectsCombatMarker(dmResponse string) bool {
 		"initiative", "hit", "damage", "wound", "kill", "die",
 		"sword", "axe", "bow", "crossbow", "spear", "shield",
 	}
+	words := combatMarkerWordRe.FindAllString(lower, -1)
 	for _, marker := range markers {
-		if strings.Contains(lower, marker) {
-			return true
+		if strings.Contains(marker, " ") {
+			// Фразовые маркеры (несколько слов) — ищем как подстроку во всём тексте.
+			if strings.Contains(lower, marker) {
+				return true
+			}
+			continue
+		}
+		// Однословные маркеры сравниваем только с началом целого слова, а не с
+		// произвольной подстрокой — иначе короткие маркеры вроде "лед" или "яд"
+		// ложно срабатывают внутри обычных слов ("последовать", "исследовать").
+		for _, w := range words {
+			if strings.HasPrefix(w, marker) {
+				return true
+			}
 		}
 	}
 	return false
 }
+
+// combatMarkerWordRe разбивает текст на слова (последовательности unicode-букв)
+// для поиска однословных маркеров боя по началу слова, а не по произвольной подстроке.
+var combatMarkerWordRe = regexp.MustCompile(`[\p{L}]+`)
 
 func isEmptyAnalysis(analysis *DMResponseAnalysis) bool {
 	if analysis == nil {
@@ -2406,7 +2501,8 @@ func isEmptyAnalysis(analysis *DMResponseAnalysis) bool {
 		len(analysis.ItemsReceived) == 0 &&
 		analysis.LocationVisited == nil &&
 		analysis.NPCMet == nil &&
-		len(analysis.GeneratedImages) == 0
+		len(analysis.GeneratedImages) == 0 &&
+		len(analysis.KeyFacts) == 0
 }
 
 func recordAnalyzerJSONFailure(reason string) {
@@ -3033,10 +3129,12 @@ func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
 	}
 
 	content := buildLocationEventStory(resp.Event, resp.Description)
+	locationID := resp.Event.RequiredLocationID
 
 	if uc.eventRepo != nil {
 		eventItem := &event.StoryEvent{
 			GameSessionID: uc.sessionID,
+			LocationID:    locationID,
 			AuthorType:    event.AuthorTypeDM,
 			Content:       content,
 			CreatedAt:     time.Now(),
@@ -3049,11 +3147,12 @@ func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
 	if uc.indexDocUC != nil {
 		// Индексируем location event как StoryEvent для истории
 		storyDoc := ragdomain.Document{
-			ID:        uuid.New().String(),
-			Source:    ragdomain.SourceEvent,
-			SessionID: uc.sessionID,
-			Text:      content,
-			Timestamp: time.Now(),
+			ID:         uuid.New().String(),
+			Source:     ragdomain.SourceEvent,
+			SessionID:  uc.sessionID,
+			LocationID: locationID,
+			Text:       content,
+			Timestamp:  time.Now(),
 		}
 		if err := uc.indexDocUC.Execute(ctx, storyDoc); err != nil {
 			log.Printf("[DM Analyzer] Failed to index location event story in RAG: %v", err)
@@ -3063,11 +3162,12 @@ func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
 		// Дополнительно индексируем location event как отдельный документ для лучшего поиска RAG
 		// Это позволяет находить информацию о location events через семантический поиск
 		locationDoc := ragdomain.Document{
-			ID:        uuid.New().String(),
-			Source:    ragdomain.SourceLocation,
-			SessionID: uc.sessionID,
-			Text:      fmt.Sprintf("Локация: %s. %s", resp.Event.Name, resp.Event.Description),
-			Timestamp: time.Now(),
+			ID:         uuid.New().String(),
+			Source:     ragdomain.SourceLocation,
+			SessionID:  uc.sessionID,
+			LocationID: locationID,
+			Text:       fmt.Sprintf("Локация: %s. %s", resp.Event.Name, resp.Event.Description),
+			Timestamp:  time.Now(),
 		}
 		if err := uc.indexDocUC.Execute(ctx, locationDoc); err != nil {
 			log.Printf("[DM Analyzer] Failed to index location event as separate document: %v", err)

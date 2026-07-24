@@ -159,6 +159,9 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 			}
 			if scenario.Status != "" && scenario.Status != "not_started" {
 				parts = append(parts, fmt.Sprintf("Статус: %s", scenario.Status))
+				if scenario.Status == "in_progress" {
+					parts = append(parts, "⚠️ Эта сцена уже началась в предыдущих ходах — НЕ повторяй зацепку (Hook) и НЕ представляй заново NPC, с которым уже познакомил игрока. Смотри «Память этой локации»/«Последние сообщения» ниже и продолжай оттуда, где остановились: следующее ключевое событие, реакция на последний вопрос игрока или развитие диалога.")
+				}
 			}
 			if len(scenario.RelatedNPCNames) > 0 || len(scenario.RelatedQuestItemNames) > 0 {
 				extra := []string{}

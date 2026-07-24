@@ -13,6 +13,8 @@
   go test -v -count=1 -timeout 60m ./tests/integration/... -run 'TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat'
   ```
   или: `make test-telegram-real` (переменные окружения должны быть в shell, например из `.env`).
+- **Cassette (record/replay)** — тот же сценарий, но без сети и credentials после однократной записи;
+  см. раздел «Cassette-тестирование (record/replay)» ниже.
 
 **Перезапуск контейнеров — только через `make deploy`.**
 
@@ -57,7 +59,9 @@ make test-integration
 - `/roll d20` → pending ability check очищается
 - `/map` → callback навигации → смена локации
 - Первый бой в новой локации → `/battlefield` → `/attack`
-- Анализ `llm_logs`: запросы с tools, вызов `request_ability_check`
+- Анализ `llm_logs`: запросы с tools (combat/inventory/etc). Проверка навыка — analyzer-first
+  (`needs_ability_check` в JSON-анализе действия игрока), `request_ability_check` не регистрируется
+  как tool для DM и не встречается в `llm_logs`; сигнал флоу — player-facing prompt выше.
 
 ### TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM
 
@@ -68,10 +72,39 @@ make test-integration
 - `TestTelegramGameplay_CompleteFlow`, `TestTelegramGameplay_CombatFlow` — use-case уровень, без fake Telegram.
 - `make test-telegram-real-all` — полный набор real-LLM тестов.
 
+## Cassette-тестирование (record/replay)
+
+Позволяет прогонять real-LLM тесты **локально/в CI без сети и GigaChat credentials**, воспроизводя
+реальные ответы модели, записанные один раз. Механизм — `tests/integration/llm_cassette_test.go`;
+кассетируются оба внешних вызова: LLM (`Generate`/`GenerateWithMaxTokens`/`GenerateWithTools`) и
+эмбеддер RAG (`Embed`) — DM-промпт почти всегда включает RAG-контекст, поэтому без кассетирования
+эмбеддингов текст prompt разошёлся бы между записью и воспроизведением. Сам векторный поиск (Qdrant)
+не кассетируется — выполняется реально локально (`make docker-up` всё ещё нужен), но за счёт
+кассетированных эмбеддингов возвращает тот же результат.
+
+```bash
+# 1) Записать кассету (нужны реальные GIGACHAT credentials в .env, make docker-up)
+set -a && source .env && set +a
+make test-telegram-record CASSETTE=tests/integration/cassettes/single_campaign.json \
+  RUN=TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat
+
+# 2) Воспроизвести офлайн (credentials НЕ нужны — можно даже unset их перед запуском)
+make test-telegram-replay CASSETTE=tests/integration/cassettes/single_campaign.json \
+  RUN=TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat
+```
+
+Кассеты — обычные JSON-файлы, коммитятся в git (`tests/integration/cassettes/`), чтобы другой
+разработчик или CI гонял replay без единого сетевого запроса.
+
+Если после изменения кода промпт стал другим (например, поменялся `RAGContextBuilder` или добавился
+новый tool), replay упадёт с понятной ошибкой `cassette miss: ...` — это сигнал пересоздать кассету
+через `make test-telegram-record` заново.
+
 ## Примечания
 
 - `make test-telegram-stub` не требует реального LLM и Qdrant (нужен Postgres).
 - `make test-telegram-real` требует GigaChat credentials в env и может занимать время (rate limit по умолчанию 2500ms; `LLM_TEST_MIN_DELAY_MS`).
+- `make test-telegram-replay` не требует GigaChat credentials вообще, но требует поднятый Qdrant (`make docker-up`).
 - Перезапуск контейнеров — только `make deploy`.
 
 ## Troubleshooting

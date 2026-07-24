@@ -71,6 +71,21 @@ type HandleActionUseCase struct {
 	updateRatingUC          RatingUpdater                           // Опциональная зависимость для обновления рейтингов
 	analyzePlayerActionUC   *dm_analyzer.AnalyzePlayerActionUseCase // Анализатор действий игрока для определения необходимости проверок
 	generateLocationEventUC LocationEventGenerator                  // Генератор событий локаций
+	campaignFactRepo        dm_tools.CampaignFactRepository         // Репозиторий ключевых фактов кампании (опционально)
+	analyzerLLM             domain.LLM                              // LLM для структурного анализа ответа DM (обычно более дешёвая модель, чем у самого DM)
+}
+
+// SetCampaignFactRepository устанавливает репозиторий ключевых фактов кампании,
+// используемый инструментом save_campaign_fact.
+func (uc *HandleActionUseCase) SetCampaignFactRepository(repo dm_tools.CampaignFactRepository) {
+	uc.campaignFactRepo = repo
+}
+
+// SetAnalyzerLLM устанавливает отдельный LLM для анализа ответа DM (dm_analyzer),
+// чтобы не тратить токены дорогой модели DM на структурную классификацию
+// (бой/квесты/предметы). Если не установлен, используется основной uc.llm.
+func (uc *HandleActionUseCase) SetAnalyzerLLM(llm domain.LLM) {
+	uc.analyzerLLM = llm
 }
 
 // RatingUpdater интерфейс для обновления рейтингов
@@ -434,6 +449,34 @@ func (uc *HandleActionUseCase) Execute(
 		}
 	}
 
+	// Отмечаем сценарий текущей локации как "начатый": иначе он остаётся в статусе
+	// "not_started" на протяжении всей игры (ничего в кодовой базе его не продвигает),
+	// и DM видит одну и ту же статичную зацепку/приветствие NPC каждый ход — из-за этого
+	// сцена может раз за разом переигрываться заново вместо продолжения (см. simple_context_builder.go).
+	if gs.CurrentLocationID != nil {
+		for i := range gs.World.Locations {
+			if gs.World.Locations[i].ID != *gs.CurrentLocationID {
+				continue
+			}
+			scenario := gs.World.Locations[i].GetScenario()
+			if scenario != nil && scenario.Status == "not_started" {
+				scenario.Status = "in_progress"
+				if err := gs.World.Locations[i].SetScenario(scenario); err != nil {
+					logger.Warn("Failed to update location scenario status",
+						logger.ErrorField(err),
+						logger.Uint("session_id", gs.ID),
+					)
+				} else if err := uc.sessionRepo.Save(ctx, gs); err != nil {
+					logger.Warn("Failed to save location scenario status",
+						logger.ErrorField(err),
+						logger.Uint("session_id", gs.ID),
+					)
+				}
+			}
+			break
+		}
+	}
+
 	// Строим контекст игры с таймаутом для RAG операций
 	logger.Debug("Building game context",
 		logger.Uint("session_id", gs.ID),
@@ -507,6 +550,7 @@ func (uc *HandleActionUseCase) Execute(
 	// Это гарантирует, что действие игрока будет сохранено даже если LLM вернет ошибку
 	playerEvent := &event.StoryEvent{
 		GameSessionID: gs.ID,
+		LocationID:    gs.CurrentLocationID,
 		AuthorType:    event.AuthorTypePlayer,
 		Content:       playerMessage,
 		CreatedAt:     time.Now(),
@@ -526,11 +570,12 @@ func (uc *HandleActionUseCase) Execute(
 		)
 		// Индексируем событие игрока в RAG с таймаутом и повторными попытками
 		doc := ragdomain.Document{
-			ID:        uuid.New().String(),
-			Source:    ragdomain.SourceEvent,
-			SessionID: gs.ID,
-			Text:      fmt.Sprintf("Игрок: %s", playerMessage),
-			Timestamp: time.Now(),
+			ID:         uuid.New().String(),
+			Source:     ragdomain.SourceEvent,
+			SessionID:  gs.ID,
+			LocationID: gs.CurrentLocationID,
+			Text:       fmt.Sprintf("Игрок: %s", playerMessage),
+			Timestamp:  time.Now(),
 		}
 		// Пытаемся проиндексировать с повторными попытками
 		if err := uc.indexDocUC.Execute(ragCtx, doc); err != nil {
@@ -566,6 +611,7 @@ func (uc *HandleActionUseCase) Execute(
 			// Сохраняем "DM/system" сообщение о необходимости проверки в историю и RAG
 			dmEvent := &event.StoryEvent{
 				GameSessionID: gs.ID,
+				LocationID:    gs.CurrentLocationID,
 				AuthorType:    event.AuthorTypeDM,
 				Content:       checkMsg,
 				CreatedAt:     time.Now(),
@@ -577,11 +623,12 @@ func (uc *HandleActionUseCase) Execute(
 				)
 			} else if uc.indexDocUC != nil {
 				doc := ragdomain.Document{
-					ID:        uuid.New().String(),
-					Source:    ragdomain.SourceEvent,
-					SessionID: gs.ID,
-					Text:      checkMsg,
-					Timestamp: time.Now(),
+					ID:         uuid.New().String(),
+					Source:     ragdomain.SourceEvent,
+					SessionID:  gs.ID,
+					LocationID: gs.CurrentLocationID,
+					Text:       checkMsg,
+					Timestamp:  time.Now(),
 				}
 				if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
 					metrics.IncrementRAGFailure()
@@ -716,6 +763,7 @@ func (uc *HandleActionUseCase) Execute(
 	// Сохраняем ответ DM
 	dmEvent := &event.StoryEvent{
 		GameSessionID: gs.ID,
+		LocationID:    gs.CurrentLocationID,
 		AuthorType:    event.AuthorTypeDM,
 		Content:       response,
 		CreatedAt:     time.Now(),
@@ -746,11 +794,12 @@ func (uc *HandleActionUseCase) Execute(
 		)
 
 		doc := ragdomain.Document{
-			ID:        uuid.New().String(),
-			Source:    ragdomain.SourceEvent,
-			SessionID: gs.ID,
-			Text:      fmt.Sprintf("DM: %s", filteredResponse),
-			Timestamp: time.Now(),
+			ID:         uuid.New().String(),
+			Source:     ragdomain.SourceEvent,
+			SessionID:  gs.ID,
+			LocationID: gs.CurrentLocationID,
+			Text:       fmt.Sprintf("DM: %s", filteredResponse),
+			Timestamp:  time.Now(),
 		}
 		// Пытаемся проиндексировать с повторными попытками
 		if err := uc.indexDocUC.Execute(indexCtx, doc); err != nil {
@@ -845,6 +894,7 @@ func (uc *HandleActionUseCase) Execute(
 					// Сохраняем ответ врага как событие DM
 					enemyEvent := &event.StoryEvent{
 						GameSessionID: gs.ID,
+						LocationID:    gs.CurrentLocationID,
 						AuthorType:    event.AuthorTypeDM,
 						Content:       enemyActionResponse,
 						CreatedAt:     time.Now(),
@@ -889,8 +939,12 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	}
 
 	// Создаем анализатор (передаём текущий счётчик изображений сессии для лимита)
+	analyzerLLM := uc.analyzerLLM
+	if analyzerLLM == nil {
+		analyzerLLM = uc.llm
+	}
 	analyzer := dm_analyzer.NewAnalyzeDMResponseUseCase(
-		uc.llm,
+		analyzerLLM,
 		uc.combatRepo,
 		uc.questRepo,
 		uc.inventoryRepo,
@@ -943,6 +997,11 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	}
 	if uc.indexDocUC != nil {
 		analyzer.SetRAGIndexer(uc.indexDocUC)
+	}
+
+	// Настраиваем запись ключевых фактов кампании (глобальная память)
+	if uc.campaignFactRepo != nil {
+		analyzer.SetCampaignFactRepository(uc.campaignFactRepo)
 	}
 
 	// Настраиваем доступ к полной сессии для естественных проверок
@@ -1890,13 +1949,18 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 	if uc.eventRepo != nil {
 		rollDiceUC := diceapp.NewRollDiceUseCase()
 		eventRepoAdapter := &eventRepoAdapterForDMTools{repo: uc.eventRepo}
-		registry.Register(dm_tools.NewRollDiceTool(rollDiceUC, eventRepoAdapter, gs.ID))
+		registry.Register(dm_tools.NewRollDiceTool(rollDiceUC, eventRepoAdapter, gs.ID, gs.CurrentLocationID))
 	}
 
 	// Регистрируем инструмент для отправки дополнительных сообщений
 	if uc.eventRepo != nil {
 		eventRepoAdapter := &eventRepoAdapterForDMTools{repo: uc.eventRepo}
-		registry.Register(dm_tools.NewSendFollowupMessageTool(eventRepoAdapter, gs.ID, gs.ChatID))
+		registry.Register(dm_tools.NewSendFollowupMessageTool(eventRepoAdapter, gs.ID, gs.ChatID, gs.CurrentLocationID))
+	}
+
+	// Регистрируем инструмент для явного сохранения ключевых фактов кампании
+	if uc.campaignFactRepo != nil {
+		registry.Register(dm_tools.NewSaveCampaignFactTool(uc.campaignFactRepo, gs.World.ID))
 	}
 
 	return registry
@@ -2144,6 +2208,7 @@ func (uc *HandleActionUseCase) resolveLocationEventFromCheck(
 	if uc.eventRepo != nil {
 		eventItem := &event.StoryEvent{
 			GameSessionID: gs.ID,
+			LocationID:    target.RequiredLocationID,
 			AuthorType:    event.AuthorTypeDM,
 			Content:       content,
 			CreatedAt:     time.Now(),
@@ -2155,11 +2220,12 @@ func (uc *HandleActionUseCase) resolveLocationEventFromCheck(
 
 	if uc.indexDocUC != nil {
 		doc := ragdomain.Document{
-			ID:        uuid.New().String(),
-			Source:    ragdomain.SourceEvent,
-			SessionID: gs.ID,
-			Text:      content,
-			Timestamp: time.Now(),
+			ID:         uuid.New().String(),
+			Source:     ragdomain.SourceEvent,
+			SessionID:  gs.ID,
+			LocationID: target.RequiredLocationID,
+			Text:       content,
+			Timestamp:  time.Now(),
 		}
 		if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
 			metrics.IncrementRAGFailure()
@@ -2561,6 +2627,7 @@ func (a *imageGenerationServiceAdapter) GenerateImage(ctx context.Context, req d
 		EntityID:        req.EntityID,
 		ForceRegenerate: req.ForceRegenerate,
 		UserID:          req.UserID,
+		ChatID:          req.ChatID,
 		SkipLimitCheck:  req.SkipLimitCheck,
 	}
 

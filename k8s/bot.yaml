@@ -77,6 +77,10 @@ spec:
           value: "6334"
         - name: GIGACHAT_MODEL
           value: "GigaChat"
+        - name: GIGACHAT_ANALYZER_MODEL
+          value: "GigaChat-2"
+        - name: GIGACHAT_EMBEDDINGS_MODEL
+          value: "Embeddings"
         - name: GIGACHAT_AUTH_URL
           value: "https://ngw.devices.sberbank.ru:9443"
         - name: GIGACHAT_API_URL

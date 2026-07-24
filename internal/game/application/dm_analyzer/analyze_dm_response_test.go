@@ -452,13 +452,13 @@ func TestAnalyzeDMResponseUseCase_Execute(t *testing.T) {
 			},
 		},
 		{
-			name:       "combat detected but no enemies - should not create combat",
+			name:       "combat detected but no enemies - should not create combat and must set fallback message",
 			dmResponse: "Бой начался!",
 			setupMocks: func(llm *mockLLM, combatRepo *mockCombatRepo, questRepo *mockQuestRepo) {
 				llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
 					analysis := DMResponseAnalysis{
 						CombatDetected: true,
-						Enemies:        []Enemy{}, // Пустой список врагов
+						Enemies:        []Enemy{}, // Пустой список врагов из LLM
 					}
 					data, _ := json.Marshal(analysis)
 					return string(data), nil
@@ -469,6 +469,17 @@ func TestAnalyzeDMResponseUseCase_Execute(t *testing.T) {
 				// Не должен создавать бой без врагов
 				if len(combatRepo.savedCombats) > 0 {
 					t.Error("expected no combat to be created when no enemies")
+				}
+				// Анализ после строгой валидации не должен помечать бой как активный
+				if analysis.CombatDetected {
+					t.Error("expected combat_detected to be false when no valid enemies")
+				}
+				if len(analysis.Enemies) != 0 {
+					t.Errorf("expected enemies to be empty after validation, got %d", len(analysis.Enemies))
+				}
+				// Игрок должен получить понятное fallback‑сообщение вместо запуска боевой механики
+				if analysis.CombatFallbackMessage == "" {
+					t.Error("expected combat_fallback_message to be set when combat is disabled due to empty enemies")
 				}
 			},
 		},
@@ -875,7 +886,7 @@ func TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC(t *testing.T) {
 	}
 }
 
-func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenUsesNonEmpty(t *testing.T) {
+func TestAnalyzeDMResponseUseCase_EmptyAnalysisNoMarkers_TrustedWithoutRetry(t *testing.T) {
 	llm := &mockLLM{}
 	combatRepo := &mockCombatRepo{}
 	questRepo := &mockQuestRepo{}
@@ -884,15 +895,7 @@ func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenUsesNonEmpty(t *testin
 	callCount := 0
 	llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
 		callCount++
-		if callCount <= 5 { // Return empty for first 5 attempts
-			return "{}", nil
-		}
-		analysis := DMResponseAnalysis{
-			ExperienceGained: 5,
-			ExperienceReason: "test",
-		}
-		data, _ := json.Marshal(analysis)
-		return string(data), nil
+		return "{}", nil
 	}
 
 	uc := NewAnalyzeDMResponseUseCase(
@@ -909,19 +912,23 @@ func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenUsesNonEmpty(t *testin
 		0,   // imagesGeneratedInSession
 	)
 
-	analysis, err := uc.Execute(context.Background(), "DM response")
+	// Обычный повествовательный ход без каких-либо маркеров боя — пустой анализ
+	// (JSON успешно распарсился, все поля false/пусто) должен приниматься сразу,
+	// без ретраев: это самый частый случай в игре, и раньше он тратил впустую
+	// 5 дополнительных вызовов LLM на каждый такой ход.
+	analysis, err := uc.Execute(context.Background(), "Староста замолкает и ждет, пока вы решите, последовать ли его совету.")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if callCount != 6 {
-		t.Fatalf("expected 6 LLM calls due to retries, got %d", callCount)
+	if callCount != 1 {
+		t.Fatalf("expected exactly 1 LLM call (no retries for legitimate empty analysis), got %d", callCount)
 	}
-	if analysis.ExperienceGained != 5 {
-		t.Fatalf("expected non-empty analysis after retry, got %+v", analysis)
+	if analysis.CombatDetected {
+		t.Fatalf("expected no combat detected, got %+v", analysis)
 	}
 }
 
-func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenFallback(t *testing.T) {
+func TestAnalyzeDMResponseUseCase_EmptyAnalysisWithMarkers_ImmediateFallbackNoRetry(t *testing.T) {
 	llm := &mockLLM{}
 	combatRepo := &mockCombatRepo{}
 	questRepo := &mockQuestRepo{}
@@ -951,8 +958,8 @@ func TestAnalyzeDMResponseUseCase_EmptyAnalysisRetriesThenFallback(t *testing.T)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if callCount != 6 {
-		t.Fatalf("expected 6 LLM calls (5 retries), got %d", callCount)
+	if callCount != 1 {
+		t.Fatalf("expected exactly 1 LLM call (fallback triggers immediately, no retries), got %d", callCount)
 	}
 	if !analysis.CombatDetected || len(analysis.Enemies) == 0 {
 		t.Fatalf("expected fallback combat analysis, got %+v", analysis)

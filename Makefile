@@ -1,7 +1,11 @@
 SHELL := /bin/bash
 
 # Prefer docker compose (v2); fallback to docker-compose (v1).
-DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+# --env-file .env: без этого docker compose (в этом окружении) не подхватывает корневой .env
+# для подстановки ${VAR} в блоках `environment:` при вызове `-f build/...yml` из корня репозитория —
+# такие переменные (TELEGRAM_BOT_TOKEN, GIGACHAT_*, POSTGRES_*) резолвятся в пустую строку и,
+# как значения из `environment:`, перетирают то, что даёт `env_file: ../.env` внутри контейнера.
+DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose --env-file .env" || echo "docker-compose --env-file .env")
 
 COMPOSE_DEV  := build/docker-compose.yml
 COMPOSE_PROD := build/docker-compose.prod.yml
@@ -22,6 +26,8 @@ help:
 	@echo "  test-telegram-real   One campaign: world -> first combat (real LLM; may SKIP if creds missing)"
 	@echo "  test-telegram-real-all  All Telegram real-LLM tests (CompleteFlow, CombatFlow, RealLLM_*)"
 	@echo "  test-telegram        Telegram gameplay tests (stub + real)"
+	@echo "  test-telegram-record Record a cassette from real GigaChat (CASSETTE=path RUN=pattern)"
+	@echo "  test-telegram-replay Replay a cassette offline, no network/credentials (CASSETTE=path RUN=pattern)"
 	@echo ""
 	@echo "Production targets:"
 	@echo "  deploy               Deploy via build/docker-compose.prod.yml (uses scripts/deploy.sh)"
@@ -73,6 +79,21 @@ test-telegram-real-all:
 	LLM_TEST_MIN_DELAY_MS=$(LLM_TEST_MIN_DELAY_MS) go test -v -count=1 -timeout $(GO_TEST_TIMEOUT) ./tests/integration/... -run 'TestTelegramGameplay_(CompleteFlow|CombatFlow|RealLLM_)'
 
 test-telegram: test-telegram-stub test-telegram-real
+
+# Record/replay ("кассеты") для real-LLM тестов: записать один раз с реальным GigaChat,
+# дальше гонять офлайн без сети и credentials. CASSETTE — путь к JSON-файлу, RUN — regexp теста.
+# См. tests/integration/llm_cassette_test.go и tests/integration/README.md.
+CASSETTE ?= tests/integration/cassettes/single_campaign.json
+RUN ?= TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat
+
+.PHONY: test-telegram-record test-telegram-replay
+test-telegram-record:
+	LLM_CASSETTE_MODE=record LLM_CASSETTE_FILE=$(CASSETTE) LLM_TEST_MIN_DELAY_MS=$(LLM_TEST_MIN_DELAY_MS) \
+	  go test -v -count=1 -timeout $(GO_TEST_TIMEOUT) ./tests/integration/... -run '$(RUN)'
+
+test-telegram-replay:
+	LLM_CASSETTE_MODE=replay LLM_CASSETTE_FILE=$(CASSETTE) \
+	  go test -v -count=1 -timeout $(GO_TEST_TIMEOUT) ./tests/integration/... -run '$(RUN)'
 
 .PHONY: test-integration-gameplay
 test-integration-gameplay: test-telegram
