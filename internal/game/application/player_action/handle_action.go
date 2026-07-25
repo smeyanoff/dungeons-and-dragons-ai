@@ -956,9 +956,9 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 		gs.ChatID, // Передаем chatID для отправки уведомлений
 		gs.WorldID,
 		player.CharacterID,
-		player.ID,                      // Передаем playerID для проверки достижений
-		gs.AutoGenerateImages,          // Используем настройку из сессии
-		gs.ImagesGeneratedInSession,    // Текущее число изображений в сессии (лимит на сессию)
+		player.ID,                   // Передаем playerID для проверки достижений
+		gs.AutoGenerateImages,       // Используем настройку из сессии
+		gs.ImagesGeneratedInSession, // Текущее число изображений в сессии (лимит на сессию)
 	)
 
 	// Настраиваем проверку достижений и уведомления в AnalyzeDMResponseUseCase
@@ -1898,6 +1898,8 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 		registry.Register(dm_tools.NewGetInventoryTool(uc.inventoryRepo, player.CharacterID))
 		registry.Register(dm_tools.NewAddItemTool(uc.inventoryRepo, player.CharacterID))
 		registry.Register(dm_tools.NewRemoveItemTool(uc.inventoryRepo, uc.sessionRepo, player.CharacterID, gs.ChatID))
+		registry.Register(dm_tools.NewEquipItemTool(uc.inventoryRepo, player.CharacterID))
+		registry.Register(dm_tools.NewUnequipItemTool(uc.inventoryRepo, player.CharacterID))
 		// Регистрируем инструменты для валидации действий
 		registry.Register(dm_tools.NewValidateItemUsageTool(uc.inventoryRepo, player.CharacterID))
 	}

@@ -153,10 +153,14 @@ func (b *RAGContextBuilder) BuildContext(
 				parts = append(parts, fmt.Sprintf("Общий вес: %.2f кг / %.2f кг", inv.GetTotalWeight(), inventory.MaxWeight))
 				parts = append(parts, "Предметы:")
 				for _, item := range inv.Items {
+					equippedSuffix := ""
+					if item.Equipped {
+						equippedSuffix = " [экипировано]"
+					}
 					if item.Quantity > 1 {
-						parts = append(parts, fmt.Sprintf("- %s (x%d) - %s (%.2f кг)", item.Name, item.Quantity, item.Description, item.Weight))
+						parts = append(parts, fmt.Sprintf("- %s (x%d) - %s (%.2f кг)%s", item.Name, item.Quantity, item.Description, item.Weight, equippedSuffix))
 					} else {
-						parts = append(parts, fmt.Sprintf("- %s - %s (%.2f кг)", item.Name, item.Description, item.Weight))
+						parts = append(parts, fmt.Sprintf("- %s - %s (%.2f кг)%s", item.Name, item.Description, item.Weight, equippedSuffix))
 					}
 				}
 			}

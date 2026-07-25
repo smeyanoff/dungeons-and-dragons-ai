@@ -34,7 +34,8 @@ func (t *GetInventoryTool) Name() string {
 }
 
 func (t *GetInventoryTool) Description() string {
-	return "Получить информацию об инвентаре персонажа. Возвращает список предметов, их количество, вес и общий вес инвентаря."
+	return "Получить информацию об инвентаре персонажа. Возвращает список предметов, их количество, вес, " +
+		"общий вес инвентаря и признак equipped - экипирован ли предмет (надет как броня или используется как оружие) прямо сейчас."
 }
 
 func (t *GetInventoryTool) Parameters() json.RawMessage {
@@ -64,6 +65,7 @@ func (t *GetInventoryTool) Execute(ctx context.Context, args map[string]interfac
 			"weight":      item.Weight,
 			"quantity":    item.Quantity,
 			"type":        string(item.Type),
+			"equipped":    item.Equipped,
 		})
 	}
 
@@ -438,4 +440,162 @@ func (t *RemoveItemTool) applyHealing(ctx context.Context, amount int) (healed b
 	}
 
 	return true, player.Character.HP, player.Character.MaxHP, nil
+}
+
+// EquipItemTool позволяет DM пометить предмет как надетый/взятый в руки персонажем
+type EquipItemTool struct {
+	inventoryRepo InventoryRepository
+	characterID   uint
+}
+
+// NewEquipItemTool создает новый инструмент для экипировки предмета
+func NewEquipItemTool(inventoryRepo InventoryRepository, characterID uint) *EquipItemTool {
+	return &EquipItemTool{
+		inventoryRepo: inventoryRepo,
+		characterID:   characterID,
+	}
+}
+
+func (t *EquipItemTool) Name() string {
+	return "equip_item"
+}
+
+func (t *EquipItemTool) Description() string {
+	return "Пометить предмет из инвентаря как экипированный (надетый доспех или оружие в руках персонажа). " +
+		"Используй, когда игрок ЯВНО надевает броню или берет оружие в руки для использования (не при обычном подборе предмета). " +
+		"Экипировать можно только оружие и броню - на каждый тип по одному предмету одновременно: " +
+		"если уже что-то экипировано в этом слоте, оно автоматически снимается."
+}
+
+func (t *EquipItemTool) Parameters() json.RawMessage {
+	properties := JSONSchemaProperties{
+		"name": {
+			Type:        "string",
+			Description: "Название предмета, который нужно экипировать (должен уже быть в инвентаре)",
+			Required:    true,
+		},
+	}
+	return BuildJSONSchema(properties, []string{"name"})
+}
+
+func (t *EquipItemTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	name, ok := args["name"].(string)
+	if !ok || name == "" {
+		return nil, fmt.Errorf("name is required and must be a string")
+	}
+
+	inv, err := t.inventoryRepo.GetByCharacterID(ctx, t.characterID)
+	if err != nil {
+		logger.Error("EquipItemTool: failed to get inventory",
+			logger.Uint("character_id", t.characterID),
+			logger.ErrorField(err),
+		)
+		return nil, fmt.Errorf("failed to get inventory: %w", err)
+	}
+
+	equipped, err := inv.EquipItem(name)
+	if err != nil {
+		logger.Warn("EquipItemTool: failed to equip item",
+			logger.Uint("character_id", t.characterID),
+			logger.String("item_name", name),
+			logger.ErrorField(err),
+		)
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+
+	if err := t.inventoryRepo.Save(ctx, inv); err != nil {
+		return nil, fmt.Errorf("failed to save inventory: %w", err)
+	}
+
+	logger.Info("EquipItemTool: completed successfully",
+		logger.Uint("character_id", t.characterID),
+		logger.String("item_name", equipped.Name),
+	)
+
+	return map[string]interface{}{
+		"success":     true,
+		"item_name":   equipped.Name,
+		"type":        string(equipped.Type),
+		"equipped_ok": true,
+	}, nil
+}
+
+// UnequipItemTool позволяет DM снять экипированный предмет
+type UnequipItemTool struct {
+	inventoryRepo InventoryRepository
+	characterID   uint
+}
+
+// NewUnequipItemTool создает новый инструмент для снятия предмета
+func NewUnequipItemTool(inventoryRepo InventoryRepository, characterID uint) *UnequipItemTool {
+	return &UnequipItemTool{
+		inventoryRepo: inventoryRepo,
+		characterID:   characterID,
+	}
+}
+
+func (t *UnequipItemTool) Name() string {
+	return "unequip_item"
+}
+
+func (t *UnequipItemTool) Description() string {
+	return "Снять экипированный предмет (доспех или оружие) с персонажа, оставив его в инвентаре. " +
+		"Используй, когда игрок явно снимает броню или убирает оружие."
+}
+
+func (t *UnequipItemTool) Parameters() json.RawMessage {
+	properties := JSONSchemaProperties{
+		"name": {
+			Type:        "string",
+			Description: "Название предмета, который нужно снять",
+			Required:    true,
+		},
+	}
+	return BuildJSONSchema(properties, []string{"name"})
+}
+
+func (t *UnequipItemTool) Execute(ctx context.Context, args map[string]interface{}) (interface{}, error) {
+	name, ok := args["name"].(string)
+	if !ok || name == "" {
+		return nil, fmt.Errorf("name is required and must be a string")
+	}
+
+	inv, err := t.inventoryRepo.GetByCharacterID(ctx, t.characterID)
+	if err != nil {
+		logger.Error("UnequipItemTool: failed to get inventory",
+			logger.Uint("character_id", t.characterID),
+			logger.ErrorField(err),
+		)
+		return nil, fmt.Errorf("failed to get inventory: %w", err)
+	}
+
+	unequipped, err := inv.UnequipItem(name)
+	if err != nil {
+		logger.Warn("UnequipItemTool: failed to unequip item",
+			logger.Uint("character_id", t.characterID),
+			logger.String("item_name", name),
+			logger.ErrorField(err),
+		)
+		return map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		}, nil
+	}
+
+	if err := t.inventoryRepo.Save(ctx, inv); err != nil {
+		return nil, fmt.Errorf("failed to save inventory: %w", err)
+	}
+
+	logger.Info("UnequipItemTool: completed successfully",
+		logger.Uint("character_id", t.characterID),
+		logger.String("item_name", unequipped.Name),
+	)
+
+	return map[string]interface{}{
+		"success":   true,
+		"item_name": unequipped.Name,
+	}, nil
 }

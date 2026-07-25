@@ -31,11 +31,11 @@ import (
 // DMResponseAnalysis содержит структурированный анализ ответа DM
 type DMResponseAnalysis struct {
 	// Боевая ситуация
-	CombatDetected        bool    `json:"combat_detected"`                     // Начался ли бой
-	CombatEnded           bool    `json:"combat_ended"`                        // Закончился ли бой (победа/поражение/отступление) — значимое событие для автогена изображений
-	Enemies               []Enemy `json:"enemies,omitempty"`                  // Список врагов, если бой начался
-	CombatStartMessage    string  `json:"combat_start_message,omitempty"`      // Сообщение о порядке ходов при начале боя
-	CombatFallbackMessage string  `json:"combat_fallback_message,omitempty"`   // Сообщение игроку при combat_detected и пустом списке врагов
+	CombatDetected        bool    `json:"combat_detected"`                   // Начался ли бой
+	CombatEnded           bool    `json:"combat_ended"`                      // Закончился ли бой (победа/поражение/отступление) — значимое событие для автогена изображений
+	Enemies               []Enemy `json:"enemies,omitempty"`                 // Список врагов, если бой начался
+	CombatStartMessage    string  `json:"combat_start_message,omitempty"`    // Сообщение о порядке ходов при начале боя
+	CombatFallbackMessage string  `json:"combat_fallback_message,omitempty"` // Сообщение игроку при combat_detected и пустом списке врагов
 
 	// Квесты
 	QuestCompleted bool   `json:"quest_completed"`       // Выполнен ли квест
@@ -102,11 +102,11 @@ type Enemy struct {
 
 // Item представляет предмет, полученный игроком
 type Item struct {
-	Name          string  `json:"name"`        // Название предмета
-	Description   string  `json:"description"` // Описание предмета
-	Weight        float64 `json:"weight"`      // Вес в кг (оценка, если не указано)
-	Quantity      int     `json:"quantity"`    // Количество (по умолчанию 1)
-	Type          string  `json:"type"`        // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
+	Name          string  `json:"name"`           // Название предмета
+	Description   string  `json:"description"`    // Описание предмета
+	Weight        float64 `json:"weight"`         // Вес в кг (оценка, если не указано)
+	Quantity      int     `json:"quantity"`       // Количество (по умолчанию 1)
+	Type          string  `json:"type"`           // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
 	HealingAmount int     `json:"healing_amount"` // Сколько HP восстанавливает ОДНА единица предмета при использовании (0 - не лечит)
 }
 
@@ -1250,7 +1250,8 @@ func (uc *AnalyzeDMResponseUseCase) recordCampaignFacts(ctx context.Context, fac
 
 		category := world.CampaignFactCategory(strings.TrimSpace(kf.Category))
 		switch category {
-		case world.FactCategoryReputation, world.FactCategoryQuest, world.FactCategoryDecision, world.FactCategoryRelationship:
+		case world.FactCategoryReputation, world.FactCategoryQuest, world.FactCategoryDecision,
+			world.FactCategoryRelationship, world.FactCategoryItem:
 			// валидная категория
 		default:
 			category = world.FactCategoryDecision
@@ -1995,6 +1996,8 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 		return fmt.Errorf("failed to get inventory: %w", err)
 	}
 
+	var itemFacts []KeyFact
+
 	// Добавляем каждый предмет в инвентарь
 	for _, item := range items {
 		// Определяем тип предмета
@@ -2012,6 +2015,19 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 			itemType = inventory.ItemTypeConsumable
 		default:
 			itemType = inventory.ItemTypeMisc
+		}
+
+		// DM иногда повторно описывает вручение одного и того же уникального предмета в
+		// последующих репликах (например, переспрашивает "берёшь меч?" уже после того, как
+		// отдал его) — из-за этого экстрактор снова видит "вручение" и предлагает добавить
+		// предмет ещё раз, пусть и под чуть другим названием. Для штучной экипировки
+		// (оружие/броня/разное) пропускаем добавление, если в инвентаре уже есть предмет
+		// того же типа с похожим названием.
+		if itemType == inventory.ItemTypeWeapon || itemType == inventory.ItemTypeArmor || itemType == inventory.ItemTypeMisc {
+			if hasSimilarItem(inv.Items, item.Name, itemType) {
+				log.Printf("Skipping likely duplicate item '%s' (type: %s) - similar item already in inventory", item.Name, itemType)
+				continue
+			}
 		}
 
 		// Устанавливаем дефолтные значения
@@ -2052,6 +2068,11 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 
 		log.Printf("Added item to inventory: %s (x%d, weight: %.2f kg, type: %s)",
 			item.Name, quantity, weight, itemType)
+
+		itemFacts = append(itemFacts, KeyFact{
+			Category: string(world.FactCategoryItem),
+			Text:     fmt.Sprintf("Персонаж получил предмет «%s» (тип: %s)", item.Name, itemType),
+		})
 	}
 
 	// Сохраняем обновленный инвентарь
@@ -2059,7 +2080,68 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 		return fmt.Errorf("failed to save inventory: %w", err)
 	}
 
+	// Фиксируем получение предметов в ключевых фактах кампании, чтобы DM видел их в
+	// контексте на любом следующем ходу (в отличие от "Инвентарь персонажа", который
+	// подмешивается в промпт только по прямому запросу игрока) и не предлагал их повторно.
+	if len(itemFacts) > 0 {
+		uc.recordCampaignFacts(ctx, itemFacts)
+	}
+
 	return nil
+}
+
+// hasSimilarItem проверяет, есть ли среди предметов инвентаря того же типа предмет с похожим
+// названием. Используется как эвристика против повторного добавления одного и того же
+// уникального предмета, который DM описал вручённым игроку заново под чуть другим названием.
+func hasSimilarItem(items []inventory.InventoryItem, name string, itemType inventory.ItemType) bool {
+	for _, existing := range items {
+		if existing.Type == itemType && similarItemNames(existing.Name, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// similarItemNames сравнивает два названия предмета по пересечению значимых слов (длиной от 4
+// символов, чтобы не учитывать предлоги и короткие слова вроде "меч"), не по точному совпадению
+// строки - названия одного и того же уникального предмета от LLM нередко отличаются
+// ("меч Авроры" / "светящийся клинок Авроры").
+func similarItemNames(a, b string) bool {
+	aLower := strings.ToLower(strings.TrimSpace(a))
+	bLower := strings.ToLower(strings.TrimSpace(b))
+	if aLower == bLower {
+		return true
+	}
+
+	significantWords := func(s string) map[string]bool {
+		words := make(map[string]bool)
+		for _, w := range strings.Fields(s) {
+			if len([]rune(w)) >= 4 {
+				words[w] = true
+			}
+		}
+		return words
+	}
+
+	aWords := significantWords(aLower)
+	bWords := significantWords(bLower)
+	if len(aWords) == 0 || len(bWords) == 0 {
+		return false
+	}
+
+	matches := 0
+	for w := range aWords {
+		if bWords[w] {
+			matches++
+		}
+	}
+
+	smaller := len(aWords)
+	if len(bWords) < smaller {
+		smaller = len(bWords)
+	}
+
+	return float64(matches)/float64(smaller) >= 0.5
 }
 
 // buildAnalysisPrompt создает промпт для анализа ответа DM

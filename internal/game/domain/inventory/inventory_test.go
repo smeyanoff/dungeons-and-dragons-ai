@@ -104,3 +104,109 @@ func TestRemoveItem_NotFound(t *testing.T) {
 		t.Error("expected error when removing non-existent item")
 	}
 }
+
+func TestAddItem_MergeIsCaseInsensitive(t *testing.T) {
+	inv := NewInventory(1)
+	if err := inv.AddItem("Меч Авроры", "Светящийся клинок", 2, 1, ItemTypeWeapon, 0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Тот же предмет, но с другим регистром и пробелами по краям - должен объединиться,
+	// а не создать второй предмет с тем же именем.
+	if err := inv.AddItem(" меч авроры ", "Светящийся клинок", 2, 1, ItemTypeWeapon, 0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(inv.Items) != 1 {
+		t.Fatalf("expected items to merge into 1, got %d: %+v", len(inv.Items), inv.Items)
+	}
+	if inv.Items[0].Quantity != 2 {
+		t.Errorf("expected merged Quantity=2, got %d", inv.Items[0].Quantity)
+	}
+}
+
+func TestEquipItem_EquipsWeaponAndUnequipsPreviousInSameSlot(t *testing.T) {
+	inv := NewInventory(1)
+	_ = inv.AddItem("Кинжал", "Простой кинжал", 1, 1, ItemTypeWeapon, 0)
+	_ = inv.AddItem("Меч Авроры", "Светящийся клинок", 2, 1, ItemTypeWeapon, 0)
+
+	if _, err := inv.EquipItem("Кинжал"); err != nil {
+		t.Fatalf("unexpected error equipping Кинжал: %v", err)
+	}
+	if !inv.Items[0].Equipped {
+		t.Fatalf("expected Кинжал to be equipped")
+	}
+
+	equipped, err := inv.EquipItem("Меч Авроры")
+	if err != nil {
+		t.Fatalf("unexpected error equipping Меч Авроры: %v", err)
+	}
+	if !equipped.Equipped {
+		t.Errorf("expected returned item to be equipped")
+	}
+	if inv.Items[0].Equipped {
+		t.Errorf("expected Кинжал to be automatically unequipped when equipping another weapon")
+	}
+	if !inv.Items[1].Equipped {
+		t.Errorf("expected Меч Авроры to be equipped")
+	}
+}
+
+func TestEquipItem_NonEquippableType(t *testing.T) {
+	inv := NewInventory(1)
+	_ = inv.AddItem("Зелье лечения", "Восстанавливает HP", 0.5, 1, ItemTypePotion, 10)
+
+	if _, err := inv.EquipItem("Зелье лечения"); err == nil {
+		t.Error("expected error when equipping a non-equippable item type")
+	}
+}
+
+func TestEquipItem_NotFound(t *testing.T) {
+	inv := NewInventory(1)
+
+	if _, err := inv.EquipItem("Несуществующий предмет"); err == nil {
+		t.Error("expected error when equipping non-existent item")
+	}
+}
+
+func TestUnequipItem_UnequipsAndErrorsIfNotEquipped(t *testing.T) {
+	inv := NewInventory(1)
+	_ = inv.AddItem("Кольчуга", "Лёгкая броня", 5, 1, ItemTypeArmor, 0)
+
+	if _, err := inv.UnequipItem("Кольчуга"); err == nil {
+		t.Error("expected error when unequipping an item that isn't equipped")
+	}
+
+	if _, err := inv.EquipItem("Кольчуга"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	unequipped, err := inv.UnequipItem("Кольчуга")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unequipped.Equipped {
+		t.Errorf("expected item to be unequipped")
+	}
+	if inv.Items[0].Equipped {
+		t.Errorf("expected inventory item to reflect unequipped state")
+	}
+}
+
+func TestGetEquippedItems(t *testing.T) {
+	inv := NewInventory(1)
+	_ = inv.AddItem("Кольчуга", "Лёгкая броня", 5, 1, ItemTypeArmor, 0)
+	_ = inv.AddItem("Меч Авроры", "Светящийся клинок", 2, 1, ItemTypeWeapon, 0)
+	_ = inv.AddItem("Факел", "Освещает путь", 0.5, 1, ItemTypeTool, 0)
+
+	if len(inv.GetEquippedItems()) != 0 {
+		t.Fatalf("expected no equipped items initially")
+	}
+
+	_, _ = inv.EquipItem("Кольчуга")
+	_, _ = inv.EquipItem("Меч Авроры")
+
+	equipped := inv.GetEquippedItems()
+	if len(equipped) != 2 {
+		t.Fatalf("expected 2 equipped items, got %d: %+v", len(equipped), equipped)
+	}
+}
