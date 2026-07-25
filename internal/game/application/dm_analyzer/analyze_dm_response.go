@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -51,6 +52,14 @@ type DMResponseAnalysis struct {
 	// Локации и NPC
 	LocationVisited *Location `json:"location_visited,omitempty"` // Локация, которую игрок впервые посетил
 	NPCMet          *NPC      `json:"npc_met,omitempty"`          // NPC, с которым игрок впервые встретился
+
+	// Компаньоны — присоединение/уход по ходу сюжета (не через ручные команды /dismiss
+	// и не через случайное событие локации recruit_companion, а из естественного текста DM)
+	CompanionJoined *CompanionJoined `json:"companion_joined,omitempty"` // NPC, присоединившийся к отряду
+	CompanionLeft   *CompanionLeft   `json:"companion_left,omitempty"`   // Компаньон, покинувший отряд
+	// CompanionEventMessage — сообщение игроку о присоединении/уходе компаньона,
+	// заполняется после обработки (не приходит от LLM)
+	CompanionEventMessage string `json:"-"`
 
 	// Автоматически сгенерированные изображения
 	GeneratedImages []GeneratedImage `json:"generated_images,omitempty"` // Пути к автоматически сгенерированным изображениям
@@ -115,6 +124,20 @@ type NPC struct {
 	IsFirstMeeting bool   `json:"is_first_meeting"` // Первая ли это встреча
 }
 
+// CompanionJoined представляет NPC, присоединившегося к отряду игрока по ходу сюжета
+type CompanionJoined struct {
+	Name        string `json:"name"`        // Имя нового компаньона
+	Class       string `json:"class"`       // Класс/роль (Воин, Маг, Разбойник, Целитель и т.п.)
+	Description string `json:"description"` // Краткое описание персонажа
+}
+
+// CompanionLeft представляет компаньона, покинувшего отряд по ходу сюжета
+// (погиб, ушёл по своим делам, предал и т.п. — не ручной /dismiss)
+type CompanionLeft struct {
+	Name   string `json:"name"`   // Имя компаньона, покидающего отряд
+	Reason string `json:"reason"` // Причина ухода из текста DM
+}
+
 // CombatRepository интерфейс для работы с боями
 type CombatRepository interface {
 	Save(ctx context.Context, c *combat.Combat) error
@@ -145,6 +168,7 @@ type AnalyzeDMResponseUseCase struct {
 	characterID              uint                      // ID персонажа игрока
 	playerID                 uint                      // ID игрока (для проверки достижений)
 	combatStartMessage       string                    // Сообщение о порядке ходов при начале боя
+	companionEventMessage    string                    // Сообщение о присоединении/уходе компаньона
 	imageLimitReachedMessage string                    // Сообщение при достижении лимита изображений на сессию
 	checkAchievementsUC      AchievementChecker        // Опциональная зависимость для проверки достижений
 	notificationService      NotificationService       // Опциональная зависимость для отправки уведомлений
@@ -419,6 +443,12 @@ func (uc *AnalyzeDMResponseUseCase) Execute(
 	analysis.ImageLimitReachedMessage = uc.imageLimitReachedMessage
 	analysis.ImagesGeneratedInSession = uc.imagesGeneratedInSession
 
+	// Сообщение о присоединении/уходе компаньона (если было обработано)
+	if uc.companionEventMessage != "" {
+		analysis.CompanionEventMessage = uc.companionEventMessage
+		uc.companionEventMessage = "" // Очищаем для следующего использования
+	}
+
 	return analysis, nil
 }
 
@@ -505,6 +535,8 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 		len(analysis.ItemsReceived) == 0 &&
 		analysis.LocationVisited == nil &&
 		analysis.NPCMet == nil &&
+		analysis.CompanionJoined == nil &&
+		analysis.CompanionLeft == nil &&
 		len(analysis.GeneratedImages) == 0 &&
 		len(analysis.KeyFacts) == 0
 
@@ -595,6 +627,30 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 		}
 	}
 
+	// Валидируем присоединение компаньона
+	if analysis.CompanionJoined != nil {
+		if strings.TrimSpace(analysis.CompanionJoined.Name) == "" {
+			log.Printf("[DM Analyzer] Companion joined but name is empty, clearing companion_joined")
+			analysis.CompanionJoined = nil
+		}
+	}
+
+	// Валидируем уход компаньона
+	if analysis.CompanionLeft != nil {
+		if strings.TrimSpace(analysis.CompanionLeft.Name) == "" {
+			log.Printf("[DM Analyzer] Companion left but name is empty, clearing companion_left")
+			analysis.CompanionLeft = nil
+		}
+	}
+
+	// Компаньон не может одновременно присоединиться и покинуть отряд под одним и тем же именем
+	if analysis.CompanionJoined != nil && analysis.CompanionLeft != nil &&
+		strings.EqualFold(strings.TrimSpace(analysis.CompanionJoined.Name), strings.TrimSpace(analysis.CompanionLeft.Name)) {
+		log.Printf("[DM Analyzer] Companion joined and left with the same name in one response, ignoring both")
+		analysis.CompanionJoined = nil
+		analysis.CompanionLeft = nil
+	}
+
 	return analysis, nil
 }
 
@@ -613,6 +669,8 @@ func validateJSONSchemaStrict(prompt string) error {
 		"items_received",
 		"location_visited",
 		"npc_met",
+		"companion_joined",
+		"companion_left",
 		"generated_images",
 	}
 
@@ -1157,6 +1215,18 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 		}
 	}
 
+	// Обрабатываем присоединение/уход компаньонов по ходу сюжета
+	if analysis.CompanionJoined != nil {
+		if err := uc.handleCompanionJoined(ctx, analysis.CompanionJoined); err != nil {
+			log.Printf("[DM Analyzer] Failed to handle companion joined: %v", err)
+		}
+	}
+	if analysis.CompanionLeft != nil {
+		if err := uc.handleCompanionLeft(ctx, analysis.CompanionLeft); err != nil {
+			log.Printf("[DM Analyzer] Failed to handle companion left: %v", err)
+		}
+	}
+
 	// Сохраняем ключевые факты кампании (глобальная память, не привязанная к локации)
 	if len(analysis.KeyFacts) > 0 {
 		uc.recordCampaignFacts(ctx, analysis.KeyFacts)
@@ -1195,6 +1265,161 @@ func (uc *AnalyzeDMResponseUseCase) recordCampaignFacts(ctx context.Context, fac
 			log.Printf("[DM Analyzer] Failed to save campaign fact: %v", err)
 		}
 	}
+}
+
+// companionStatRNG — источник случайности для генерации характеристик компаньонов,
+// присоединяющихся по ходу сюжета (аналог rng в player_action.recruitCompanion).
+var companionStatRNG = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+// handleCompanionJoined добавляет NPC в отряд игрока, когда DM явно описал
+// присоединение компаньона по ходу сюжета (не через ручной /recruit или
+// случайное событие локации). Ошибка не прерывает обработку остального анализа.
+func (uc *AnalyzeDMResponseUseCase) handleCompanionJoined(ctx context.Context, joined *CompanionJoined) error {
+	if uc.fullSessionRepo == nil {
+		log.Printf("[DM Analyzer] Full session repo is nil, skipping companion joined handling")
+		return nil
+	}
+
+	name := strings.TrimSpace(joined.Name)
+	if name == "" {
+		return nil
+	}
+
+	gs, err := uc.fullSessionRepo.GetByChatID(ctx, uc.chatID)
+	if err != nil {
+		return fmt.Errorf("failed to get session for companion joined: %w", err)
+	}
+	if gs == nil {
+		return fmt.Errorf("session not found for companion joined")
+	}
+
+	// Не дублируем компаньона, если он уже в отряде
+	for _, existing := range gs.Companions {
+		if strings.EqualFold(existing.Name, name) {
+			log.Printf("[DM Analyzer] Companion %q already in party, skipping duplicate join", name)
+			return nil
+		}
+	}
+
+	class := strings.TrimSpace(joined.Class)
+	if class == "" {
+		class = "Соратник"
+	}
+	description := strings.TrimSpace(joined.Description)
+	if description == "" {
+		description = fmt.Sprintf("%s присоединился к отряду", name)
+	}
+
+	level, hp, ac, attackBonus, damageDice := generateCompanionStats(class)
+
+	companion := &session.Companion{
+		GameSessionID: gs.ID,
+		Name:          name,
+		Description:   description,
+		Class:         class,
+		Level:         level,
+		HP:            hp,
+		MaxHP:         hp,
+		AC:            ac,
+		AttackBonus:   attackBonus,
+		DamageDice:    damageDice,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	gs.AddCompanion(companion)
+
+	if err := uc.fullSessionRepo.Save(ctx, gs); err != nil {
+		return fmt.Errorf("failed to save session after companion joined: %w", err)
+	}
+
+	log.Printf("[DM Analyzer] Companion joined party: %s (%s, %d ур)", name, class, level)
+	uc.companionEventMessage = fmt.Sprintf("🎉 К вашему отряду присоединился компаньон: %s (%s, %d ур)", name, class, level)
+
+	return nil
+}
+
+// handleCompanionLeft удаляет NPC из отряда игрока, когда DM явно описал
+// окончательный уход компаньона по ходу сюжета (гибель, расставание, предательство).
+// Ошибка не прерывает обработку остального анализа.
+func (uc *AnalyzeDMResponseUseCase) handleCompanionLeft(ctx context.Context, left *CompanionLeft) error {
+	if uc.fullSessionRepo == nil {
+		log.Printf("[DM Analyzer] Full session repo is nil, skipping companion left handling")
+		return nil
+	}
+
+	name := strings.TrimSpace(left.Name)
+	if name == "" {
+		return nil
+	}
+
+	gs, err := uc.fullSessionRepo.GetByChatID(ctx, uc.chatID)
+	if err != nil {
+		return fmt.Errorf("failed to get session for companion left: %w", err)
+	}
+	if gs == nil {
+		return fmt.Errorf("session not found for companion left")
+	}
+
+	var companionID uint
+	found := false
+	for _, existing := range gs.Companions {
+		if strings.EqualFold(existing.Name, name) {
+			companionID = existing.ID
+			found = true
+			break
+		}
+	}
+	if !found {
+		log.Printf("[DM Analyzer] Companion %q not found in party, nothing to remove", name)
+		return nil
+	}
+
+	gs.RemoveCompanion(companionID)
+
+	if err := uc.fullSessionRepo.Save(ctx, gs); err != nil {
+		return fmt.Errorf("failed to save session after companion left: %w", err)
+	}
+
+	reason := strings.TrimSpace(left.Reason)
+	log.Printf("[DM Analyzer] Companion left party: %s (reason: %s)", name, reason)
+	if reason != "" {
+		uc.companionEventMessage = fmt.Sprintf("👋 Компаньон %s покинул отряд. Причина: %s", name, reason)
+	} else {
+		uc.companionEventMessage = fmt.Sprintf("👋 Компаньон %s покинул отряд.", name)
+	}
+
+	return nil
+}
+
+// generateCompanionStats генерирует базовые характеристики компаньона на основе класса —
+// аналогично player_action.recruitCompanion, но для компаньонов, присоединяющихся
+// по ходу сюжета, а не через случайное событие локации.
+func generateCompanionStats(class string) (level, hp, ac, attackBonus int, damageDice string) {
+	level = 1 + companionStatRNG.Intn(3) // 1-3
+	hp = 20 + companionStatRNG.Intn(30)  // 20-49
+	ac = 12 + companionStatRNG.Intn(4)   // 12-15
+	attackBonus = 2 + companionStatRNG.Intn(3)
+	damageDice = "1d8"
+
+	switch strings.ToLower(strings.TrimSpace(class)) {
+	case "маг", "волшебник", "чародей":
+		ac -= 1
+		damageDice = "1d6"
+	case "целитель", "жрец", "друид":
+		attackBonus -= 1
+	case "разбойник", "плут":
+		attackBonus += 1
+		damageDice = "1d6"
+	}
+	if ac < 10 {
+		ac = 10
+	}
+	if attackBonus < 1 {
+		attackBonus = 1
+	}
+
+	return level, hp, ac, attackBonus, damageDice
 }
 
 // generateImagesForItems автоматически генерирует изображения для полученных предметов
@@ -1839,7 +2064,7 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 
 // buildAnalysisPrompt создает промпт для анализа ответа DM
 func buildAnalysisPrompt(dmResponse string, strict bool) string {
-	skeleton := `{"combat_detected":false,"combat_ended":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[],"key_facts":[]}`
+	skeleton := `{"combat_detected":false,"combat_ended":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"companion_joined":null,"companion_left":null,"generated_images":[],"key_facts":[]}`
 	criticalFooter := ""
 	if strict {
 		criticalFooter = "\n\nСТРОГОЕ ПРАВИЛО ДЛЯ РЕТРАЯ:\n- НЕ возвращай пустой JSON {} или пустой ответ\n- Если нет событий, верни этот скелет без изменений: " + skeleton
@@ -1886,6 +2111,15 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
     "name": "имя NPC",
     "description": "описание NPC",
     "is_first_meeting": true/false
+  },
+  "companion_joined": {
+    "name": "имя компаньона",
+    "class": "класс/роль",
+    "description": "краткое описание персонажа"
+  },
+  "companion_left": {
+    "name": "имя компаньона",
+    "reason": "причина ухода"
   },
   "generated_images": [],
   "key_facts": [
@@ -1962,6 +2196,20 @@ NPC (npc_met):
 - Устанавливай только при первой встрече с NPC
 - Ключевые слова: "встречаешь", "видишь", "подходит", "появляется", "знакомишься"
 - is_first_meeting=true для новых NPC
+
+КОМПАНЬОНЫ, ПРИСОЕДИНЯЮЩИЕСЯ К ОТРЯДУ (companion_joined):
+- Устанавливай companion_joined, ТОЛЬКО если NPC явно и окончательно присоединяется к отряду игрока как соратник/спутник
+- Ключевые слова: "присоединяется к вам", "теперь с вами", "идёт с вами", "вступает в отряд", "готов сражаться на вашей стороне", "становится вашим спутником"
+- НЕ устанавливай, если NPC просто помогает разово, даёт совет, сопровождает временно в пределах одной сцены или это союзник только на время одного боя
+- НЕ устанавливай для NPC, которые просто идут в том же направлении или встречены мимоходом
+- name — имя компаньона, class — его класс/роль (Воин, Маг, Разбойник, Целитель и т.п., по контексту), description — 1 короткое предложение
+
+КОМПАНЬОНЫ, ПОКИДАЮЩИЕ ОТРЯД (companion_left):
+- Устанавливай companion_left, ТОЛЬКО если ранее присоединившийся компаньон явно и окончательно покидает отряд по ходу сюжета: гибнет, уходит по своим делам, предаёт, остаётся в другом месте
+- Ключевые слова: "покидает отряд", "прощается с вами", "остаётся здесь", "погибает", "больше не с вами", "уходит своей дорогой", "предаёт вас"
+- НЕ устанавливай для временной разлуки в пределах одной сцены (например, компаньон отошёл в соседнюю комнату)
+- name — имя компаньона, reason — краткая причина ухода из текста DM
+- Устанавливай ТОЛЬКО одно из полей companion_joined/companion_left за раз для одного и того же имени компаньона в одном ответе
 
 КРИТИЧЕСКИ ВАЖНО:
 - ВСЕГДА возвращай ПОЛНЫЙ JSON со ВСЕМИ полями (даже если значения по умолчанию)
@@ -2506,6 +2754,8 @@ func isEmptyAnalysis(analysis *DMResponseAnalysis) bool {
 		len(analysis.ItemsReceived) == 0 &&
 		analysis.LocationVisited == nil &&
 		analysis.NPCMet == nil &&
+		analysis.CompanionJoined == nil &&
+		analysis.CompanionLeft == nil &&
 		len(analysis.GeneratedImages) == 0 &&
 		len(analysis.KeyFacts) == 0
 }
