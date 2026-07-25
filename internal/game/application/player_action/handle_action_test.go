@@ -3,10 +3,12 @@ package player_action
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	characterapp "dungeons-and-dragons-ai/internal/game/application/character"
+	"dungeons-and-dragons-ai/internal/game/application/dm_analyzer"
 	worldeventapp "dungeons-and-dragons-ai/internal/game/application/world_event"
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
@@ -106,6 +108,7 @@ func (m *mockLLM) GenerateWithTools(ctx context.Context, prompt string, tools []
 // Mock Session Repository
 type mockSessionRepo struct {
 	getByChatIDFunc func(ctx context.Context, chatID int64) (*session.GameSession, error)
+	saveFunc        func(ctx context.Context, s *session.GameSession) error
 }
 
 func (m *mockSessionRepo) GetByChatID(ctx context.Context, chatID int64) (*session.GameSession, error) {
@@ -116,6 +119,9 @@ func (m *mockSessionRepo) GetByChatID(ctx context.Context, chatID int64) (*sessi
 }
 
 func (m *mockSessionRepo) Save(ctx context.Context, s *session.GameSession) error {
+	if m.saveFunc != nil {
+		return m.saveFunc(ctx, s)
+	}
 	return nil
 }
 
@@ -992,5 +998,66 @@ func TestHandleActionUseCase_Execute_WithActionValidator_Stats(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestCreateAbilityCheckFromAnalyzer_RepeatInScene_DoesNotCreatePendingCheck — регрессионный тест:
+// если проверка той же характеристики в той же сцене (локации) уже выполнялась,
+// RequestAbilityCheckTool отклоняет её ключом "repeat_in_scene" и не создаёт pending check.
+// createAbilityCheckFromAnalyzer должен вернуть предупреждение как есть, а не спутать
+// отказ с успешным созданием проверки (баг: "repeat_in_scene" отсутствовал в списке
+// распознаваемых отказов, из-за чего игрок получал "Напишите /roll", хотя pending check
+// в БД так и не появлялся — /roll потом не находил, что резолвить).
+func TestCreateAbilityCheckFromAnalyzer_RepeatInScene_DoesNotCreatePendingCheck(t *testing.T) {
+	locationID := uint(4)
+	gs := &session.GameSession{
+		ChatID:                     698225384,
+		CurrentLocationID:          &locationID,
+		LastAbilityCheckLocationID: &locationID,
+		LastAbilityCheckAbility:    "wisdom",
+		Players: []player.Player{
+			{
+				TgUserID: 1,
+				Character: character.Character{
+					Name:  "Hero",
+					Stats: character.Stats{Wisdom: 14},
+				},
+			},
+		},
+	}
+
+	sessionRepo := &mockSessionRepo{
+		getByChatIDFunc: func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+			return gs, nil
+		},
+		saveFunc: func(ctx context.Context, s *session.GameSession) error {
+			t.Fatal("Save must not be called when the check is rejected as repeat_in_scene — no pending check should be persisted")
+			return nil
+		},
+	}
+	eventRepo := &mockEventRepo{}
+
+	uc := NewHandleActionUseCase(
+		nil, sessionRepo, nil, eventRepo, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+
+	msg, handled, err := uc.createAbilityCheckFromAnalyzer(context.Background(), gs, &dm_analyzer.AbilityCheckDetails{
+		Ability: "wisdom",
+		DC:      12,
+		Reason:  "новая попытка осмотреться",
+		Stakes:  "найти улики",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected handled=true (rejection is still a handled outcome)")
+	}
+	if gs.HasPendingAbilityCheck() {
+		t.Fatal("no pending check should have been created for a repeat-in-scene rejection")
+	}
+	if strings.Contains(msg, "Напишите /roll") {
+		t.Fatalf("rejection message must not tell the player to /roll when no pending check was created, got: %q", msg)
 	}
 }

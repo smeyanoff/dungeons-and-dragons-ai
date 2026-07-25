@@ -1851,7 +1851,7 @@ func (uc *HandleActionUseCase) createAbilityCheckFromAnalyzer(
 		}
 		return msg, true, nil
 	}
-	for _, key := range []string{"rejected", "already_checked", "cooldown", "budget_exceeded", "already_pending"} {
+	for _, key := range []string{"rejected", "already_checked", "cooldown", "budget_exceeded", "already_pending", "repeat_in_scene"} {
 		if v, _ := m[key].(bool); v {
 			msg, _ := m["warning"].(string)
 			if strings.TrimSpace(msg) == "" {
