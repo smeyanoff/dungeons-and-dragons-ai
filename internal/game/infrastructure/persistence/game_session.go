@@ -6,8 +6,11 @@ import (
 
 	"gorm.io/gorm"
 
+	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/world"
 )
 
 type GameSessionRepository struct {
@@ -142,6 +145,45 @@ func (r *GameSessionRepository) Delete(
 		if err := tx.Unscoped().Where("game_session_id = ?", gs.ID).
 			Delete(&session.SessionGoal{}).Error; err != nil {
 			return fmt.Errorf("failed to delete session goals: %w", err)
+		}
+
+		// Удаляем историю событий сессии (hard delete) — иначе она остаётся
+		// осиротевшей в БД после завершения игры (не читается новой сессией,
+		// т.к. RAG/history всегда фильтруют по game_session_id, но накапливается мёртвым весом).
+		if err := tx.Unscoped().Where("game_session_id = ?", gs.ID).
+			Delete(&event.StoryEvent{}).Error; err != nil {
+			return fmt.Errorf("failed to delete story events: %w", err)
+		}
+
+		// Удаляем бои сессии: сначала участников (FK на combat_id), затем сами бои.
+		var combatIDs []uint
+		if err := tx.Unscoped().Model(&combat.Combat{}).
+			Where("game_session_id = ?", gs.ID).
+			Pluck("id", &combatIDs).Error; err != nil {
+			return fmt.Errorf("failed to list combats: %w", err)
+		}
+		if len(combatIDs) > 0 {
+			if err := tx.Unscoped().Where("combat_id IN ?", combatIDs).
+				Delete(&combat.CombatParticipant{}).Error; err != nil {
+				return fmt.Errorf("failed to delete combat participants: %w", err)
+			}
+			if err := tx.Unscoped().Where("game_session_id = ?", gs.ID).
+				Delete(&combat.Combat{}).Error; err != nil {
+				return fmt.Errorf("failed to delete combats: %w", err)
+			}
+		}
+
+		// Удаляем факты и мировые события кампании по world_id — они привязаны к миру
+		// завершённой игры, а не к game_session_id, и без этого остаются осиротевшими.
+		if gs.WorldID != 0 {
+			if err := tx.Unscoped().Where("world_id = ?", gs.WorldID).
+				Delete(&world.CampaignFact{}).Error; err != nil {
+				return fmt.Errorf("failed to delete campaign facts: %w", err)
+			}
+			if err := tx.Unscoped().Where("world_id = ?", gs.WorldID).
+				Delete(&world.WorldEvent{}).Error; err != nil {
+				return fmt.Errorf("failed to delete world events: %w", err)
+			}
 		}
 
 		// Теперь удаляем саму сессию (hard delete)
