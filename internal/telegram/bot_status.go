@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
-	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
 	inventoryapp "dungeons-and-dragons-ai/internal/game/application/inventory"
+	"dungeons-and-dragons-ai/internal/game/domain/event"
+	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
+	"dungeons-and-dragons-ai/pkg/logger"
+
+	"github.com/google/uuid"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -154,84 +159,192 @@ func (b *Bot) handlePickup(ctx context.Context, chatID int64, args string, tgUse
 	return b.sendLongMessage(chatID, result)
 }
 
-// handleRoll резолвит /roll. Это не команда общего назначения для игрока —
-// она работает только когда Мастер запросил проверку характеристики
-// (см. maybeSendPendingAbilityCheckPrompt) и ждет /roll как ответ.
 func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
-	if b.performAbilityCheckUC == nil {
-		msg := tgbotapi.NewMessage(chatID, "/roll можно использовать только когда Мастер попросит бросок.")
-		return b.sendMessage(msg)
-	}
-
-	gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
-	if err != nil {
-		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
-		return b.sendMessage(errorMsg)
-	}
-	if gs == nil || !gs.HasPendingAbilityCheck() {
-		msg := tgbotapi.NewMessage(chatID, "Сейчас нет проверки, ожидающей броска. /roll используется только когда Мастер попросит бросок.")
-		return b.sendMessage(msg)
-	}
-
 	// Очищаем аргументы от лишних символов (обратные апострофы, кавычки и т.д.)
 	cleanedArgs := strings.TrimSpace(args)
 	cleanedArgs = strings.Trim(cleanedArgs, "`\"'")
 
-	var result *abilitycheck.PerformAbilityCheckResult
-	if manualRoll, ok := parseManualAbilityCheckInput(cleanedArgs); ok {
-		result, err = b.performAbilityCheckUC.ExecuteWithBaseRoll(ctx, chatID, manualRoll)
-	} else {
-		result, err = b.performAbilityCheckUC.Execute(ctx, chatID)
+	// Если есть pending ability check, /roll (или /roll d20) резолвит его
+	if b.performAbilityCheckUC != nil {
+		gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+		if err == nil && gs != nil && gs.HasPendingAbilityCheck() {
+			if cleanedArgs == "" || strings.EqualFold(cleanedArgs, "d20") {
+				result, err := b.performAbilityCheckUC.Execute(ctx, chatID)
+				if err != nil {
+					errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
+					return b.sendMessage(errorMsg)
+				}
+
+				// Отправляем результат проверки
+				if err := b.sendLongMessage(chatID, result.Message); err != nil {
+					return err
+				}
+
+				// Автоматически продолжаем повествование после проверки (если DM доступен)
+				if b.handleActionUC != nil {
+					// Получаем контекст проверки из сессии
+					gs, _ := b.sessionRepo.GetByChatID(ctx, chatID)
+					reason := ""
+					stakes := ""
+					if gs != nil {
+						reason = gs.PendingAbilityCheckReason
+						stakes = gs.PendingAbilityCheckStakes
+					}
+
+					var continueMessage string
+					if result.Success {
+						if reason != "" && stakes != "" {
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s успешно %s (DC %d, бросок %d). Опиши положительные последствия: %s",
+								result.CharacterName, reason, result.DC, result.Total, stakes)
+						} else {
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s прошел проверку %s (DC %d, бросок %d). Продолжи историю с положительными последствиями.",
+								result.CharacterName, result.Ability, result.DC, result.Total)
+						}
+					} else {
+						if reason != "" && stakes != "" {
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s не смог %s (DC %d, бросок %d). Опиши негативные последствия: %s",
+								result.CharacterName, reason, result.DC, result.Total, stakes)
+						} else {
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s провалил проверку %s (DC %d, бросок %d). Продолжи историю с негативными последствиями.",
+								result.CharacterName, result.Ability, result.DC, result.Total)
+						}
+					}
+
+					// Для автоматических продолжений используем tgUserID первого игрока
+					systemTgUserID := int64(0)
+					if gs.GetFirstPlayer() != nil {
+						systemTgUserID = gs.GetFirstPlayer().TgUserID
+					}
+					return b.handlePlayerAction(ctx, chatID, systemTgUserID, continueMessage)
+				}
+				return nil
+			}
+
+			if manualRoll, ok := parseManualAbilityCheckInput(cleanedArgs); ok {
+				result, err := b.performAbilityCheckUC.ExecuteWithBaseRoll(ctx, chatID, manualRoll)
+				if err != nil {
+					errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
+					return b.sendMessage(errorMsg)
+				}
+
+				// Отправляем результат проверки
+				if err := b.sendLongMessage(chatID, result.Message); err != nil {
+					return err
+				}
+
+				// Автоматически продолжаем повествование после проверки (если DM доступен)
+				if b.handleActionUC != nil {
+					// Получаем контекст проверки из сессии
+					gs, _ := b.sessionRepo.GetByChatID(ctx, chatID)
+					reason := ""
+					stakes := ""
+					if gs != nil {
+						reason = gs.PendingAbilityCheckReason
+						stakes = gs.PendingAbilityCheckStakes
+					}
+
+					var continueMessage string
+					if result.Success {
+						if reason != "" && stakes != "" {
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s успешно %s (DC %d, бросок %d). Опиши положительные последствия: %s",
+								result.CharacterName, reason, result.DC, result.Total, stakes)
+						} else {
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s прошел проверку %s (DC %d, бросок %d). Продолжи историю с положительными последствиями.",
+								result.CharacterName, result.Ability, result.DC, result.Total)
+						}
+					} else {
+						if reason != "" && stakes != "" {
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s не смог %s (DC %d, бросок %d). Опиши негативные последствия: %s",
+								result.CharacterName, reason, result.DC, result.Total, stakes)
+						} else {
+							continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s провалил проверку %s (DC %d, бросок %d). Продолжи историю с негативными последствиями.",
+								result.CharacterName, result.Ability, result.DC, result.Total)
+						}
+					}
+
+					// Для автоматических продолжений используем tgUserID первого игрока
+					systemTgUserID := int64(0)
+					if gs.GetFirstPlayer() != nil {
+						systemTgUserID = gs.GetFirstPlayer().TgUserID
+					}
+					return b.handlePlayerAction(ctx, chatID, systemTgUserID, continueMessage)
+				}
+				return nil
+			}
+		}
 	}
+
+	if cleanedArgs == "" {
+		msg := tgbotapi.NewMessage(chatID, "Укажите выражение для броска, например: /roll d20 или /roll 2d6+3.")
+		return b.sendMessage(msg)
+	}
+
+	result, err := b.rollDiceUC.Execute(ctx, cleanedArgs)
 	if err != nil {
-		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке: %v", err))
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при броске кубика: %v\n\nИспользуйте формат: /roll d20 или /roll 2d6+3", err))
 		return b.sendMessage(errorMsg)
 	}
 
-	// Отправляем результат проверки
-	if err := b.sendLongMessage(chatID, result.Message); err != nil {
-		return err
-	}
+	// Сохраняем результат броска в историю событий, чтобы DM мог его видеть
+	if b.eventRepo != nil {
+		gs, err := b.sessionRepo.GetByChatID(ctx, chatID)
+		if err == nil && gs != nil && gs.IsActive() {
+			// Создаем событие для результата броска
+			rollEvent := &event.StoryEvent{
+				GameSessionID: gs.ID,
+				LocationID:    gs.CurrentLocationID,
+				AuthorType:    event.AuthorTypePlayer,
+				Content:       result, // Сохраняем полный результат броска
+				CreatedAt:     time.Now(),
+			}
 
-	// Автоматически продолжаем повествование после проверки (если DM доступен)
-	if b.handleActionUC == nil {
-		return nil
-	}
+			// Сохраняем событие (не блокируем отправку сообщения при ошибке)
+			if err := b.eventRepo.Save(ctx, rollEvent); err != nil {
+				logger.Warn("Failed to save dice roll event",
+					logger.ErrorField(err),
+					logger.Int64("chat_id", chatID),
+					logger.Uint("session_id", gs.ID),
+				)
+			} else {
+				logger.Debug("Dice roll event saved",
+					logger.Int64("chat_id", chatID),
+					logger.Uint("session_id", gs.ID),
+					logger.String("result", result),
+				)
 
-	// Получаем контекст проверки из сессии
-	gs, _ = b.sessionRepo.GetByChatID(ctx, chatID)
-	reason := ""
-	stakes := ""
-	if gs != nil {
-		reason = gs.PendingAbilityCheckReason
-		stakes = gs.PendingAbilityCheckStakes
-	}
+				// Индексируем результат броска в RAG, чтобы DM мог его видеть
+				if b.indexDocUC != nil {
+					ragCtx, ragCancel := context.WithTimeout(ctx, 10*time.Second)
+					defer ragCancel()
 
-	var continueMessage string
-	if result.Success {
-		if reason != "" && stakes != "" {
-			continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s успешно %s (DC %d, бросок %d). Опиши положительные последствия: %s",
-				result.CharacterName, reason, result.DC, result.Total, stakes)
-		} else {
-			continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: УСПЕХ! %s прошел проверку %s (DC %d, бросок %d). Продолжи историю с положительными последствиями.",
-				result.CharacterName, result.Ability, result.DC, result.Total)
+					doc := ragdomain.Document{
+						ID:         uuid.New().String(),
+						Source:     ragdomain.SourceEvent,
+						SessionID:  gs.ID,
+						LocationID: gs.CurrentLocationID,
+						Text:       "Игрок бросил кубик: " + result,
+						Timestamp:  time.Now(),
+					}
+
+					// Индексируем с таймаутом (не блокируем отправку сообщения при ошибке)
+					if err := b.indexDocUC.Execute(ragCtx, doc); err != nil {
+						logger.Warn("Failed to index dice roll event in RAG (event saved in DB, but not indexed)",
+							logger.ErrorField(err),
+							logger.Int64("chat_id", chatID),
+							logger.Uint("session_id", gs.ID),
+						)
+					} else {
+						logger.Debug("Dice roll event indexed in RAG",
+							logger.Int64("chat_id", chatID),
+							logger.Uint("session_id", gs.ID),
+						)
+					}
+				}
+			}
 		}
-	} else {
-		if reason != "" && stakes != "" {
-			continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s не смог %s (DC %d, бросок %d). Опиши негативные последствия: %s",
-				result.CharacterName, reason, result.DC, result.Total, stakes)
-		} else {
-			continueMessage = fmt.Sprintf("🎲 РЕЗУЛЬТАТ ПРОВЕРКИ: ПРОВАЛ! %s провалил проверку %s (DC %d, бросок %d). Продолжи историю с негативными последствиями.",
-				result.CharacterName, result.Ability, result.DC, result.Total)
-		}
 	}
 
-	// Для автоматических продолжений используем tgUserID первого игрока
-	systemTgUserID := int64(0)
-	if gs != nil && gs.GetFirstPlayer() != nil {
-		systemTgUserID = gs.GetFirstPlayer().TgUserID
-	}
-	return b.handlePlayerAction(ctx, chatID, systemTgUserID, continueMessage)
+	return b.sendLongMessage(chatID, result)
 }
 
 func (b *Bot) handleQuests(ctx context.Context, chatID int64) error {
