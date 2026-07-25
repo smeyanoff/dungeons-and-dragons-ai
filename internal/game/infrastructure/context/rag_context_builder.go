@@ -205,9 +205,7 @@ func (b *RAGContextBuilder) BuildContext(
 			)
 		} else if len(recentEvents) > 0 {
 			parts = append(parts, "\n--- Последние сообщения ---")
-			for _, e := range recentEvents {
-				parts = append(parts, formatStoryEventLine(e, maxEventChars))
-			}
+			parts = append(parts, eventLinesTiered(recentEvents, maxEventChars, b.config.minEventChars)...)
 			logger.Debug("Added recent events to context",
 				logger.Uint("session_id", gs.ID),
 				logger.Int("events_count", len(recentEvents)),
@@ -228,9 +226,7 @@ func (b *RAGContextBuilder) BuildContext(
 			)
 		} else if len(locEvents) > 0 {
 			parts = append(parts, "\n--- Память этой локации ---")
-			for _, e := range locEvents {
-				parts = append(parts, formatStoryEventLine(e, maxEventChars))
-			}
+			parts = append(parts, eventLinesTiered(locEvents, maxEventChars, b.config.minEventChars)...)
 			logger.Debug("Added location events to context",
 				logger.Uint("session_id", gs.ID),
 				logger.Uint("location_id", *gs.CurrentLocationID),
@@ -486,6 +482,29 @@ func generateMiniEvent() string {
 	return selectedSet[rand.Intn(len(selectedSet))]
 }
 
+// eventLinesTiered форматирует список событий (от новых к старым) с убывающим по возрасту
+// бюджетом символов: самое свежее сообщение получает maxChars целиком (важны детали для
+// непрерывности разговора), а каждое следующее, более старое — вдвое меньше, до пола minChars
+// (там уже достаточно компактной фактической выжимки, а не дословного текста). Так средний
+// расход токенов на пачку событий заметно ниже, чем при пересылке всех сообщений полным текстом.
+func eventLinesTiered(events []event.StoryEvent, maxChars, minChars int) []string {
+	if minChars <= 0 || minChars > maxChars {
+		minChars = maxChars
+	}
+	lines := make([]string, 0, len(events))
+	budget := maxChars
+	for _, e := range events {
+		lines = append(lines, formatStoryEventLine(e, budget))
+		if budget > minChars {
+			budget /= 2
+			if budget < minChars {
+				budget = minChars
+			}
+		}
+	}
+	return lines
+}
+
 // formatStoryEventLine форматирует одно событие истории для показа в контексте DM.
 func formatStoryEventLine(e event.StoryEvent, maxEventChars int) string {
 	var authorPrefix string
@@ -540,6 +559,7 @@ func (b *RAGContextBuilder) isInventoryQuery(message string) bool {
 type ragContextConfig struct {
 	maxRecentEvents  int
 	maxEventChars    int
+	minEventChars    int
 	maxRAGDocs       int
 	maxRAGDocChars   int
 	maxRAGTotalChars int
@@ -549,6 +569,12 @@ func loadRAGContextConfig() ragContextConfig {
 	return ragContextConfig{
 		maxRecentEvents:  getEnvInt("RAG_MAX_RECENT_EVENTS", 8),
 		maxEventChars:    getEnvInt("RAG_MAX_EVENT_CHARS", 800),
+		// minEventChars — пол для тиерной обрезки в eventLinesTiered: чем старше сообщение
+		// в списке, тем меньше символов ему выделяется (полный текст нужен только для самых
+		// свежих реплик, старые важны как краткий факт, а не дословно). Это компромисс между
+		// полной пересылкой сырых сообщений и извлечением фактов отдельным LLM-вызовом —
+		// экономит токены без дополнительной LLM-суммаризации.
+		minEventChars:    getEnvInt("RAG_MIN_EVENT_CHARS", 150),
 		maxRAGDocs:       getEnvInt("RAG_MAX_DOCS", 6),
 		maxRAGDocChars:   getEnvInt("RAG_MAX_DOC_CHARS", 1200),
 		maxRAGTotalChars: getEnvInt("RAG_MAX_TOTAL_CHARS", 5000),
