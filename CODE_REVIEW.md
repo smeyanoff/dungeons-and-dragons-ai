@@ -1,60 +1,73 @@
 # CODE_REVIEW — D&D AI Bot
 
-**Обновлено:** 2026-02-25  
-**Назначение:** короткий список активных рисков и областей внимания техлида. Детали реализации и истории см. в `TASKS.md`, `TESTING_REPORT.md`, `PROBLEMS.md`.
+**Обновлено:** 2026-02-09  
+**Назначение:** активные риски и задачи для команды. Детали решённого — в TASKS.md и PROBLEMS.md.
 
 ---
 
-## Текущее состояние
+## Статус
 
-- **P0:** активных блокеров нет.
-- **P1:** спринт февраль 2026 (OOC, медиа, combat guard, playbook, пояснимость проверок, мониторинг) — доставлен и покрыт интеграционными тестами (`TESTING_REPORT.md`).
-- **Прод:** контейнеры `dnd-bot-prod`, `dnd-postgres-prod`, `dnd-qdrant-prod` поднимаются без ошибок, миграции проходят успешно.
-
----
-
-## P1 — Активные риски (для команды)
-
-Все пункты ниже закрыты 2026-07-23; при рецидиве в проде — см. добавленные метрики в `/api/metrics`.
-
-- **Combat analyzer / пустые враги**: **закрыто** — добавлена строгая валидация анализа и тест в `internal/game/application/dm_analyzer/analyze_dm_response_test.go`, гарантирующие, что при `combat_detected` и пустых `enemies` бой не создаётся, а игрок получает fallback‑сообщение вместо боевой механики (см. `PROBLEMS.md` P1.1, `TASKS.md` P1.1).
-- **RAG: `found_docs > 0`, `docs_added = 0`**: **закрыто** — причина: в `internal/rag/infrastructure/vectorstore/qdrant.go` (`Search`) не был указан `WithPayload`, поэтому Qdrant не возвращал payload вместе с найденными точками, и весь текст документов приходил пустым. Добавлен `WithPayload: qdrant.NewWithPayload(true)`. Метрика `rag_empty_result_count` в `/api/metrics` на случай рецидива.
-- **Analyzer-first vs `request_ability_check` в логах**: **закрыто** — целевой флоу зафиксирован (analyzer-first + `needs_ability_check`, tool не регистрируется для DM). Тест `TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat` и документация (`TESTING_REPORT.md`, `tests/integration/README.md`) обновлены под фактическое поведение.
-- **Output-guard / маркеры 🎯 `perform_*`**: **закрыто** — `stripSuspiciousLines` (`internal/telegram/bot_messages.go`) не ловил голое упоминание имени tool'а в прозе DM (только `<tool_call>`/JSON-структуры). Добавлена проверка по списку реальных имён зарегистрированных tools + тесты в `bot_test.go`.
-- **Telegram polling EOF**: **закрыто** — причина: `configureHTTPClient` держал keep-alive пул; long-poll (60с) + синхронная обработка апдейтов (LLM-вызовы, десятки секунд) оставляли соединение простаивать дольше серверного idle-timeout → переиспользование мёртвого соединения → `unexpected EOF`. Исправлено: `DisableKeepAlives: true` + `CloseIdleConnections()` при сетевых ошибках. Метрика `telegram_polling_error_count` в `/api/metrics`. Финальное подтверждение — по прод-логам после деплоя.
+- **P0:** нет блокеров.
+- **P1:** спринт 2026-02 доставлен (OOC, контроль медиа, combat guard). См. TASKS.md архив.
+- **В бэклоге:** TASKS.md P2 доставлен (2026-02-09): playbook, пояснимость проверок, лимит/события медиа, резюме сессии, метрика checks per 100 msg, мониторинг.
 
 ---
 
-## P2 — Низкоприоритетный техдолг
+## P0 — Критичные
 
-(оставляем только то, что реально влияет на эволюцию архитектуры)
-
-- **RAG и хранение контента**: явное разделение "сырых событий", "проиндексированных документов" и "того, что идёт в контекст DM", с инвариантами и инвариант‑тестами.
-- **Граница домена**: часть бизнес-логики всё ещё живёт в `pkg/gigachat` и Telegram-слое; целевое состояние — тонкие адаптеры + доменные сервисы.
-- **Логирование**: сверить, что всё P1/P0 (combat, RAG, утечки текста, Telegram EOF) имеют чёткие structured‑логи и метрики, по которым можно строить алерты.
+*Нет активных.*
 
 ---
 
-## Метрики, за которыми надо смотреть
+## P1 — Остаточное
 
-- **P0/P1 активные проблемы:** цель 0; актуальный список — в `PROBLEMS.md`.
-- **RAG coverage:** доля запросов, где `found_docs > 0`, `docs_added > 0` (и ширина контекста достаточна); счётчик обратного случая — `rag_empty_result_count` в `/api/metrics`.
-- **Telegram polling стабильность:** `telegram_polling_error_count` в `/api/metrics`; при росте — алерт и диагностика.
-- **Output-guard:** `output_leak_count` в `/api/metrics` — цель 0 срабатываний в стабильном режиме.
+- **Опционально:** при росте `internal/telegram/bot.go` (>1000 LOC) вынести middleware/утилиты.
+- **Мониторинг:** доставлен P2.7 (счётчики 402 в GigaChat GetMetrics, RAG-failures и output-leak в internal/metrics, /api/metrics).
 
 ---
 
-## Workflow
+## P2 — Бэклог
 
-- **Новые риски и проблемы**:
-  - Заводим краткое описание в разделах P1/P2 с ссылкой на `PROBLEMS.md`, логи или тесты.
-  - В `TASKS.md` создаём соответствующие задачи с acceptance criteria и ссылкой на этот файл.
-- **Работа по задаче**:
-  - Пока задача в работе, этот файл остаётся источником правды по формулировке риска и ожидаемому целевому состоянию.
-  - При изменении понимания проблемы обновляем описание здесь и в `PROBLEMS.md`.
-- **После закрытия задачи**:
-  - Переносим пункт из P1/P2 в раздел \"Решено (архив)\" с датой/спринтом и кратким результатом.
-  - Убеждаемся, что метрики и логирование, описанные выше, действительно реализованы и отслеживаются.
-  - В `TASKS.md` задача помечена `[x]`, а итог спринта отражает, какие риски были сняты.
+P1 доставлен (2026-02-09): OOC, контроль медиа, combat guard. Остальное в **TASKS.md** P2.
 
+| Область | Статус |
+|---------|--------|
+| **Медиа** | P1.2 + P2.3, P2.4 доставлены (лимит на сессию, мягкое сообщение, значимое событие: локация/NPC/конец боя) |
+| **Combat guard** | P1.3 доставлен (fallback при пустом списке врагов) |
+| **OOC** | P1.1 доставлен (isOOCMetaQuery, ответ без cooldown/проверок) |
+| **Навигация** | Уже учтено (вне cooldown). |
 
+**Из FEEDBACK.md:** сохранять атмосферные описания; проверки — редкие и со stakes; OOC-запросы обрабатывать отдельно.
+
+---
+
+## Решено (архив)
+
+| Проблема | Решение |
+|----------|---------|
+| P0 Combat race / goroutine leaks | Copy return, fallback, managed worker |
+| P1 LLM coupling / flaky tests | Shared tools, split bot, sync без Sleep |
+| Утечки DM / RAG / 402 / visited | Output-guard, RAG fallback, PaymentRequiredError, visited, clear pending on move |
+| DM Analyzer JSON, Combat, TLS, nil panic | 8192 tokens + repair; markers; skip TLS env; nil checks |
+
+---
+
+## Метрики
+
+| Метрика | Цель | Сейчас |
+|---------|------|--------|
+| P0/P1 активные | 0 | 0 ✅ |
+| bot.go LOC | <1500 | ~696 ✅ |
+| Flaky tests | 0 | 0 ✅ |
+| System text leaks | 0 | guarded + tests ✅ |
+| GigaChat 402 | fallback | typed error + упрощённый режим ✅ |
+
+---
+
+## Техдолг (низкий приоритет)
+
+- Дублирование: `truncateRunes` в двух местах.
+- Глобальное состояние: `pkg/logger`.
+- Бизнес-логика в `pkg/gigachat/`.
+- Telegram callback data без валидации.
+- `InsecureSkipVerify` в production.

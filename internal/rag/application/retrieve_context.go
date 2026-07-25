@@ -31,13 +31,9 @@ func (uc *RetrieveContext) GetMetrics() map[string]int64 {
 	}
 }
 
-// Execute ищет документы, релевантные query, в рамках сессии.
-// locationID, если не nil, ограничивает поиск документами этой локации (память локации);
-// если nil — поиск идёт по всей сессии.
 func (uc *RetrieveContext) Execute(
 	ctx context.Context,
 	sessionID uint,
-	locationID *uint,
 	query string,
 	limit int,
 ) ([]domain.Document, error) {
@@ -48,7 +44,7 @@ func (uc *RetrieveContext) Execute(
 		return nil, err
 	}
 
-	docs, err := uc.store.Search(ctx, sessionID, locationID, embedding, limit)
+	docs, err := uc.store.Search(ctx, sessionID, embedding, limit)
 	if err != nil {
 		atomic.AddInt64(&uc.retrieveErrorCount, 1)
 		return nil, err

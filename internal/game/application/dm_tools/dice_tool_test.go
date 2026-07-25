@@ -23,7 +23,7 @@ func (m *mockDiceEventRepository) Save(ctx context.Context, e *event.StoryEvent)
 
 func TestRollDiceTool_Name(t *testing.T) {
 	rollDiceUC := dice.NewRollDiceUseCase()
-	tool := NewRollDiceTool(rollDiceUC, nil, 1, nil)
+	tool := NewRollDiceTool(rollDiceUC, nil, 1)
 	if tool.Name() != "roll_dice" {
 		t.Errorf("expected name 'roll_dice', got '%s'", tool.Name())
 	}
@@ -31,7 +31,7 @@ func TestRollDiceTool_Name(t *testing.T) {
 
 func TestRollDiceTool_Description(t *testing.T) {
 	rollDiceUC := dice.NewRollDiceUseCase()
-	tool := NewRollDiceTool(rollDiceUC, nil, 1, nil)
+	tool := NewRollDiceTool(rollDiceUC, nil, 1)
 	if tool.Description() == "" {
 		t.Error("expected non-empty description")
 	}
@@ -39,7 +39,7 @@ func TestRollDiceTool_Description(t *testing.T) {
 
 func TestRollDiceTool_Parameters(t *testing.T) {
 	rollDiceUC := dice.NewRollDiceUseCase()
-	tool := NewRollDiceTool(rollDiceUC, nil, 1, nil)
+	tool := NewRollDiceTool(rollDiceUC, nil, 1)
 	params := tool.Parameters()
 	if len(params) == 0 {
 		t.Error("expected non-empty parameters")
@@ -180,7 +180,7 @@ func TestRollDiceTool_Execute(t *testing.T) {
 				eventRepo = mockRepo
 			}
 
-			tool := NewRollDiceTool(rollDiceUC, eventRepo, tt.sessionID, nil)
+			tool := NewRollDiceTool(rollDiceUC, eventRepo, tt.sessionID)
 			result, err := tool.Execute(context.Background(), tt.args)
 
 			if tt.expectedError {

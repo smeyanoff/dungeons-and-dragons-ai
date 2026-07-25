@@ -96,7 +96,7 @@ func (b *Bot) buildMapNavigationKeyboard(gs *session.GameSession) *tgbotapi.Inli
 		visitedMark := ""
 		if toLoc := locationMap[conn.ToLocationID]; toLoc != nil {
 			toName = toLoc.Name
-			if toLoc.Visited {
+			if toLoc.Visited || len(toLoc.ScenarioJSON) > 0 {
 				visitedMark = "📍 "
 			}
 		}

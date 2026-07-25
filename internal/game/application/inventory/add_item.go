@@ -98,8 +98,8 @@ func (uc *AddItemUseCase) Execute(ctx context.Context, req AddItemRequest) (stri
 	// Определяем описание
 	description := fmt.Sprintf("Предмет типа %s", itemType)
 
-	// Добавляем предмет (ручное подобранное через /pickup - величина лечения неизвестна, эффектов не будет)
-	if err := inv.AddItem(itemName, description, weight, quantity, itemType, 0); err != nil {
+	// Добавляем предмет
+	if err := inv.AddItem(itemName, description, weight, quantity, itemType); err != nil {
 		if err.Error() == "инвентарь переполнен" {
 			return fmt.Sprintf("❌ Инвентарь переполнен! Невозможно добавить %s (x%d).\n\n💼 Текущий вес: %.2f кг / %.0f кг",
 				itemName, quantity, inv.GetTotalWeight(), inventory.MaxWeight), nil

@@ -122,15 +122,7 @@ go run ./cmd/bot
 ### Опциональные
 
 - `DATABASE_URL` - URL подключения к PostgreSQL (по умолчанию используется значение из docker-compose)
-- `GIGACHAT_MODEL` - модель GigaChat для генерации текста DM (по умолчанию: `GigaChat`).
-  Доступные модели: `GigaChat`, `GigaChat-Plus`, `GigaChat-Pro`, `GigaChat-Max`,
-  `GigaChat-2`, `GigaChat-2-Pro`, `GigaChat-2-Max` (см. `pkg/gigachat/models.go`)
-- `GIGACHAT_ANALYZER_MODEL` - отдельная модель для "проверочных" LLM-вызовов
-  (`dm_analyzer`: определение боя/квестов/предметов, pre-check проверок навыков) —
-  структурная классификация/JSON, а не творческая генерация, поэтому имеет смысл
-  использовать модель дешевле `GIGACHAT_MODEL` (по умолчанию: `GigaChat-2`)
-- `GIGACHAT_EMBEDDINGS_MODEL` - модель GigaChat для эмбеддингов/RAG (по умолчанию: `Embeddings`).
-  Доступные модели: `Embeddings`, `EmbeddingsGigaR`
+- `GIGACHAT_MODEL` - модель GigaChat (по умолчанию: `GigaChat`)
 - `QDRANT_HOST` - хост Qdrant (по умолчанию: `qdrant` в Docker, `localhost` локально)
 - `QDRANT_PORT` - порт Qdrant (по умолчанию: `6334`)
 

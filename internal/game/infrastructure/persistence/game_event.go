@@ -99,34 +99,6 @@ func (r *GameEventRepository) GetBySessionID(
 	return events, nil
 }
 
-// GetRecentByLocation возвращает последние события сессии, произошедшие в указанной локации.
-// Используется для построения "памяти этой локации" в контексте DM.
-func (r *GameEventRepository) GetRecentByLocation(
-	ctx context.Context,
-	sessionID uint,
-	locationID uint,
-	limit int,
-) ([]event.StoryEvent, error) {
-	var events []event.StoryEvent
-
-	err := r.db.WithContext(ctx).
-		Where("game_session_id = ? AND location_id = ?", sessionID, locationID).
-		Order("created_at DESC").
-		Limit(limit).
-		Find(&events).Error
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Переворачиваем, чтобы получить хронологический порядок
-	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-		events[i], events[j] = events[j], events[i]
-	}
-
-	return events, nil
-}
-
 func (r *GameEventRepository) GetAllBySessionID(
 	ctx context.Context,
 	sessionID uint,

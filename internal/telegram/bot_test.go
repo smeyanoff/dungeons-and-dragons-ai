@@ -280,24 +280,6 @@ func TestSanitizeTelegramOutput(t *testing.T) {
 				"...",
 			},
 		},
-		{
-			name:    "bare_tool_name_marker_is_stripped",
-			input:   "Ты атакуешь гоблина мечом!\n🎯 perform_combat_attack\nГоблин падает замертво.",
-			mustNot: []string{"perform_combat_attack", "🎯 perform_combat_attack"},
-			mustHave: []string{
-				"Ты атакуешь гоблина мечом!",
-				"Гоблин падает замертво.",
-			},
-		},
-		{
-			name:    "bare_tool_name_inline_in_sentence_is_stripped",
-			input:   "Вступительный текст.\nПерсонаж пытается request_ability_check против ловушки.\nЗаключительный текст.",
-			mustNot: []string{"request_ability_check"},
-			mustHave: []string{
-				"Вступительный текст.",
-				"Заключительный текст.",
-			},
-		},
 	}
 
 	for _, tt := range tests {

@@ -223,11 +223,9 @@ func (uc *MoveToLocationUseCase) resolveLocationEventsOnLeave(
 		}
 
 		content := buildLocationEventOutcomeStory(&ev, "Событие локации проигнорировано — игрок покинул локацию.")
-		leftLocationID := current.ID
 		if uc.eventRepo != nil {
 			eventItem := &event.StoryEvent{
 				GameSessionID: gs.ID,
-				LocationID:    &leftLocationID,
 				AuthorType:    event.AuthorTypeDM,
 				Content:       content,
 				CreatedAt:     time.Now(),
@@ -239,12 +237,11 @@ func (uc *MoveToLocationUseCase) resolveLocationEventsOnLeave(
 
 		if uc.indexDocUC != nil {
 			doc := ragdomain.Document{
-				ID:         uuid.New().String(),
-				Source:     ragdomain.SourceEvent,
-				SessionID:  gs.ID,
-				LocationID: &leftLocationID,
-				Text:       content,
-				Timestamp:  time.Now(),
+				ID:        uuid.New().String(),
+				Source:    ragdomain.SourceEvent,
+				SessionID: gs.ID,
+				Text:      content,
+				Timestamp: time.Now(),
 			}
 			if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
 				return fmt.Errorf("failed to index location outcome in RAG: %w", err)

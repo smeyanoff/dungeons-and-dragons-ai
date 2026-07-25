@@ -292,7 +292,6 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 			// Создаем событие для результата броска
 			rollEvent := &event.StoryEvent{
 				GameSessionID: gs.ID,
-				LocationID:    gs.CurrentLocationID,
 				AuthorType:    event.AuthorTypePlayer,
 				Content:       result, // Сохраняем полный результат броска
 				CreatedAt:     time.Now(),
@@ -318,12 +317,11 @@ func (b *Bot) handleRoll(ctx context.Context, chatID int64, args string) error {
 					defer ragCancel()
 
 					doc := ragdomain.Document{
-						ID:         uuid.New().String(),
-						Source:     ragdomain.SourceEvent,
-						SessionID:  gs.ID,
-						LocationID: gs.CurrentLocationID,
-						Text:       "Игрок бросил кубик: " + result,
-						Timestamp:  time.Now(),
+						ID:        uuid.New().String(),
+						Source:    ragdomain.SourceEvent,
+						SessionID: gs.ID,
+						Text:      "Игрок бросил кубик: " + result,
+						Timestamp: time.Now(),
 					}
 
 					// Индексируем с таймаутом (не блокируем отправку сообщения при ошибке)

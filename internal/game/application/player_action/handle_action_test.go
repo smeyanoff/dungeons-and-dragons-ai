@@ -38,7 +38,7 @@ func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 type mockVectorStore struct {
 	ensureCollectionFunc func(ctx context.Context) error
 	upsertFunc           func(ctx context.Context, doc ragdomain.Document, embedding []float32) error
-	searchFunc           func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]ragdomain.Document, error)
+	searchFunc           func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]ragdomain.Document, error)
 }
 
 func (m *mockVectorStore) EnsureCollection(ctx context.Context) error {
@@ -55,9 +55,9 @@ func (m *mockVectorStore) Upsert(ctx context.Context, doc ragdomain.Document, em
 	return nil
 }
 
-func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]ragdomain.Document, error) {
+func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]ragdomain.Document, error) {
 	if m.searchFunc != nil {
-		return m.searchFunc(ctx, sessionID, locationID, embedding, limit)
+		return m.searchFunc(ctx, sessionID, embedding, limit)
 	}
 	return nil, nil
 }

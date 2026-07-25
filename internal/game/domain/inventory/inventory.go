@@ -20,8 +20,6 @@ type InventoryItem struct {
 	Weight      float64 // вес в кг
 	Quantity    int     // количество
 	Type        ItemType
-
-	HealingAmount int // сколько HP восстанавливает ОДНА единица предмета при использовании (0 - предмет не лечит)
 }
 
 type ItemType string
@@ -46,7 +44,7 @@ func NewInventory(characterID uint) *Inventory {
 	}
 }
 
-func (inv *Inventory) AddItem(name, description string, weight float64, quantity int, itemType ItemType, healingAmount int) error {
+func (inv *Inventory) AddItem(name, description string, weight float64, quantity int, itemType ItemType) error {
 	// Проверяем вес
 	totalWeight := inv.GetTotalWeight()
 	if totalWeight+weight*float64(quantity) > MaxWeight {
@@ -57,47 +55,37 @@ func (inv *Inventory) AddItem(name, description string, weight float64, quantity
 	for i := range inv.Items {
 		if inv.Items[i].Name == name && inv.Items[i].Type == itemType {
 			inv.Items[i].Quantity += quantity
-			// Если у существующей записи ещё не было указано лечение - подхватываем новое значение
-			if inv.Items[i].HealingAmount == 0 && healingAmount > 0 {
-				inv.Items[i].HealingAmount = healingAmount
-			}
 			return nil
 		}
 	}
 
 	// Добавляем новый предмет
 	inv.Items = append(inv.Items, InventoryItem{
-		Name:          name,
-		Description:   description,
-		Weight:        weight,
-		Quantity:      quantity,
-		Type:          itemType,
-		HealingAmount: healingAmount,
+		Name:        name,
+		Description: description,
+		Weight:      weight,
+		Quantity:    quantity,
+		Type:        itemType,
 	})
 
 	return nil
 }
 
-// RemoveItem удаляет quantity единиц предмета name из инвентаря.
-// Возвращает снимок удалённого предмета (с Quantity = фактически удалённое количество),
-// чтобы вызывающий код мог применить эффекты предмета (например, лечение) при его использовании.
-func (inv *Inventory) RemoveItem(name string, quantity int) (*InventoryItem, error) {
+func (inv *Inventory) RemoveItem(name string, quantity int) error {
 	for i := range inv.Items {
 		if inv.Items[i].Name == name {
 			if inv.Items[i].Quantity < quantity {
-				return nil, errors.New("недостаточно предметов")
+				return errors.New("недостаточно предметов")
 			}
-			removed := inv.Items[i]
-			removed.Quantity = quantity
 			inv.Items[i].Quantity -= quantity
 			if inv.Items[i].Quantity <= 0 {
 				// Удаляем предмет из списка
 				inv.Items = append(inv.Items[:i], inv.Items[i+1:]...)
 			}
-			return &removed, nil
+			return nil
 		}
 	}
-	return nil, errors.New("предмет не найден")
+	return errors.New("предмет не найден")
 }
 
 func (inv *Inventory) GetTotalWeight() float64 {

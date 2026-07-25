@@ -639,10 +639,8 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 // GigaChat 402 доступен через GetMetrics() клиента GigaChat при наличии доступа к нему.
 func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
 	out := map[string]int64{
-		"rag_failure_count":            metrics.RAGFailureCount(),
-		"output_leak_count":            metrics.OutputLeakCount(),
-		"rag_empty_result_count":       metrics.RAGEmptyResultCount(),
-		"telegram_polling_error_count": metrics.TelegramPollingErrorCount(),
+		"rag_failure_count":  metrics.RAGFailureCount(),
+		"output_leak_count":  metrics.OutputLeakCount(),
 	}
 	respondJSON(w, http.StatusOK, out)
 }

@@ -16,8 +16,6 @@ type Document struct {
 	ID        string
 	Source    SourceType
 	SessionID uint
-	// LocationID — локация, к которой относится документ (nil, если документ не привязан к месту).
-	LocationID *uint
-	Text       string
-	Timestamp  time.Time // Временная метка для сортировки по времени
+	Text      string
+	Timestamp time.Time // Временная метка для сортировки по времени
 }

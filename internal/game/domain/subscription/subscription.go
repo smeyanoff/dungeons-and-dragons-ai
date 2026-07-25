@@ -20,7 +20,7 @@ type PlanDetails struct {
 	Price              int  // Цена в рублях в месяц
 	MaxActiveGames     int  // Максимальное количество активных игр (0 = безлимит)
 	MaxMessagesPerDay  int  // Максимальное количество сообщений в день (0 = безлимит)
-	MaxImagesPerGame   int  // Максимальное количество изображений (generate_image) за одну игру (0 = безлимит)
+	MaxImagesPerDay    int  // Максимальное количество изображений в день (0 = безлимит)
 	MaxSaves           int  // Максимальное количество сохранений (0 = безлимит)
 	MaxInventorySlots  int  // Максимальное количество слотов в инвентаре
 	MaxPlayersPerGame  int  // Максимальное количество игроков в игре (0 = безлимит)
@@ -43,7 +43,7 @@ func GetPlanDetails(plan Plan) PlanDetails {
 			Price:              299,
 			MaxActiveGames:     0, // безлимит
 			MaxMessagesPerDay:  0, // безлимит
-			MaxImagesPerGame:   0, // безлимит
+			MaxImagesPerDay:    0, // безлимит
 			MaxSaves:           10,
 			MaxInventorySlots:  50, // базовый + расширенный
 			MaxPlayersPerGame:  1,
@@ -62,7 +62,7 @@ func GetPlanDetails(plan Plan) PlanDetails {
 			Price:              599,
 			MaxActiveGames:     0, // безлимит
 			MaxMessagesPerDay:  0, // безлимит
-			MaxImagesPerGame:   0, // безлимит
+			MaxImagesPerDay:    0, // безлимит
 			MaxSaves:           0, // безлимит
 			MaxInventorySlots:  70,
 			MaxPlayersPerGame:  8,
@@ -81,7 +81,7 @@ func GetPlanDetails(plan Plan) PlanDetails {
 			Price:              0,
 			MaxActiveGames:     1,
 			MaxMessagesPerDay:  50,
-			MaxImagesPerGame:   3,
+			MaxImagesPerDay:    5,
 			MaxSaves:           1,
 			MaxInventorySlots:  30,
 			MaxPlayersPerGame:  1,
