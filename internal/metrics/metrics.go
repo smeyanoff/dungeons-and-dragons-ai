@@ -7,6 +7,7 @@ import "sync/atomic"
 var (
 	ragFailureCount  int64 // неудачная индексация или поиск RAG
 	outputLeakCount  int64 // срабатывание output-guard (удалён tool/internal текст из ответа игроку)
+	injectionAttempt int64 // срабатывание input-guard (заблокирована попытка взлома сессии/DM)
 )
 
 // IncrementRAGFailure увеличивает счётчик неудач RAG и возвращает новое значение.
@@ -27,4 +28,16 @@ func RAGFailureCount() int64 {
 // OutputLeakCount возвращает текущее значение счётчика срабатываний output-guard.
 func OutputLeakCount() int64 {
 	return atomic.LoadInt64(&outputLeakCount)
+}
+
+// IncrementInjectionAttempt увеличивает счётчик заблокированных попыток взлома
+// сессии/DM (input-guard) и возвращает новое значение.
+func IncrementInjectionAttempt() int64 {
+	return atomic.AddInt64(&injectionAttempt, 1)
+}
+
+// InjectionAttemptCount возвращает текущее значение счётчика заблокированных
+// попыток взлома сессии/DM.
+func InjectionAttemptCount() int64 {
+	return atomic.LoadInt64(&injectionAttempt)
 }

@@ -37,6 +37,7 @@ import (
 	"dungeons-and-dragons-ai/internal/metrics"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
+	"dungeons-and-dragons-ai/internal/security"
 	gigachat "dungeons-and-dragons-ai/pkg/gigachat"
 	"dungeons-and-dragons-ai/pkg/logger"
 
@@ -392,6 +393,22 @@ func (uc *HandleActionUseCase) Execute(
 			return validationResult.Message, nil
 		}
 	}
+
+	// Input-guard: проверяем реплику игрока на попытки взлома сессии/DM
+	// (prompt injection, jailbreak-фразы, подделка тегов протокола tool_call)
+	// ДО того, как она попадёт в RAG-контекст, анализатор действий, промпт DM
+	// или будет проиндексирована в RAG (откуда могла бы "всплыть" повторно).
+	guardResult := security.ScanPlayerInput(playerMessage)
+	if guardResult.Blocked {
+		metrics.IncrementInjectionAttempt()
+		logger.Warn("Input guard blocked possible session/DM hijack attempt",
+			logger.Uint("session_id", gs.ID),
+			logger.Int64("chat_id", chatID),
+			logger.String("reason", guardResult.Reason),
+		)
+		return "Мастер Игры не может выполнить эту реплику — опишите действие своего персонажа в игровом мире.", nil
+	}
+	playerMessage = guardResult.Sanitized
 
 	// Проверяем и активируем мировые события перед построением контекста
 	if uc.checkWorldEventsUC != nil {
