@@ -21,19 +21,22 @@ import (
 )
 
 type RAGContextBuilder struct {
-	simpleBuilder  *SimpleContextBuilder
-	retrieveUC     *application.RetrieveContext
-	eventRepo      EventRepository
-	inventoryRepo  InventoryRepository
-	combatRepo     CombatRepository
-	worldEventRepo WorldEventRepository
-	config         ragContextConfig
-	ragAttempts    int64
-	ragFallbacks   int64
+	simpleBuilder    *SimpleContextBuilder
+	retrieveUC       *application.RetrieveContext
+	eventRepo        EventRepository
+	inventoryRepo    InventoryRepository
+	combatRepo       CombatRepository
+	worldEventRepo   WorldEventRepository
+	campaignFactRepo CampaignFactRepository
+	config           ragContextConfig
+	ragAttempts      int64
+	ragFallbacks     int64
 }
 
 type EventRepository interface {
 	GetBySessionID(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)
+	// GetRecentByLocation возвращает последние события сессии в конкретной локации ("память этой локации").
+	GetRecentByLocation(ctx context.Context, sessionID uint, locationID uint, limit int) ([]event.StoryEvent, error)
 }
 
 type InventoryRepository interface {
@@ -46,6 +49,11 @@ type CombatRepository interface {
 
 type WorldEventRepository interface {
 	GetActiveByWorldID(ctx context.Context, worldID uint) ([]world.WorldEvent, error)
+}
+
+// CampaignFactRepository — источник курируемых устойчивых фактов кампании ("память всей игры").
+type CampaignFactRepository interface {
+	GetByWorldID(ctx context.Context, worldID uint, limit int) ([]world.CampaignFact, error)
 }
 
 func NewRAGContextBuilder(
@@ -68,6 +76,11 @@ func NewRAGContextBuilder(
 // SetWorldEventRepository устанавливает репозиторий мировых событий
 func (b *RAGContextBuilder) SetWorldEventRepository(repo WorldEventRepository) {
 	b.worldEventRepo = repo
+}
+
+// SetCampaignFactRepository устанавливает репозиторий ключевых фактов кампании
+func (b *RAGContextBuilder) SetCampaignFactRepository(repo CampaignFactRepository) {
+	b.campaignFactRepo = repo
 }
 
 func (b *RAGContextBuilder) BuildContext(
@@ -154,10 +167,33 @@ func (b *RAGContextBuilder) BuildContext(
 		}
 	}
 
-	// Получаем последние сообщения из истории (последние 5-10 сообщений)
-	// Это обеспечивает контекст недавних событий
+	// Ключевые факты кампании — курируемая "память всей игры", не привязанная к текущей локации.
+	if b.campaignFactRepo != nil && gs.World.ID > 0 {
+		factsCtx, factsCancel := context.WithTimeout(ctx, 5*time.Second)
+		facts, err := b.campaignFactRepo.GetByWorldID(factsCtx, gs.World.ID, 15)
+		factsCancel()
+		if err != nil {
+			logger.Warn("Failed to get campaign facts for context",
+				logger.ErrorField(err),
+				logger.Uint("world_id", gs.World.ID),
+			)
+		} else if len(facts) > 0 {
+			parts = append(parts, "\n--- Ключевые факты кампании ---")
+			for _, f := range facts {
+				parts = append(parts, fmt.Sprintf("[%s] %s", f.Category, f.Text))
+			}
+			logger.Debug("Added campaign facts to context",
+				logger.Uint("world_id", gs.World.ID),
+				logger.Int("facts_count", len(facts)),
+			)
+		}
+	}
+
+	// Тонкая нить непрерывности: несколько последних сообщений без фильтра по локации,
+	// чтобы не терять разговорный поток сразу после перехода в новую локацию.
 	if b.eventRepo != nil {
-		recentEvents, err := b.eventRepo.GetBySessionID(ctx, gs.ID, 10)
+		const continuityLimit = 4
+		recentEvents, err := b.eventRepo.GetBySessionID(ctx, gs.ID, continuityLimit)
 		if err != nil {
 			logger.Warn("Failed to get recent events for context",
 				logger.ErrorField(err),
@@ -165,29 +201,36 @@ func (b *RAGContextBuilder) BuildContext(
 			)
 		} else if len(recentEvents) > 0 {
 			parts = append(parts, "\n--- Последние сообщения ---")
-			// Берем последние 5-10 сообщений для контекста
-			startIdx := 0
-			if len(recentEvents) > maxRecentEvents {
-				startIdx = len(recentEvents) - maxRecentEvents
-			}
-			for i := startIdx; i < len(recentEvents); i++ {
-				e := recentEvents[i]
-				var authorPrefix string
-				switch e.AuthorType {
-				case event.AuthorTypePlayer:
-					authorPrefix = "Игрок"
-				case event.AuthorTypeDM:
-					authorPrefix = "DM"
-				case event.AuthorTypeNPC:
-					authorPrefix = e.AuthorName
-				default:
-					authorPrefix = "?"
-				}
-				parts = append(parts, fmt.Sprintf("%s: %s", authorPrefix, truncateText(e.Content, maxEventChars)))
+			for _, e := range recentEvents {
+				parts = append(parts, formatStoryEventLine(e, maxEventChars))
 			}
 			logger.Debug("Added recent events to context",
 				logger.Uint("session_id", gs.ID),
-				logger.Int("events_count", len(recentEvents)-startIdx),
+				logger.Int("events_count", len(recentEvents)),
+			)
+		}
+	}
+
+	// Память этой локации: события сессии, произошедшие именно здесь.
+	// Отдельно от общей нити непрерывности выше — это то, что "имеет значение конкретно
+	// в этой локации" и не должно смешиваться с событиями из других мест.
+	if b.eventRepo != nil && gs.CurrentLocationID != nil {
+		locEvents, err := b.eventRepo.GetRecentByLocation(ctx, gs.ID, *gs.CurrentLocationID, maxRecentEvents)
+		if err != nil {
+			logger.Warn("Failed to get location events for context",
+				logger.ErrorField(err),
+				logger.Uint("session_id", gs.ID),
+				logger.Uint("location_id", *gs.CurrentLocationID),
+			)
+		} else if len(locEvents) > 0 {
+			parts = append(parts, "\n--- Память этой локации ---")
+			for _, e := range locEvents {
+				parts = append(parts, formatStoryEventLine(e, maxEventChars))
+			}
+			logger.Debug("Added location events to context",
+				logger.Uint("session_id", gs.ID),
+				logger.Uint("location_id", *gs.CurrentLocationID),
+				logger.Int("events_count", len(locEvents)),
 			)
 		}
 	}
@@ -296,7 +339,9 @@ func (b *RAGContextBuilder) BuildContext(
 	ragCtx, ragCancel := context.WithTimeout(ctx, 15*time.Second)
 	defer ragCancel()
 	atomic.AddInt64(&b.ragAttempts, 1)
-	ragDocs, err := b.retrieveUC.Execute(ragCtx, gs.ID, playerMessage, maxRAGDocs)
+	// Ограничиваем семантический поиск текущей локацией, если она известна — это ловит более
+	// старые визиты в то же место, которые вышли за пределы окна "Память этой локации" выше.
+	ragDocs, err := b.retrieveUC.Execute(ragCtx, gs.ID, gs.CurrentLocationID, playerMessage, maxRAGDocs)
 	if err != nil {
 		// Если RAG не работает, возвращаем базовый контекст с информацией о персонаже
 		fallbacks := atomic.AddInt64(&b.ragFallbacks, 1)
@@ -328,7 +373,7 @@ func (b *RAGContextBuilder) BuildContext(
 	)
 
 	if len(ragDocs) > 0 {
-		parts = append(parts, "\n--- Релевантная история игры (найдено через поиск) ---")
+		parts = append(parts, "\n--- Память этой локации (похожие моменты, найдено через поиск) ---")
 		totalChars := 0
 		addedCount := 0
 		for i, doc := range ragDocs {
@@ -353,6 +398,13 @@ func (b *RAGContextBuilder) BuildContext(
 			totalChars += len(docText)
 			parts = append(parts, fmt.Sprintf("[%d] %s", addedCount+1, docText))
 			addedCount++
+		}
+		if addedCount == 0 {
+			metrics.IncrementRAGEmptyResult()
+			logger.Warn("RAG found documents but none were added to context (empty text after trim)",
+				logger.Uint("session_id", gs.ID),
+				logger.Int("docs_found", len(ragDocs)),
+			)
 		}
 		logger.Debug("Added RAG documents to context",
 			logger.Uint("session_id", gs.ID),
@@ -428,6 +480,22 @@ func generateMiniEvent() string {
 	}
 
 	return selectedSet[rand.Intn(len(selectedSet))]
+}
+
+// formatStoryEventLine форматирует одно событие истории для показа в контексте DM.
+func formatStoryEventLine(e event.StoryEvent, maxEventChars int) string {
+	var authorPrefix string
+	switch e.AuthorType {
+	case event.AuthorTypePlayer:
+		authorPrefix = "Игрок"
+	case event.AuthorTypeDM:
+		authorPrefix = "DM"
+	case event.AuthorTypeNPC:
+		authorPrefix = e.AuthorName
+	default:
+		authorPrefix = "?"
+	}
+	return fmt.Sprintf("%s: %s", authorPrefix, truncateText(e.Content, maxEventChars))
 }
 
 func truncateText(text string, maxLen int) string {

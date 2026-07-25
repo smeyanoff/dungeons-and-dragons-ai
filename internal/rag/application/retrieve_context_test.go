@@ -24,7 +24,7 @@ func (m *mockRetrieveEmbedder) Embed(ctx context.Context, text string) ([]float3
 type mockRetrieveVectorStore struct {
 	ensureCollectionFunc func(ctx context.Context) error
 	upsertFunc           func(ctx context.Context, doc domain.Document, embedding []float32) error
-	searchFunc           func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error)
+	searchFunc           func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error)
 }
 
 func (m *mockRetrieveVectorStore) EnsureCollection(ctx context.Context) error {
@@ -41,9 +41,9 @@ func (m *mockRetrieveVectorStore) Upsert(ctx context.Context, doc domain.Documen
 	return nil
 }
 
-func (m *mockRetrieveVectorStore) Search(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+func (m *mockRetrieveVectorStore) Search(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 	if m.searchFunc != nil {
-		return m.searchFunc(ctx, sessionID, embedding, limit)
+		return m.searchFunc(ctx, sessionID, locationID, embedding, limit)
 	}
 	return nil, nil
 }
@@ -70,7 +70,7 @@ func TestRetrieveContext_Execute(t *testing.T) {
 					}
 					return []float32{0.1, 0.2, 0.3}, nil
 				}
-				store.searchFunc = func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+				store.searchFunc = func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 					if sessionID != 1 {
 						t.Errorf("unexpected sessionID: %d", sessionID)
 					}
@@ -112,7 +112,7 @@ func TestRetrieveContext_Execute(t *testing.T) {
 				embedder.embedFunc = func(ctx context.Context, text string) ([]float32, error) {
 					return []float32{0.1, 0.2, 0.3}, nil
 				}
-				store.searchFunc = func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+				store.searchFunc = func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 					return []domain.Document{}, nil
 				}
 			},
@@ -144,7 +144,7 @@ func TestRetrieveContext_Execute(t *testing.T) {
 				embedder.embedFunc = func(ctx context.Context, text string) ([]float32, error) {
 					return []float32{0.1, 0.2, 0.3}, nil
 				}
-				store.searchFunc = func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+				store.searchFunc = func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 					return nil, errors.New("vector store error")
 				}
 			},
@@ -159,7 +159,7 @@ func TestRetrieveContext_Execute(t *testing.T) {
 				embedder.embedFunc = func(ctx context.Context, text string) ([]float32, error) {
 					return []float32{0.1, 0.2, 0.3}, nil
 				}
-				store.searchFunc = func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+				store.searchFunc = func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 					if limit != 2 {
 						t.Errorf("expected limit 2, got %d", limit)
 					}
@@ -189,7 +189,7 @@ func TestRetrieveContext_Execute(t *testing.T) {
 
 			uc := NewRetrieveContext(embedder, store)
 
-			result, err := uc.Execute(context.Background(), tt.sessionID, tt.query, tt.limit)
+			result, err := uc.Execute(context.Background(), tt.sessionID, nil, tt.query, tt.limit)
 
 			if tt.expectedError {
 				if err == nil {

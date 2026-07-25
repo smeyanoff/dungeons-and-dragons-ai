@@ -21,21 +21,21 @@ func (m *mockFollowupEventRepository) Save(ctx context.Context, e *event.StoryEv
 }
 
 func TestSendFollowupMessageTool_Name(t *testing.T) {
-	tool := NewSendFollowupMessageTool(nil, 1, 123)
+	tool := NewSendFollowupMessageTool(nil, 1, 123, nil)
 	if tool.Name() != "send_followup_message" {
 		t.Errorf("expected name 'send_followup_message', got '%s'", tool.Name())
 	}
 }
 
 func TestSendFollowupMessageTool_Description(t *testing.T) {
-	tool := NewSendFollowupMessageTool(nil, 1, 123)
+	tool := NewSendFollowupMessageTool(nil, 1, 123, nil)
 	if tool.Description() == "" {
 		t.Error("expected non-empty description")
 	}
 }
 
 func TestSendFollowupMessageTool_Parameters(t *testing.T) {
-	tool := NewSendFollowupMessageTool(nil, 1, 123)
+	tool := NewSendFollowupMessageTool(nil, 1, 123, nil)
 	params := tool.Parameters()
 	if len(params) == 0 {
 		t.Error("expected non-empty parameters")
@@ -244,7 +244,7 @@ func TestSendFollowupMessageTool_Execute(t *testing.T) {
 				eventRepo = mockRepo
 			}
 
-			tool := NewSendFollowupMessageTool(eventRepo, tt.sessionID, tt.chatID)
+			tool := NewSendFollowupMessageTool(eventRepo, tt.sessionID, tt.chatID, nil)
 			result, err := tool.Execute(context.Background(), tt.args)
 
 			if tt.expectedError {

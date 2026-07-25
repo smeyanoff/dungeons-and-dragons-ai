@@ -13,16 +13,25 @@ import (
 
 const (
 	collectionName = "dnd"
-	// GigaChat-Embeddings размерность векторов
-	embeddingDimension = 1024
+	// defaultEmbeddingDimension используется, если размерность не передана явно
+	// (обратная совместимость с NewQdrantStore без второго аргумента).
+	defaultEmbeddingDimension = 1024
 )
 
 type QdrantStore struct {
-	Client *qdrant.Client
+	Client             *qdrant.Client
+	embeddingDimension uint64
 }
 
-func NewQdrantStore(client *qdrant.Client) domain.VectorStore {
-	return &QdrantStore{Client: client}
+// NewQdrantStore создает хранилище векторов. dimension — размерность векторов
+// текущей модели эмбеддингов (см. gigachat.EmbeddingDimension); 0 означает
+// "использовать значение по умолчанию" (1024, старая GigaChat-Embeddings).
+func NewQdrantStore(client *qdrant.Client, dimension int) domain.VectorStore {
+	dim := uint64(defaultEmbeddingDimension)
+	if dimension > 0 {
+		dim = uint64(dimension)
+	}
+	return &QdrantStore{Client: client, embeddingDimension: dim}
 }
 
 // EnsureCollection реализует domain.VectorStore
@@ -47,23 +56,45 @@ func (s *QdrantStore) ensureCollection(ctx context.Context) error {
 	}
 
 	if collectionExists {
-		// Коллекция существует, проверяем размерность
+		// Коллекция существует — проверяем, что её размерность совпадает с текущей
+		// моделью эмбеддингов. Несовпадение (например, после смены
+		// GIGACHAT_EMBEDDINGS_MODEL на модель с другой размерностью вектора)
+		// раньше не обнаруживалось здесь и всплывало только при первом поиске
+		// как runtime-ошибка Qdrant ("Vector dimension error"), из-за чего RAG-контекст
+		// молча переставал работать. Пересоздаем коллекцию с правильной размерностью:
+		// это безопасно, т.к. RAG-индекс — производный кэш для семантического поиска,
+		// а не источник истины (сама история хода игры хранится в Postgres).
 		collectionInfo, err := s.Client.GetCollectionInfo(ctx, collectionName)
 		if err != nil {
 			return fmt.Errorf("failed to get collection info: %w", err)
 		}
 
-		// Проверяем размерность (упрощенная проверка - если коллекция существует, считаем что OK)
-		// Более детальная проверка требует доступа к Config.Params, который может отличаться в разных версиях API
-		_ = collectionInfo // Используем для проверки доступности
+		existingDim := uint64(0)
+		if params := collectionInfo.GetConfig().GetParams(); params != nil {
+			if vp := params.GetVectorsConfig().GetParams(); vp != nil {
+				existingDim = vp.GetSize()
+			}
+		}
+
+		if existingDim == 0 || existingDim == s.embeddingDimension {
+			return nil
+		}
+
+		if err := s.Client.DeleteCollection(ctx, collectionName); err != nil {
+			return fmt.Errorf("failed to delete collection with stale vector dimension (existing: %d, expected: %d): %w", existingDim, s.embeddingDimension, err)
+		}
+		collectionExists = false
+	}
+
+	if collectionExists {
 		return nil
 	}
 
-	// Коллекция не существует, создаем её
+	// Коллекция не существует (или пересоздается из-за несовпадения размерности) — создаем её
 	err = s.Client.CreateCollection(ctx, &qdrant.CreateCollection{
 		CollectionName: collectionName,
 		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
-			Size:     embeddingDimension,
+			Size:     s.embeddingDimension,
 			Distance: qdrant.Distance_Cosine,
 		}),
 	})
@@ -79,6 +110,16 @@ func (s *QdrantStore) Upsert(
 	doc domain.Document,
 	embedding []float32,
 ) error {
+
+	payload := map[string]*qdrant.Value{
+		"session_id": {Kind: &qdrant.Value_IntegerValue{IntegerValue: safeUintToInt64(doc.SessionID)}},
+		"source":     {Kind: &qdrant.Value_StringValue{StringValue: string(doc.Source)}},
+		"text":       {Kind: &qdrant.Value_StringValue{StringValue: doc.Text}},
+		"timestamp":  {Kind: &qdrant.Value_IntegerValue{IntegerValue: doc.Timestamp.Unix()}},
+	}
+	if doc.LocationID != nil {
+		payload["location_id"] = &qdrant.Value{Kind: &qdrant.Value_IntegerValue{IntegerValue: safeUintToInt64(*doc.LocationID)}}
+	}
 
 	_, err := s.Client.Upsert(ctx, &qdrant.UpsertPoints{
 		CollectionName: collectionName,
@@ -96,12 +137,7 @@ func (s *QdrantStore) Upsert(
 						},
 					},
 				},
-				Payload: map[string]*qdrant.Value{
-					"session_id": {Kind: &qdrant.Value_IntegerValue{IntegerValue: safeUintToInt64(doc.SessionID)}},
-					"source":     {Kind: &qdrant.Value_StringValue{StringValue: string(doc.Source)}},
-					"text":       {Kind: &qdrant.Value_StringValue{StringValue: doc.Text}},
-					"timestamp":  {Kind: &qdrant.Value_IntegerValue{IntegerValue: doc.Timestamp.Unix()}},
-				},
+				Payload: payload,
 			},
 		},
 	})
@@ -112,6 +148,7 @@ func (s *QdrantStore) Upsert(
 func (s *QdrantStore) Search(
 	ctx context.Context,
 	sessionID uint,
+	locationID *uint,
 	embedding []float32,
 	limit int,
 ) ([]domain.Document, error) {
@@ -124,26 +161,46 @@ func (s *QdrantStore) Search(
 		return nil, fmt.Errorf("limit exceeds maximum allowed value %d, got %d", math.MaxInt, limit)
 	}
 	limitUint64 := uint64(limit)
-	resp, err := s.Client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
-		CollectionName: collectionName,
-		Vector:         embedding,
-		Limit:          limitUint64,
-		Filter: &qdrant.Filter{
-			Must: []*qdrant.Condition{
-				{
-					ConditionOneOf: &qdrant.Condition_Field{
-						Field: &qdrant.FieldCondition{
-							Key: "session_id",
-							Match: &qdrant.Match{
-								MatchValue: &qdrant.Match_Integer{
-									Integer: safeUintToInt64(sessionID),
-								},
-							},
+
+	conditions := []*qdrant.Condition{
+		{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "session_id",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Integer{
+							Integer: safeUintToInt64(sessionID),
 						},
 					},
 				},
 			},
 		},
+	}
+	if locationID != nil {
+		conditions = append(conditions, &qdrant.Condition{
+			ConditionOneOf: &qdrant.Condition_Field{
+				Field: &qdrant.FieldCondition{
+					Key: "location_id",
+					Match: &qdrant.Match{
+						MatchValue: &qdrant.Match_Integer{
+							Integer: safeUintToInt64(*locationID),
+						},
+					},
+				},
+			},
+		})
+	}
+
+	resp, err := s.Client.GetPointsClient().Search(ctx, &qdrant.SearchPoints{
+		CollectionName: collectionName,
+		Vector:         embedding,
+		Limit:          limitUint64,
+		Filter: &qdrant.Filter{
+			Must: conditions,
+		},
+		// Без этого Qdrant по умолчанию не возвращает payload вместе с точками —
+		// найденные документы приходят с пустым текстом (found_docs>0, docs_added=0).
+		WithPayload: qdrant.NewWithPayload(true),
 	})
 	if err != nil {
 		return nil, err
@@ -157,6 +214,12 @@ func (s *QdrantStore) Search(
 			SessionID: sessionID,
 			Source:    domain.SourceType(payload["source"].GetStringValue()),
 			Text:      payload["text"].GetStringValue(),
+		}
+		if locValue, ok := payload["location_id"]; ok {
+			if locID := locValue.GetIntegerValue(); locID > 0 {
+				loc := uint(locID)
+				doc.LocationID = &loc
+			}
 		}
 		// Восстанавливаем timestamp, если он есть
 		if tsValue, ok := payload["timestamp"]; ok {

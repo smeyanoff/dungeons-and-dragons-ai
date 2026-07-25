@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	imageapp "dungeons-and-dragons-ai/internal/game/application/image"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	"dungeons-and-dragons-ai/pkg/logger"
@@ -13,9 +12,8 @@ import (
 type CheckLimitsUseCase struct {
 	subscriptionRepo *persistence.SubscriptionRepository
 	sessionRepo      session.Repository
-	sessionCountRepo SessionCountRepository          // Для подсчета активных игр и сохранений
-	eventCountRepo   EventCountRepository            // Для подсчета сообщений
-	imageLimiter     imageapp.ImageGenerationLimiter // Для подсчета использования изображений
+	sessionCountRepo SessionCountRepository // Для подсчета активных игр и сохранений
+	eventCountRepo   EventCountRepository   // Для подсчета сообщений
 }
 
 // SessionCountRepository интерфейс для подсчета сессий
@@ -34,14 +32,12 @@ func NewCheckLimitsUseCase(
 	sessionRepo session.Repository,
 	sessionCountRepo SessionCountRepository,
 	eventCountRepo EventCountRepository,
-	imageLimiter imageapp.ImageGenerationLimiter, // Опционально, для подсчета использования изображений
 ) *CheckLimitsUseCase {
 	return &CheckLimitsUseCase{
 		subscriptionRepo: subscriptionRepo,
 		sessionRepo:      sessionRepo,
 		sessionCountRepo: sessionCountRepo,
 		eventCountRepo:   eventCountRepo,
-		imageLimiter:     imageLimiter,
 	}
 }
 
@@ -50,12 +46,14 @@ type LimitType string
 const (
 	LimitTypeActiveGames    LimitType = "active_games"
 	LimitTypeMessagesPerDay LimitType = "messages_per_day"
-	LimitTypeImagesPerDay   LimitType = "images_per_day"
+	LimitTypeImagesPerGame  LimitType = "images_per_game"
 	LimitTypeSaves          LimitType = "saves"
 )
 
 type CheckLimitRequest struct {
-	TgUserID  int64
+	TgUserID int64
+	// ChatID — требуется для лимитов, привязанных к конкретной игре (например, LimitTypeImagesPerGame)
+	ChatID    int64
 	LimitType LimitType
 }
 
@@ -141,8 +139,8 @@ func (uc *CheckLimitsUseCase) Execute(ctx context.Context, req CheckLimitRequest
 		}
 		remaining = limit - current
 
-	case LimitTypeImagesPerDay:
-		limit = planDetails.MaxImagesPerDay
+	case LimitTypeImagesPerGame:
+		limit = planDetails.MaxImagesPerGame
 		if limit == 0 {
 			// безлимит
 			return &CheckLimitResponse{
@@ -153,23 +151,20 @@ func (uc *CheckLimitsUseCase) Execute(ctx context.Context, req CheckLimitRequest
 				Message:   "У вас безлимит изображений",
 			}, nil
 		}
-		// Считаем изображения за день через лимитер (если доступен)
-		if uc.imageLimiter != nil {
-			quota, err := uc.imageLimiter.GetRemainingQuota(ctx, req.TgUserID)
-			if err == nil && quota >= 0 {
-				// quota = оставшаяся квота, current = limit - quota
-				remaining = quota
-				current = limit - quota
-			} else {
-				// Если не удалось получить квоту, считаем что использовано 0
-				current = 0
-				remaining = limit
+		// Считаем изображения за ЭТУ игру (счётчик хранится в GameSession, не сбрасывается по дням)
+		current = 0
+		if uc.sessionRepo != nil && req.ChatID != 0 {
+			gs, err := uc.sessionRepo.GetByChatID(ctx, req.ChatID)
+			if err != nil {
+				logger.Warn("CheckLimitsUseCase: failed to get session for image limit",
+					logger.ErrorField(err),
+					logger.Int64("chat_id", req.ChatID),
+				)
+			} else if gs != nil {
+				current = GetOptionalActivityUsage(gs, "image_generation")
 			}
-		} else {
-			// Если лимитер недоступен, временно считаем 0
-			current = 0
-			remaining = limit
 		}
+		remaining = limit - current
 
 	case LimitTypeSaves:
 		limit = planDetails.MaxSaves
@@ -230,6 +225,22 @@ func (uc *CheckLimitsUseCase) Execute(ctx context.Context, req CheckLimitRequest
 		Remaining: remaining,
 		Message:   message,
 	}, nil
+}
+
+// RecordImageGeneration увеличивает счётчик использования generate_image для этой игры (chatID).
+func (uc *CheckLimitsUseCase) RecordImageGeneration(ctx context.Context, chatID int64) error {
+	if uc.sessionRepo == nil || chatID == 0 {
+		return nil
+	}
+	gs, err := uc.sessionRepo.GetByChatID(ctx, chatID)
+	if err != nil {
+		return fmt.Errorf("failed to get session: %w", err)
+	}
+	if gs == nil {
+		return nil
+	}
+	IncrementOptionalActivityUsage(gs, "image_generation")
+	return uc.sessionRepo.Save(ctx, gs)
 }
 
 // CanUseFeature проверяет, может ли пользователь использовать функцию

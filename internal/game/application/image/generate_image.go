@@ -44,6 +44,7 @@ type GenerateImageRequest struct {
 	EntityName      string // Уникальное имя сущности для кэширования (используется когда EntityID = 0)
 	ForceRegenerate bool   // Принудительная регенерация (игнорировать кэш)
 	UserID          int64  // ID пользователя для проверки лимитов
+	ChatID          int64  // ID игры (сессии), к которой привязан лимит "изображений за игру"
 	SkipLimitCheck  bool   // Пропустить проверку лимита (для Premium пользователей)
 }
 
@@ -59,13 +60,13 @@ type GenerateImageResponse struct {
 func (uc *ImageGenerationUseCase) Execute(ctx context.Context, req GenerateImageRequest) (*GenerateImageResponse, error) {
 	// Проверяем лимит генерации (если требуется и лимитер настроен)
 	if !req.SkipLimitCheck && uc.limiter != nil && req.UserID > 0 {
-		canGenerate, err := uc.limiter.CheckLimit(ctx, req.UserID)
+		canGenerate, err := uc.limiter.CheckLimit(ctx, req.ChatID, req.UserID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check limit: %w", err)
 		}
 		if !canGenerate {
-			remaining, _ := uc.limiter.GetRemainingQuota(ctx, req.UserID)
-			return nil, fmt.Errorf("daily image generation limit reached (remaining: %d)", remaining)
+			remaining, _ := uc.limiter.GetRemainingQuota(ctx, req.ChatID, req.UserID)
+			return nil, fmt.Errorf("image generation limit for this game reached (remaining: %d)", remaining)
 		}
 	}
 
@@ -167,7 +168,7 @@ func (uc *ImageGenerationUseCase) Execute(ctx context.Context, req GenerateImage
 
 	// Записываем факт генерации в лимитер (если настроен)
 	if !req.SkipLimitCheck && uc.limiter != nil && req.UserID > 0 {
-		if err := uc.limiter.RecordGeneration(ctx, req.UserID); err != nil {
+		if err := uc.limiter.RecordGeneration(ctx, req.ChatID, req.UserID); err != nil {
 			logger.Warn("Failed to record image generation",
 				logger.ErrorField(err),
 				logger.Int64("user_id", req.UserID),

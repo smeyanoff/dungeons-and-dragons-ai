@@ -33,12 +33,12 @@ func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 
 // Mock VectorStore
 type mockVectorStore struct {
-	searchFunc func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error)
+	searchFunc func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error)
 }
 
-func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 	if m.searchFunc != nil {
-		return m.searchFunc(ctx, sessionID, embedding, limit)
+		return m.searchFunc(ctx, sessionID, locationID, embedding, limit)
 	}
 	return nil, nil
 }
@@ -53,12 +53,20 @@ func (m *mockVectorStore) Upsert(ctx context.Context, doc domain.Document, embed
 
 // Mock EventRepository
 type mockEventRepository struct {
-	getBySessionIDFunc func(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)
+	getBySessionIDFunc      func(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)
+	getRecentByLocationFunc func(ctx context.Context, sessionID uint, locationID uint, limit int) ([]event.StoryEvent, error)
 }
 
 func (m *mockEventRepository) GetBySessionID(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error) {
 	if m.getBySessionIDFunc != nil {
 		return m.getBySessionIDFunc(ctx, sessionID, limit)
+	}
+	return []event.StoryEvent{}, nil
+}
+
+func (m *mockEventRepository) GetRecentByLocation(ctx context.Context, sessionID uint, locationID uint, limit int) ([]event.StoryEvent, error) {
+	if m.getRecentByLocationFunc != nil {
+		return m.getRecentByLocationFunc(ctx, sessionID, locationID, limit)
 	}
 	return []event.StoryEvent{}, nil
 }
@@ -140,7 +148,7 @@ func TestRAGContextBuilder_BuildContext(t *testing.T) {
 				e.embedFunc = func(ctx context.Context, text string) ([]float32, error) {
 					return []float32{0.1, 0.2, 0.3}, nil
 				}
-				v.searchFunc = func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+				v.searchFunc = func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 					return []domain.Document{
 						{Text: "Previous event 1"},
 						{Text: "Previous event 2"},
@@ -225,7 +233,7 @@ func TestRAGContextBuilder_BuildContext(t *testing.T) {
 				e.embedFunc = func(ctx context.Context, text string) ([]float32, error) {
 					return []float32{0.1, 0.2, 0.3}, nil
 				}
-				v.searchFunc = func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+				v.searchFunc = func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 					return []domain.Document{}, nil
 				}
 			},
@@ -254,7 +262,7 @@ func TestRAGContextBuilder_BuildContext(t *testing.T) {
 				e.embedFunc = func(ctx context.Context, text string) ([]float32, error) {
 					return []float32{0.1, 0.2, 0.3}, nil
 				}
-				v.searchFunc = func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+				v.searchFunc = func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 					return []domain.Document{
 						{Text: "Previous event"},
 					}, nil
@@ -393,7 +401,7 @@ func TestRAGContextBuilder_BuildContext_WithInventoryQuery(t *testing.T) {
 		},
 	}
 	mockVectorStore := &mockVectorStore{
-		searchFunc: func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+		searchFunc: func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 			return []domain.Document{}, nil
 		},
 	}
@@ -639,7 +647,7 @@ func TestRAGContextBuilder_BuildContext_PlayerCount(t *testing.T) {
 		},
 	}
 	mockVectorStore := &mockVectorStore{
-		searchFunc: func(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]domain.Document, error) {
+		searchFunc: func(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 			return []domain.Document{}, nil
 		},
 	}

@@ -28,6 +28,7 @@ func (a *ImageGenerationServiceAdapter) GenerateImage(ctx context.Context, req d
 		EntityID:        req.EntityID,
 		ForceRegenerate: req.ForceRegenerate,
 		UserID:          req.UserID,
+		ChatID:          req.ChatID,
 		SkipLimitCheck:  req.SkipLimitCheck,
 	}
 

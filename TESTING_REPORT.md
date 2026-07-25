@@ -36,7 +36,7 @@ go test -v -count=1 -timeout 60m ./tests/integration/... -run 'TestTelegramGamep
 - **UX ability check**: игрок видит подсказку с `DC` и `/roll` сразу после действия, без «тишины».
 - **Состояние сессии**: pending check очищается после `/roll`.
 - **Навигация**: callback из `/map` действительно переключает локацию.
-- **Monitoring промптов/тулзов**: в `llm_logs` есть записи по `chat_id`, и среди них присутствуют запросы с tools; ожидается `request_ability_check`.
+- **Monitoring промптов/тулзов**: в `llm_logs` есть записи по `chat_id`, и среди них присутствуют запросы с tools (combat/inventory/etc). Проверка навыка — analyzer-first: `request_ability_check` не регистрируется как tool для DM и не должен встречаться в `ToolsCalls`; сигнал флоу — player-facing prompt "🎲 Нужна проверка ... DC ... /roll" сразу после действия игрока.
 
 ## Исправления, сделанные по итогам тестирования
 
@@ -97,6 +97,7 @@ chat_id=1770290740524597943, логов=11
 ## Проблемы, найденные при интеграционном тестировании (2026-02-05 14:26:40)
 
 1. в llm_logs не нашли tool вызов request_ability_check (ожидали tool-first ability check)  
-   **Уточнение (2026-02-09):** текущий флоу — analyzer-first: проверка решается отдельным LLM-анализом действия (`needs_ability_check` в JSON), а не вызовом tool DM. Ожидание «request_ability_check в llm_logs» может быть неверным; см. CODE_REVIEW.md P1 п.3 — уточнить тест или документацию.
+   **Уточнение (2026-02-09):** текущий флоу — analyzer-first: проверка решается отдельным LLM-анализом действия (`needs_ability_check` в JSON), а не вызовом tool DM. Ожидание «request_ability_check в llm_logs» может быть неверным; см. CODE_REVIEW.md P1 п.3 — уточнить тест или документацию.  
+   **Решено (2026-07-23):** тест `TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat` обновлён — убрана проверка на tool-вызов `request_ability_check` в `llm_logs` (структурно невозможна, т.к. тул не регистрируется для DM), сигналом analyzer-first флоу служит player-facing prompt ability check, который тест уже проверял отдельно (шаг 3).
 
 ---

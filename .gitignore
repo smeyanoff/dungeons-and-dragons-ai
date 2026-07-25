@@ -49,6 +49,10 @@ security-scan-output.log
 test_output.log
 test_results_summary.txt
 
+# LLM cassette record/replay: leftover temp files from atomic write (see llm_cassette_test.go).
+# Cassette JSON files themselves (tests/integration/cassettes/*.json) ARE committed intentionally.
+tests/integration/cassettes/*.tmp
+
 # Runtime data directories (created by scripts, should not be committed)
 backups/
 data/postgres/

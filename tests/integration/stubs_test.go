@@ -82,9 +82,10 @@ func (noopVectorStore) Upsert(ctx context.Context, doc ragdomain.Document, embed
 	return nil
 }
 
-func (noopVectorStore) Search(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]ragdomain.Document, error) {
+func (noopVectorStore) Search(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]ragdomain.Document, error) {
 	_ = ctx
 	_ = sessionID
+	_ = locationID
 	_ = embedding
 	_ = limit
 	return nil, nil

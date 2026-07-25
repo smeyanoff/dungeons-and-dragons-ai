@@ -72,7 +72,7 @@ func (m *mockVectorStore) Upsert(ctx context.Context, doc ragdomain.Document, em
 	return m.err
 }
 
-func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, embedding []float32, limit int) ([]ragdomain.Document, error) {
+func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]ragdomain.Document, error) {
 	return nil, nil
 }
 

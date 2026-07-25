@@ -237,7 +237,7 @@ func (uc *GetMapUseCase) buildMapSignature(w *world.World, currentLocationID *ui
 		totalConnections += len(loc.Connections)
 		totalNPCs += len(loc.NPCs)
 		totalMonsters += len(loc.Monsters)
-		if loc.Visited || len(loc.ScenarioJSON) > 0 {
+		if loc.Visited {
 			knownLocations++
 		}
 	}
@@ -325,7 +325,7 @@ func (uc *GetMapUseCase) buildKnownLocations(w *world.World, currentLocationID *
 	}
 	for i := range w.Locations {
 		loc := &w.Locations[i]
-		if loc.Visited || len(loc.ScenarioJSON) > 0 {
+		if loc.Visited {
 			known[loc.ID] = true
 		}
 	}

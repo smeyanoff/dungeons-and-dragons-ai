@@ -9,6 +9,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -96,6 +97,11 @@ type GameSession struct {
 
 	// ImagesGeneratedInSession — число изображений, сгенерированных в текущей сессии (лимит на сессию)
 	ImagesGeneratedInSession int `gorm:"default:0"`
+
+	// OptionalActivityUsage — счётчики использования "необязательных" активностей за эту игру
+	// (например, явных вызовов generate_image тулза), ограничиваемых по тарифу подписки.
+	// Сериализованная map[string]int, например {"image_generation": 2}.
+	OptionalActivityUsage datatypes.JSON `gorm:"type:jsonb"`
 
 	// Cooperative play fields
 	IsCooperative   bool   `gorm:"default:false"` // Включает режим совместной игры
