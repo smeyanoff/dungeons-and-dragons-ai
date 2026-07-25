@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/combat"
+	"dungeons-and-dragons-ai/internal/game/domain/event"
 	"dungeons-and-dragons-ai/internal/game/domain/item"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
@@ -37,6 +39,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&character.Stats{},
 		&quest.Quest{},
 		&item.Item{},
+		&event.StoryEvent{},
+		&combat.Combat{},
+		&combat.CombatParticipant{},
+		&world.CampaignFact{},
 	)
 	if err != nil {
 		t.Fatalf("Failed to run migrations: %v", err)
