@@ -76,7 +76,7 @@ type DMResponseAnalysis struct {
 
 // KeyFact представляет один устойчивый факт кампании, извлечённый из ответа DM.
 type KeyFact struct {
-	Category string `json:"category"` // reputation|quest|decision|relationship
+	Category string `json:"category"` // reputation|quest|decision|relationship|npc_identity
 	Text     string `json:"text"`     // Краткая формулировка факта
 }
 
@@ -1205,6 +1205,18 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 				analysis.GeneratedImages = append(analysis.GeneratedImages, *generatedImage)
 			}
 		}
+
+		// Пассивная подстраховка на случай, если DM не вызвал save_campaign_fact сам:
+		// фиксируем идентичность NPC (имя + роль/родство из описания) сразу при первом
+		// представлении, чтобы DM не мог позже противоречиво переопределить, кто это.
+		npcName := strings.TrimSpace(analysis.NPCMet.Name)
+		npcDesc := strings.TrimSpace(analysis.NPCMet.Description)
+		if npcName != "" && npcDesc != "" {
+			analysis.KeyFacts = append(analysis.KeyFacts, KeyFact{
+				Category: string(world.FactCategoryNPCIdentity),
+				Text:     fmt.Sprintf("%s — %s", npcName, npcDesc),
+			})
+		}
 	}
 
 	// Обрабатываем конец боя (значимое событие для автогена изображений)
@@ -1251,7 +1263,7 @@ func (uc *AnalyzeDMResponseUseCase) recordCampaignFacts(ctx context.Context, fac
 		category := world.CampaignFactCategory(strings.TrimSpace(kf.Category))
 		switch category {
 		case world.FactCategoryReputation, world.FactCategoryQuest, world.FactCategoryDecision,
-			world.FactCategoryRelationship, world.FactCategoryItem:
+			world.FactCategoryRelationship, world.FactCategoryItem, world.FactCategoryNPCIdentity:
 			// валидная категория
 		default:
 			category = world.FactCategoryDecision
@@ -2278,6 +2290,9 @@ NPC (npc_met):
 - Устанавливай только при первой встрече с NPC
 - Ключевые слова: "встречаешь", "видишь", "подходит", "появляется", "знакомишься"
 - is_first_meeting=true для новых NPC
+- description — ОБЯЗАТЕЛЬНО включи роль/родство/принадлежность NPC, если они прозвучали в тексте
+  (например, "дочь старосты Ольгерда", "подмастерье кузнеца", "стражник у восточных ворот").
+  Это описание используется как факт памяти о том, кто есть кто — не теряй эту деталь.
 
 КОМПАНЬОНЫ, ПРИСОЕДИНЯЮЩИЕСЯ К ОТРЯДУ (companion_joined):
 - Устанавливай companion_joined, ТОЛЬКО если NPC явно и окончательно присоединяется к отряду игрока как соратник/спутник
@@ -2316,9 +2331,11 @@ NPC (npc_met):
 КЛЮЧЕВЫЕ ФАКТЫ КАМПАНИИ (key_facts):
 - Добавляй запись, ТОЛЬКО если произошло что-то значимое для ВСЕЙ кампании, а не только для текущей локации:
   устойчивое изменение репутации, важное решение с долгими последствиями, веха главного или побочного квеста,
-  заметный сдвиг в отношениях с NPC/фракцией
+  заметный сдвиг в отношениях с NPC/фракцией, представление именованного NPC с его ролью/родством
 - category: "reputation" (репутация), "quest" (веха квеста), "decision" (решение с последствиями),
-  "relationship" (отношения с NPC/фракцией)
+  "relationship" (отношения с NPC/фракцией), "npc_identity" (кто есть кто — имя + роль/родство NPC)
+- Для "npc_identity" — фиксируй сразу при первом представлении NPC (например, "Мира — дочь старосты
+  Ольгерда"), чтобы позже не возникло противоречия (тот же NPC не должен стать "дочерью кузнеца")
 - text — 1 короткое предложение, без пересказа диалога
 - НЕ добавляй факты о рутинных или локальных действиях (осмотр комнаты, обычный диалог, находка мелкого предмета)
 - Если ничего значимого для кампании не произошло, оставь key_facts пустым массивом []

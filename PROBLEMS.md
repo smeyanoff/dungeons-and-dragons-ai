@@ -1,6 +1,6 @@
 # Активные проблемы разработки
 
-**Обновлено:** 2026-07-23  
+**Обновлено:** 2026-07-25  
 Детали и action items — в **CODE_REVIEW.md**. Статусы задач — в **TASKS.md**.
 
 ---
@@ -20,6 +20,7 @@
 | 3 | Тест request_ability_check: ожидание tool в llm_logs при analyzer-first флоу | **Решена** — тест `TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat` обновлён: убрана проверка на tool-вызов `request_ability_check` в `llm_logs` (структурно невозможна — тул не регистрируется для DM), целевой флоу (analyzer-first + player-facing prompt) уже проверялся отдельно и оставлен как единственный критерий. Документация (`TESTING_REPORT.md`, `tests/integration/README.md`) синхронизирована. |
 | 4 | Output-guard: маркеры 🎯 perform_* в ответе DM — проверить, что не уходят игроку | **Решена** — в `sanitizeTelegramOutput`/`stripSuspiciousLines` (`internal/telegram/bot_messages.go`) не было защиты от голого упоминания имени tool'а в прозе (например, "🎯 perform_combat_attack"), только от `<tool_call>`/`<tool_result>`/JSON-структур. Добавлена проверка по списку реальных имён зарегистрированных tools; тесты в `bot_test.go`. |
 | 5 | Telegram polling EOF: periodic `unexpected EOF` при getUpdates, растущий backoff → возможны окна, когда бот не читает апдейты | **Решена** — `configureHTTPClient`: `DisableKeepAlives: true` устраняет переиспользование протухшего keep-alive соединения после долгой обработки апдейтов между циклами polling; `CloseIdleConnections()` при сетевых ошибках — доп. страховка; счётчик `telegram_polling_error_count` в `/api/metrics` (см. `internal/telegram/bot.go`). |
+| 6 | NPC-несостыковки: один и тот же NPC получал противоречивые факты между репликами DM (пример из игры: дочь старосты представилась как дочь кузнеца) — идентичность NPC не попадала в устойчивую память кампании, только в RAG/локальную историю | **Решена** — добавлена категория `npc_identity` в `CampaignFact` (`domain/world/campaign_fact.go`). `save_campaign_fact` (`dm_tools/campaign_fact_tool.go`) теперь явно просит DM сохранять идентичность NPC (имя+роль/родство) сразу при первом представлении. Плюс пассивная подстраховка в `dm_analyzer/analyze_dm_response.go`: при `npc_met.is_first_meeting` автоматически создаётся `KeyFact` категории `npc_identity` из имени+описания NPC, даже если DM не вызвал инструмент сам. |
 
 **Решённые ранее:** Flaky tests, размер bot.go, GigaChat 402, утечки системного текста, RAG fallback, навигация/visited — см. архив ниже.
 

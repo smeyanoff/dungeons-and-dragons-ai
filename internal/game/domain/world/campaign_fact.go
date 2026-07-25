@@ -11,6 +11,7 @@ const (
 	FactCategoryDecision     CampaignFactCategory = "decision"     // Решение игрока с долгими последствиями
 	FactCategoryRelationship CampaignFactCategory = "relationship" // Отношения с NPC/фракцией
 	FactCategoryItem         CampaignFactCategory = "item"         // Получение персонажем значимого предмета
+	FactCategoryNPCIdentity  CampaignFactCategory = "npc_identity" // Кто есть кто: имя, роль, родство/принадлежность NPC
 )
 
 // CampaignFact — курируемый устойчивый факт кампании (не привязан к конкретной локации).
