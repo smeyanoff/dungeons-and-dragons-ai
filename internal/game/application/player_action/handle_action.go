@@ -1516,9 +1516,9 @@ func summarizeBlockContent(title, content string, maxLen int) string {
 	}
 
 	switch title {
-	case "Последние сообщения":
+	case "Последние сообщения", "Память этой локации":
 		return summarizeRecentMessages(content, maxLen)
-	case "Релевантная история игры (найдено через поиск)":
+	case "Память этой локации (похожие моменты, найдено через поиск)":
 		return summarizeRAGHistory(content, maxLen)
 	case "Инвентарь персонажа":
 		return summarizeInventory(content, maxLen)
@@ -1647,9 +1647,13 @@ func contextBlockPriority(title string) int {
 		return 2
 	case "Последние сообщения":
 		return 2
+	case "Память этой локации":
+		return 2
+	case "Ключевые факты кампании":
+		return 2
 	case "Инвентарь персонажа":
 		return 2
-	case "Релевантная история игры (найдено через поиск)":
+	case "Память этой локации (похожие моменты, найдено через поиск)":
 		return 3
 	case "Игроки в сессии":
 		return 4
