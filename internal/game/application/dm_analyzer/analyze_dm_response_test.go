@@ -10,6 +10,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/llm/domain"
 	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 )
@@ -552,13 +553,13 @@ func TestAnalyzeDMResponseUseCase_Execute(t *testing.T) {
 				combatRepo,
 				questRepo,
 				inventoryRepo,
-				1,   // sessionID
-				123, // chatID
-				1,   // worldID
-				1,   // characterID
-				1,   // playerID
+				1,     // sessionID
+				123,   // chatID
+				1,     // worldID
+				1,     // characterID
+				1,     // playerID
 				false, // autoGenerateImages
-				0,   // imagesGeneratedInSession
+				0,     // imagesGeneratedInSession
 			)
 
 			analysis, err := uc.Execute(context.Background(), tt.dmResponse)
@@ -860,14 +861,14 @@ func TestAnalyzeDMResponseUseCase_HandleCombatStart_DefaultHPAC(t *testing.T) {
 				llm,
 				combatRepo,
 				questRepo,
-				nil, // inventoryRepo
-				1,   // sessionID
-				123, // chatID
-				1,   // worldID
-				1,   // characterID
-				1,   // playerID
+				nil,   // inventoryRepo
+				1,     // sessionID
+				123,   // chatID
+				1,     // worldID
+				1,     // characterID
+				1,     // playerID
 				false, // autoGenerateImages
-				0,   // imagesGeneratedInSession
+				0,     // imagesGeneratedInSession
 			)
 
 			ctx := context.Background()
@@ -904,13 +905,13 @@ func TestAnalyzeDMResponseUseCase_EmptyAnalysisNoMarkers_TrustedWithoutRetry(t *
 		combatRepo,
 		questRepo,
 		inventoryRepo,
-		1,   // sessionID
-		123, // chatID
-		1,   // worldID
-		1,   // characterID
-		1,   // playerID
+		1,     // sessionID
+		123,   // chatID
+		1,     // worldID
+		1,     // characterID
+		1,     // playerID
 		false, // autoGenerateImages
-		0,   // imagesGeneratedInSession
+		0,     // imagesGeneratedInSession
 	)
 
 	// Обычный повествовательный ход без каких-либо маркеров боя — пустой анализ
@@ -946,13 +947,13 @@ func TestAnalyzeDMResponseUseCase_EmptyAnalysisWithMarkers_ImmediateFallbackNoRe
 		combatRepo,
 		questRepo,
 		inventoryRepo,
-		1,   // sessionID
-		123, // chatID
-		1,   // worldID
-		1,   // characterID
-		1,   // playerID
+		1,     // sessionID
+		123,   // chatID
+		1,     // worldID
+		1,     // characterID
+		1,     // playerID
 		false, // autoGenerateImages
-		0,   // imagesGeneratedInSession
+		0,     // imagesGeneratedInSession
 	)
 
 	analysis, err := uc.Execute(context.Background(), "Начался бой с орком")
@@ -1129,4 +1130,117 @@ func containsMiddle(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// Mock Campaign Fact Repository
+type mockCampaignFactRepo struct {
+	saved []*world.CampaignFact
+}
+
+func (m *mockCampaignFactRepo) Save(ctx context.Context, fact *world.CampaignFact) error {
+	m.saved = append(m.saved, fact)
+	return nil
+}
+
+// TestAnalyzeDMResponseUseCase_ItemsReceived_SkipsLikelyDuplicateWeapon воспроизводит
+// баг из реальной игровой сессии: DM несколько раз подряд описывает вручение одного и того
+// же уникального меча под слегка разными названиями ("меч Авроры" -> "светящийся клинок
+// Авроры"). Экстрактор каждый раз находит items_received, но предмет уже есть в инвентаре -
+// повторного добавления быть не должно.
+func TestAnalyzeDMResponseUseCase_ItemsReceived_SkipsLikelyDuplicateWeapon(t *testing.T) {
+	llm := &mockLLM{}
+	combatRepo := &mockCombatRepo{}
+	questRepo := &mockQuestRepo{}
+
+	existingInv := inventory.NewInventory(1)
+	_ = existingInv.AddItem("меч Авроры", "старый меч с выгравированными символами света", 2, 1, inventory.ItemTypeWeapon, 0)
+
+	var savedInv *inventory.Inventory
+	inventoryRepo := &mockInventoryRepo{
+		getByCharacterIDFunc: func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
+			return existingInv, nil
+		},
+		saveFunc: func(ctx context.Context, inv *inventory.Inventory) error {
+			savedInv = inv
+			return nil
+		},
+	}
+
+	llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
+		analysis := DMResponseAnalysis{
+			ItemsReceived: []Item{
+				{
+					Name:        "светящийся клинок Авроры",
+					Description: "старинный меч, способный освещать путь через темноту",
+					Weight:      0,
+					Quantity:    1,
+					Type:        "weapon",
+				},
+			},
+		}
+		data, _ := json.Marshal(analysis)
+		return string(data), nil
+	}
+
+	uc := NewAnalyzeDMResponseUseCase(llm, combatRepo, questRepo, inventoryRepo, 1, 123, 1, 1, 1, false, 0)
+
+	_, err := uc.Execute(context.Background(), "Элиан протягивает вам меч обеими руками, будто передавая священную реликвию.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if savedInv == nil {
+		t.Fatalf("expected inventory to be saved")
+	}
+	if len(savedInv.Items) != 1 {
+		t.Fatalf("expected the duplicate sword not to be added, got %d items: %+v", len(savedInv.Items), savedInv.Items)
+	}
+	if savedInv.Items[0].Quantity != 1 {
+		t.Fatalf("expected quantity to remain 1 (not stacked), got %d", savedInv.Items[0].Quantity)
+	}
+}
+
+// TestAnalyzeDMResponseUseCase_ItemsReceived_RecordsCampaignFact проверяет, что получение
+// нового предмета фиксируется в ключевых фактах кампании (категория "item") - эта память,
+// в отличие от "Инвентарь персонажа", подмешивается DM на каждом ходу, а не только по прямому
+// запросу об инвентаре, и должна не давать DM повторно предлагать уже выданный предмет.
+func TestAnalyzeDMResponseUseCase_ItemsReceived_RecordsCampaignFact(t *testing.T) {
+	llm := &mockLLM{}
+	combatRepo := &mockCombatRepo{}
+	questRepo := &mockQuestRepo{}
+
+	inventoryRepo := &mockInventoryRepo{
+		getByCharacterIDFunc: func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
+			return inventory.NewInventory(1), nil
+		},
+	}
+	campaignFactRepo := &mockCampaignFactRepo{}
+
+	llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
+		analysis := DMResponseAnalysis{
+			ItemsReceived: []Item{
+				{Name: "Меч Авроры", Description: "Светящийся клинок", Weight: 2, Quantity: 1, Type: "weapon"},
+			},
+		}
+		data, _ := json.Marshal(analysis)
+		return string(data), nil
+	}
+
+	uc := NewAnalyzeDMResponseUseCase(llm, combatRepo, questRepo, inventoryRepo, 1, 123, 1, 1, 1, false, 0)
+	uc.SetCampaignFactRepository(campaignFactRepo)
+
+	_, err := uc.Execute(context.Background(), "Элиан вручает вам меч Авроры.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(campaignFactRepo.saved) != 1 {
+		t.Fatalf("expected 1 campaign fact to be saved, got %d", len(campaignFactRepo.saved))
+	}
+	if campaignFactRepo.saved[0].Category != world.FactCategoryItem {
+		t.Errorf("expected fact category %q, got %q", world.FactCategoryItem, campaignFactRepo.saved[0].Category)
+	}
+	if !contains(campaignFactRepo.saved[0].Text, "Меч Авроры") {
+		t.Errorf("expected fact text to mention item name, got %q", campaignFactRepo.saved[0].Text)
+	}
 }

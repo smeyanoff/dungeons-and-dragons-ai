@@ -75,7 +75,11 @@ func (uc *GetInventoryUseCase) Execute(
 		parts = append(parts, "Предметы:")
 		for _, item := range inv.Items {
 			emoji := getItemEmoji(item.Type)
-			parts = append(parts, fmt.Sprintf("%s %s x%d (%.2f кг)", emoji, item.Name, item.Quantity, item.Weight*float64(item.Quantity)))
+			line := fmt.Sprintf("%s %s x%d (%.2f кг)", emoji, item.Name, item.Quantity, item.Weight*float64(item.Quantity))
+			if item.Equipped {
+				line += " [экипировано]"
+			}
+			parts = append(parts, line)
 			if item.Description != "" {
 				parts = append(parts, fmt.Sprintf("   %s", item.Description))
 			}

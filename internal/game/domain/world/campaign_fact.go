@@ -7,9 +7,10 @@ type CampaignFactCategory string
 
 const (
 	FactCategoryReputation   CampaignFactCategory = "reputation"   // Репутация игрока/группы
-	FactCategoryQuest        CampaignFactCategory = "quest"         // Веха главного или побочного квеста
-	FactCategoryDecision     CampaignFactCategory = "decision"      // Решение игрока с долгими последствиями
+	FactCategoryQuest        CampaignFactCategory = "quest"        // Веха главного или побочного квеста
+	FactCategoryDecision     CampaignFactCategory = "decision"     // Решение игрока с долгими последствиями
 	FactCategoryRelationship CampaignFactCategory = "relationship" // Отношения с NPC/фракцией
+	FactCategoryItem         CampaignFactCategory = "item"         // Получение персонажем значимого предмета
 )
 
 // CampaignFact — курируемый устойчивый факт кампании (не привязан к конкретной локации).

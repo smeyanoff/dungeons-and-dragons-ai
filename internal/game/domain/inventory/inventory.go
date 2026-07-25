@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"errors"
+	"strings"
 )
 
 type Inventory struct {
@@ -21,7 +22,20 @@ type InventoryItem struct {
 	Quantity    int     // количество
 	Type        ItemType
 
-	HealingAmount int // сколько HP восстанавливает ОДНА единица предмета при использовании (0 - предмет не лечит)
+	HealingAmount int  // сколько HP восстанавливает ОДНА единица предмета при использовании (0 - предмет не лечит)
+	Equipped      bool // надет/используется ли предмет персонажем прямо сейчас (актуально для weapon и armor)
+}
+
+// IsEquippable определяет, можно ли надеть/взять в руки предмет данного типа.
+// Расходники, инструменты и разное экипировать нельзя - только оружие и броню.
+func (t ItemType) IsEquippable() bool {
+	return t == ItemTypeWeapon || t == ItemTypeArmor
+}
+
+// normalizeItemName приводит название предмета к виду, устойчивому к регистру и пробелам,
+// чтобы "Меч" и "меч " считались одним и тем же предметом.
+func normalizeItemName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 type ItemType string
@@ -53,9 +67,9 @@ func (inv *Inventory) AddItem(name, description string, weight float64, quantity
 		return errors.New("инвентарь переполнен")
 	}
 
-	// Ищем существующий предмет того же типа
+	// Ищем существующий предмет того же типа (сравнение без учета регистра и пробелов)
 	for i := range inv.Items {
-		if inv.Items[i].Name == name && inv.Items[i].Type == itemType {
+		if normalizeItemName(inv.Items[i].Name) == normalizeItemName(name) && inv.Items[i].Type == itemType {
 			inv.Items[i].Quantity += quantity
 			// Если у существующей записи ещё не было указано лечение - подхватываем новое значение
 			if inv.Items[i].HealingAmount == 0 && healingAmount > 0 {
@@ -83,7 +97,7 @@ func (inv *Inventory) AddItem(name, description string, weight float64, quantity
 // чтобы вызывающий код мог применить эффекты предмета (например, лечение) при его использовании.
 func (inv *Inventory) RemoveItem(name string, quantity int) (*InventoryItem, error) {
 	for i := range inv.Items {
-		if inv.Items[i].Name == name {
+		if normalizeItemName(inv.Items[i].Name) == normalizeItemName(name) {
 			if inv.Items[i].Quantity < quantity {
 				return nil, errors.New("недостаточно предметов")
 			}
@@ -114,4 +128,67 @@ func (inv *Inventory) GetItemCount() int {
 		count += item.Quantity
 	}
 	return count
+}
+
+// EquipItem надевает/берет в руки предмет по имени. Оружие и броня занимают по одному "слоту":
+// если у персонажа уже что-то экипировано в этом типе, оно автоматически снимается.
+// Возвращает указатель на экипированный предмет.
+func (inv *Inventory) EquipItem(name string) (*InventoryItem, error) {
+	target := normalizeItemName(name)
+
+	idx := -1
+	for i := range inv.Items {
+		if normalizeItemName(inv.Items[i].Name) == target {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return nil, errors.New("предмет не найден")
+	}
+
+	if !inv.Items[idx].Type.IsEquippable() {
+		return nil, errors.New("этот предмет нельзя экипировать")
+	}
+
+	if inv.Items[idx].Equipped {
+		return &inv.Items[idx], nil
+	}
+
+	// Снимаем всё, что уже занимает этот же слот (тип предмета)
+	for i := range inv.Items {
+		if i != idx && inv.Items[i].Type == inv.Items[idx].Type {
+			inv.Items[i].Equipped = false
+		}
+	}
+
+	inv.Items[idx].Equipped = true
+	return &inv.Items[idx], nil
+}
+
+// UnequipItem снимает предмет по имени. Если предмет не был экипирован - ошибка.
+func (inv *Inventory) UnequipItem(name string) (*InventoryItem, error) {
+	target := normalizeItemName(name)
+
+	for i := range inv.Items {
+		if normalizeItemName(inv.Items[i].Name) == target {
+			if !inv.Items[i].Equipped {
+				return nil, errors.New("предмет не экипирован")
+			}
+			inv.Items[i].Equipped = false
+			return &inv.Items[i], nil
+		}
+	}
+	return nil, errors.New("предмет не найден")
+}
+
+// GetEquippedItems возвращает все экипированные предметы персонажа.
+func (inv *Inventory) GetEquippedItems() []InventoryItem {
+	equipped := make([]InventoryItem, 0)
+	for _, item := range inv.Items {
+		if item.Equipped {
+			equipped = append(equipped, item)
+		}
+	}
+	return equipped
 }
