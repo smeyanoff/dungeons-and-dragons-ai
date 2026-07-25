@@ -364,6 +364,7 @@ func main() {
 
 	// Инициализация use cases
 	initCampaignUC := campaign.NewInitCampaignUseCase(llm, worldRepo)
+	initCampaignUC.SetCampaignFactRepository(campaignFactRepo)
 	simpleContextBuilder := contextbuilder.NewSimpleContextBuilder()
 	ragContextBuilder := contextbuilder.NewRAGContextBuilder(simpleContextBuilder, retrieveContextUC, eventRepo, inventoryRepo, combatRepo)
 	ragContextBuilder.SetWorldEventRepository(worldEventRepo)
