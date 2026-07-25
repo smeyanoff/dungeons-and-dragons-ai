@@ -9,6 +9,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/combat"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/quest"
+	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/llm/domain"
 	llmtools "dungeons-and-dragons-ai/internal/llm/domain/tools"
 )
@@ -963,6 +964,154 @@ func TestAnalyzeDMResponseUseCase_EmptyAnalysisWithMarkers_ImmediateFallbackNoRe
 	}
 	if !analysis.CombatDetected || len(analysis.Enemies) == 0 {
 		t.Fatalf("expected fallback combat analysis, got %+v", analysis)
+	}
+}
+
+// Mock Full Session Repository (для тестов присоединения/ухода компаньонов)
+type mockFullSessionRepo struct {
+	gs        *session.GameSession
+	saveCalls int
+}
+
+func (m *mockFullSessionRepo) GetByChatID(ctx context.Context, chatID int64) (*session.GameSession, error) {
+	return m.gs, nil
+}
+
+func (m *mockFullSessionRepo) Save(ctx context.Context, gs *session.GameSession) error {
+	m.saveCalls++
+	m.gs = gs
+	return nil
+}
+
+func TestAnalyzeDMResponseUseCase_CompanionJoined_AddsToParty(t *testing.T) {
+	llm := &mockLLM{}
+	combatRepo := &mockCombatRepo{}
+	questRepo := &mockQuestRepo{}
+	inventoryRepo := &mockInventoryRepo{}
+	fullSessionRepo := &mockFullSessionRepo{gs: &session.GameSession{ChatID: 123}}
+
+	llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
+		analysis := DMResponseAnalysis{
+			CompanionJoined: &CompanionJoined{
+				Name:        "Алара",
+				Class:       "Воин",
+				Description: "Бывшая наёмница, уставшая от одиночества",
+			},
+		}
+		data, _ := json.Marshal(analysis)
+		return string(data), nil
+	}
+
+	uc := NewAnalyzeDMResponseUseCase(llm, combatRepo, questRepo, inventoryRepo, 1, 123, 1, 1, 1, false, 0)
+	uc.SetFullSessionRepository(fullSessionRepo)
+
+	analysis, err := uc.Execute(context.Background(), "Алара присоединяется к вашему отряду в качестве соратника.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if analysis.CompanionJoined == nil || analysis.CompanionJoined.Name != "Алара" {
+		t.Fatalf("expected companion_joined to be Алара, got %+v", analysis.CompanionJoined)
+	}
+	if len(fullSessionRepo.gs.Companions) != 1 {
+		t.Fatalf("expected 1 companion in party, got %d", len(fullSessionRepo.gs.Companions))
+	}
+	if fullSessionRepo.gs.Companions[0].Name != "Алара" || fullSessionRepo.gs.Companions[0].Class != "Воин" {
+		t.Fatalf("unexpected companion data: %+v", fullSessionRepo.gs.Companions[0])
+	}
+	if fullSessionRepo.gs.Companions[0].HP <= 0 || fullSessionRepo.gs.Companions[0].HP != fullSessionRepo.gs.Companions[0].MaxHP {
+		t.Fatalf("expected companion HP to be positive and equal to MaxHP, got %+v", fullSessionRepo.gs.Companions[0])
+	}
+	if analysis.CompanionEventMessage == "" || !contains(analysis.CompanionEventMessage, "Алара") {
+		t.Fatalf("expected companion event message to mention Алара, got %q", analysis.CompanionEventMessage)
+	}
+}
+
+func TestAnalyzeDMResponseUseCase_CompanionJoined_SkipsDuplicate(t *testing.T) {
+	llm := &mockLLM{}
+	combatRepo := &mockCombatRepo{}
+	questRepo := &mockQuestRepo{}
+	inventoryRepo := &mockInventoryRepo{}
+	existing := session.Companion{Name: "Алара", Class: "Воин", HP: 30, MaxHP: 30}
+	fullSessionRepo := &mockFullSessionRepo{gs: &session.GameSession{ChatID: 123, Companions: []session.Companion{existing}}}
+
+	llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
+		analysis := DMResponseAnalysis{
+			CompanionJoined: &CompanionJoined{Name: "алара", Class: "Воин"}, // разный регистр — то же имя
+		}
+		data, _ := json.Marshal(analysis)
+		return string(data), nil
+	}
+
+	uc := NewAnalyzeDMResponseUseCase(llm, combatRepo, questRepo, inventoryRepo, 1, 123, 1, 1, 1, false, 0)
+	uc.SetFullSessionRepository(fullSessionRepo)
+
+	_, err := uc.Execute(context.Background(), "Алара всё ещё с вами.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fullSessionRepo.gs.Companions) != 1 {
+		t.Fatalf("expected companion not to be duplicated, got %d companions", len(fullSessionRepo.gs.Companions))
+	}
+}
+
+func TestAnalyzeDMResponseUseCase_CompanionLeft_RemovesFromParty(t *testing.T) {
+	llm := &mockLLM{}
+	combatRepo := &mockCombatRepo{}
+	questRepo := &mockQuestRepo{}
+	inventoryRepo := &mockInventoryRepo{}
+	existing := session.Companion{ID: 7, Name: "Борис", Class: "Маг", HP: 25, MaxHP: 25}
+	fullSessionRepo := &mockFullSessionRepo{gs: &session.GameSession{ChatID: 123, Companions: []session.Companion{existing}}}
+
+	llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
+		analysis := DMResponseAnalysis{
+			CompanionLeft: &CompanionLeft{Name: "Борис", Reason: "погиб, защищая отряд"},
+		}
+		data, _ := json.Marshal(analysis)
+		return string(data), nil
+	}
+
+	uc := NewAnalyzeDMResponseUseCase(llm, combatRepo, questRepo, inventoryRepo, 1, 123, 1, 1, 1, false, 0)
+	uc.SetFullSessionRepository(fullSessionRepo)
+
+	analysis, err := uc.Execute(context.Background(), "Борис героически погибает, защищая отряд от врагов.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if analysis.CompanionLeft == nil || analysis.CompanionLeft.Name != "Борис" {
+		t.Fatalf("expected companion_left to be Борис, got %+v", analysis.CompanionLeft)
+	}
+	if len(fullSessionRepo.gs.Companions) != 0 {
+		t.Fatalf("expected companion to be removed from party, got %+v", fullSessionRepo.gs.Companions)
+	}
+	if analysis.CompanionEventMessage == "" || !contains(analysis.CompanionEventMessage, "Борис") {
+		t.Fatalf("expected companion event message to mention Борис, got %q", analysis.CompanionEventMessage)
+	}
+}
+
+func TestAnalyzeDMResponseUseCase_CompanionLeft_UnknownNameIsNoop(t *testing.T) {
+	llm := &mockLLM{}
+	combatRepo := &mockCombatRepo{}
+	questRepo := &mockQuestRepo{}
+	inventoryRepo := &mockInventoryRepo{}
+	fullSessionRepo := &mockFullSessionRepo{gs: &session.GameSession{ChatID: 123}}
+
+	llm.generateWithMaxTokensFunc = func(ctx context.Context, prompt string, maxTokens int) (string, error) {
+		analysis := DMResponseAnalysis{
+			CompanionLeft: &CompanionLeft{Name: "Незнакомец", Reason: "ушёл"},
+		}
+		data, _ := json.Marshal(analysis)
+		return string(data), nil
+	}
+
+	uc := NewAnalyzeDMResponseUseCase(llm, combatRepo, questRepo, inventoryRepo, 1, 123, 1, 1, 1, false, 0)
+	uc.SetFullSessionRepository(fullSessionRepo)
+
+	_, err := uc.Execute(context.Background(), "Незнакомец уходит.")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fullSessionRepo.saveCalls != 0 {
+		t.Fatalf("expected no session save for unknown companion name, got %d saves", fullSessionRepo.saveCalls)
 	}
 }
 

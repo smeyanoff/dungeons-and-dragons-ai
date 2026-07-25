@@ -822,7 +822,7 @@ func (uc *HandleActionUseCase) Execute(
 	}
 
 	// Анализируем ответ DM для автоматического определения боевых ситуаций, квестов и опыта
-	modifiedResponse, combatStartMessage, combatFallbackMessage, imageLimitReachedMessage, imagesGeneratedInSession := uc.analyzeDMResponse(llmCtx, gs, response)
+	modifiedResponse, combatStartMessage, combatFallbackMessage, imageLimitReachedMessage, imagesGeneratedInSession, companionEventMessage := uc.analyzeDMResponse(llmCtx, gs, response)
 
 	// Используем модифицированный response (с маркерами изображений)
 	response = modifiedResponse
@@ -847,6 +847,10 @@ func (uc *HandleActionUseCase) Execute(
 	// При достижении лимита изображений на сессию — мягкое сообщение
 	if imageLimitReachedMessage != "" {
 		response = fmt.Sprintf("%s\n\n%s", response, imageLimitReachedMessage)
+	}
+	// Уведомляем игрока о присоединении/уходе компаньона по ходу сюжета
+	if companionEventMessage != "" {
+		response = fmt.Sprintf("%s\n\n%s", response, companionEventMessage)
 	}
 
 	// Проверяем активный бой и автоматически выполняем ходы врагов
@@ -930,12 +934,12 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	ctx context.Context,
 	gs *session.GameSession,
 	dmResponse string,
-) (modifiedResponse string, combatStartMessage string, combatFallbackMessage string, imageLimitReachedMessage string, imagesGeneratedInSession int) {
+) (modifiedResponse string, combatStartMessage string, combatFallbackMessage string, imageLimitReachedMessage string, imagesGeneratedInSession int, companionEventMessage string) {
 	// Получаем игрока (используем первого игрока для обратной совместимости)
 	player := gs.GetFirstPlayer()
 	if player == nil {
 		// Нет игрока, нечего анализировать
-		return dmResponse, "", "", "", gs.ImagesGeneratedInSession
+		return dmResponse, "", "", "", gs.ImagesGeneratedInSession, ""
 	}
 
 	// Создаем анализатор (передаём текущий счётчик изображений сессии для лимита)
@@ -1014,7 +1018,7 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 			logger.ErrorField(err),
 			logger.Uint("session_id", gs.ID),
 		)
-		return dmResponse, "", "", "", gs.ImagesGeneratedInSession
+		return dmResponse, "", "", "", gs.ImagesGeneratedInSession, ""
 	}
 
 	// Обновляем рейтинг при завершении квеста
@@ -1037,6 +1041,7 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	combatFallbackMessage = analysis.CombatFallbackMessage
 	imageLimitReachedMessage = analysis.ImageLimitReachedMessage
 	imagesGeneratedInSession = analysis.ImagesGeneratedInSession
+	companionEventMessage = analysis.CompanionEventMessage
 
 	// Добавляем маркеры автоматически сгенерированных изображений в ответ DM
 	// Изображения будут отправлены автоматически через extractImageMarkers в bot.go
@@ -1081,8 +1086,8 @@ func (uc *HandleActionUseCase) analyzeDMResponse(
 	// Обновляем прогресс сессионных целей
 	uc.updateSessionGoalsProgress(ctx, gs, analysis)
 
-	// Возвращаем модифицированный response, сообщения о бое/лимите и счётчик изображений сессии
-	return modifiedResponse, combatStartMessage, combatFallbackMessage, imageLimitReachedMessage, imagesGeneratedInSession
+	// Возвращаем модифицированный response, сообщения о бое/лимите/компаньоне и счётчик изображений сессии
+	return modifiedResponse, combatStartMessage, combatFallbackMessage, imageLimitReachedMessage, imagesGeneratedInSession, companionEventMessage
 }
 
 // generateEnemyTurn генерирует автоматический ход врага в бою
