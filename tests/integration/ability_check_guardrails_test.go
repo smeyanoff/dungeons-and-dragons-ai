@@ -142,6 +142,86 @@ func TestAbilityCheck_Guardrails_AlreadyChecked(t *testing.T) {
 	}
 }
 
+// TestAbilityCheck_Guardrails_AlreadyChecked_DifferentLocation воспроизводит баг:
+// проверка характеристики, выполненная в одной локации, не должна блокировать
+// такую же проверку после перехода в другую локацию (сцена в этой модели = локация,
+// см. GameSession.IsAbilityCheckRepeatedInScene / ClearSceneAbilityCheckHistory).
+func TestAbilityCheck_Guardrails_AlreadyChecked_DifferentLocation(t *testing.T) {
+	cfg := setupInfraOnlyIntegrationTest(t)
+	if cfg == nil {
+		return
+	}
+	defer cleanupTest(t, &testConfig{db: cfg.db})
+
+	ctx := cfg.ctx
+	chatID := cfg.chatID
+
+	q := &questdomain.Quest{Title: "Test Quest (AlreadyChecked/DiffLocation)", Description: "Test quest for already_checked across locations"}
+	w := worlddomain.New("Test World (AlreadyChecked/DiffLocation)")
+	w.Description = "Deterministic test world for already_checked guardrail across locations"
+	w.SetMainQuest(q)
+	w.Locations = []worlddomain.Location{
+		{Name: "Start", Description: "Start location"},
+		{Name: "Other", Description: "Other location"},
+	}
+	if err := cfg.worldRepo.Save(ctx, w); err != nil {
+		t.Fatalf("Не удалось сохранить тестовый мир: %v", err)
+	}
+	startLocationID := w.Locations[0].ID
+	otherLocationID := w.Locations[1].ID
+
+	gs := &session.GameSession{ChatID: chatID, State: session.StateActive, World: *w, WorldID: w.ID, CurrentLocationID: &otherLocationID}
+	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
+		t.Fatalf("Не удалось сохранить сессию: %v", err)
+	}
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
+		ChatID: chatID, Name: "Герой", Race: character.RaceElf, Class: character.ClassWizard,
+	}); err != nil {
+		t.Fatalf("Не удалось создать персонажа: %v", err)
+	}
+
+	gs, _ = cfg.sessionRepo.GetByChatID(ctx, chatID)
+	gs.CurrentLocationID = &otherLocationID
+	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
+		t.Fatalf("Не удалось обновить текущую локацию сессии: %v", err)
+	}
+
+	// Проверка интеллекта была выполнена в стартовой локации...
+	evt := &event.StoryEvent{
+		GameSessionID: gs.ID,
+		LocationID:    &startLocationID,
+		AuthorType:    event.AuthorTypeDM,
+		Content:       "intelligence ✅ успех: ты прошел проверку",
+		CreatedAt:     time.Now().Add(-10 * time.Minute),
+	}
+	if err := cfg.eventRepo.Save(ctx, evt); err != nil {
+		t.Fatalf("Не удалось сохранить тестовое событие: %v", err)
+	}
+
+	// ...а теперь игрок в другой локации и запрашивает такую же проверку.
+	tool := dmtools.NewRequestAbilityCheckTool(cfg.sessionRepo, cfg.eventRepo, chatID)
+	out, err := tool.Execute(ctx, map[string]interface{}{
+		"ability": "intelligence",
+		"dc":      12,
+		"reason":  "пытается вспомнить легенду об этом месте",
+		"stakes":  "средние ставки: можно упустить важную деталь",
+	})
+	if err != nil {
+		t.Fatalf("tool.Execute: %v", err)
+	}
+	m, ok := out.(map[string]interface{})
+	if !ok {
+		t.Fatalf("ожидали map[string]interface{}, получили %T", out)
+	}
+	if v, ok := m["already_checked"].(bool); ok && v {
+		t.Fatalf("проверка в другой локации не должна блокироваться как already_checked: %#v", m)
+	}
+	if v, ok := m["cooldown"].(bool); ok && v {
+		t.Fatalf("проверка в другой локации не должна блокироваться как cooldown: %#v", m)
+	}
+}
+
 func TestAbilityCheck_Guardrails_BudgetExceeded(t *testing.T) {
 	cfg := setupInfraOnlyIntegrationTest(t)
 	if cfg == nil {

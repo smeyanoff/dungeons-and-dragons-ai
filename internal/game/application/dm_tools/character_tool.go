@@ -329,6 +329,14 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 			for i := len(recentEvents) - 1; i >= 0; i-- {
 				evt := recentEvents[i]
 
+				// Сцена в этой модели = локация (см. GameSession.IsAbilityCheckRepeatedInScene
+				// и ClearSceneAbilityCheckHistory, которая сбрасывается при перемещении).
+				// Событие из другой локации относится к уже покинутой сцене и не должно
+				// блокировать новую попытку той же проверки в текущей сцене.
+				if evt.LocationID != nil && gs.CurrentLocationID != nil && *evt.LocationID != *gs.CurrentLocationID {
+					continue
+				}
+
 				// Ищем в содержимом события упоминания о проверке этой характеристики
 				// Проверяем, есть ли в событии результат evaluate_check для этой характеристики
 				content := strings.ToLower(evt.Content)
