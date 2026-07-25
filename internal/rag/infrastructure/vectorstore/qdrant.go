@@ -76,32 +76,51 @@ func (s *QdrantStore) ensureCollection(ctx context.Context) error {
 			}
 		}
 
-		if existingDim == 0 || existingDim == s.embeddingDimension {
-			return nil
+		if existingDim != 0 && existingDim != s.embeddingDimension {
+			if err := s.Client.DeleteCollection(ctx, collectionName); err != nil {
+				return fmt.Errorf("failed to delete collection with stale vector dimension (existing: %d, expected: %d): %w", existingDim, s.embeddingDimension, err)
+			}
+			collectionExists = false
 		}
-
-		if err := s.Client.DeleteCollection(ctx, collectionName); err != nil {
-			return fmt.Errorf("failed to delete collection with stale vector dimension (existing: %d, expected: %d): %w", existingDim, s.embeddingDimension, err)
-		}
-		collectionExists = false
 	}
 
-	if collectionExists {
-		return nil
+	if !collectionExists {
+		// Коллекция не существует (или пересоздается из-за несовпадения размерности) — создаем её
+		err = s.Client.CreateCollection(ctx, &qdrant.CreateCollection{
+			CollectionName: collectionName,
+			VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
+				Size:     s.embeddingDimension,
+				Distance: qdrant.Distance_Cosine,
+			}),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create collection: %w", err)
+		}
 	}
 
-	// Коллекция не существует (или пересоздается из-за несовпадения размерности) — создаем её
-	err = s.Client.CreateCollection(ctx, &qdrant.CreateCollection{
+	// Коллекция общая для всех кампаний — каждый Search/Delete фильтрует по
+	// session_id, поэтому без payload-индекса на этом поле Qdrant вынужден
+	// перебирать весь payload линейно. Индексы идемпотентны (CreateFieldIndex
+	// повторно на существующем поле не ошибка), поэтому создаём их безусловно.
+	if err := s.ensurePayloadIndex(ctx, "session_id", qdrant.FieldType_FieldTypeInteger); err != nil {
+		return err
+	}
+	if err := s.ensurePayloadIndex(ctx, "location_id", qdrant.FieldType_FieldTypeInteger); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *QdrantStore) ensurePayloadIndex(ctx context.Context, field string, fieldType qdrant.FieldType) error {
+	_, err := s.Client.CreateFieldIndex(ctx, &qdrant.CreateFieldIndexCollection{
 		CollectionName: collectionName,
-		VectorsConfig: qdrant.NewVectorsConfig(&qdrant.VectorParams{
-			Size:     s.embeddingDimension,
-			Distance: qdrant.Distance_Cosine,
-		}),
+		FieldName:      field,
+		FieldType:      qdrant.PtrOf(fieldType),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create collection: %w", err)
+		return fmt.Errorf("failed to create payload index on %q: %w", field, err)
 	}
-
 	return nil
 }
 
@@ -241,6 +260,34 @@ func (s *QdrantStore) Search(
 	})
 
 	return docs, nil
+}
+
+// Delete удаляет все точки данной сессии из общей коллекции.
+func (s *QdrantStore) Delete(ctx context.Context, sessionID uint) error {
+	_, err := s.Client.Delete(ctx, &qdrant.DeletePoints{
+		CollectionName: collectionName,
+		Points: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Filter{
+				Filter: &qdrant.Filter{
+					Must: []*qdrant.Condition{
+						{
+							ConditionOneOf: &qdrant.Condition_Field{
+								Field: &qdrant.FieldCondition{
+									Key: "session_id",
+									Match: &qdrant.Match{
+										MatchValue: &qdrant.Match_Integer{
+											Integer: safeUintToInt64(sessionID),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	return err
 }
 
 // safeUintToInt64 безопасно преобразует uint в int64 с проверкой на overflow

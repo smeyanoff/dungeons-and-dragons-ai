@@ -273,6 +273,7 @@ func TestAbilityCheck_RollWithoutPendingDoesNotResolve(t *testing.T) {
 		nil, // feedbackRepo
 		nil, // eventRepo
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)

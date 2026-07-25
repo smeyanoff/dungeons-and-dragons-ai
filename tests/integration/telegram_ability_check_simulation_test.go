@@ -95,6 +95,7 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 		nil, // feedbackRepo
 		nil, // eventRepo (/roll history)
 		nil, // indexDocUC (/roll RAG)
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)

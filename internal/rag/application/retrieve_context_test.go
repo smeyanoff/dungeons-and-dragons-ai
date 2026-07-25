@@ -48,6 +48,10 @@ func (m *mockRetrieveVectorStore) Search(ctx context.Context, sessionID uint, lo
 	return nil, nil
 }
 
+func (m *mockRetrieveVectorStore) Delete(ctx context.Context, sessionID uint) error {
+	return nil
+}
+
 func TestRetrieveContext_Execute(t *testing.T) {
 	tests := []struct {
 		name          string

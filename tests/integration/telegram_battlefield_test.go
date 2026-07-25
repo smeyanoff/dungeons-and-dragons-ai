@@ -91,6 +91,7 @@ func TestTelegramBattlefieldCommand(t *testing.T) {
 		feedbackRepo,
 		nil, // eventRepo
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)
@@ -225,6 +226,7 @@ func TestTelegramBattlefieldCommandFormats(t *testing.T) {
 		feedbackRepo,
 		nil, // eventRepo
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)
@@ -390,6 +392,7 @@ func TestTelegramBattlefieldCommandNoCombat(t *testing.T) {
 		feedbackRepo,
 		nil, // eventRepo
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)

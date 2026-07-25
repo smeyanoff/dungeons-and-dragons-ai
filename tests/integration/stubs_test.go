@@ -91,6 +91,12 @@ func (noopVectorStore) Search(ctx context.Context, sessionID uint, locationID *u
 	return nil, nil
 }
 
+func (noopVectorStore) Delete(ctx context.Context, sessionID uint) error {
+	_ = ctx
+	_ = sessionID
+	return nil
+}
+
 // staticContextBuilder is a minimal ContextBuilder for tests.
 type staticContextBuilder struct{}
 

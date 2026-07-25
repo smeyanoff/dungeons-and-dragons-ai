@@ -41,6 +41,17 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, tgUserID int64, t
 			)
 			// Не возвращаем ошибку, пытаемся продолжить создание новой игры
 		}
+		if b.deleteSessionDataUC != nil {
+			if err := b.deleteSessionDataUC.Execute(ctx, existingSession.ID); err != nil {
+				// RAG-память — производный кэш, а не источник истины: ошибка её
+				// очистки не должна мешать созданию новой игры.
+				logger.Error("Failed to delete RAG data for completed session",
+					logger.ErrorField(err),
+					logger.Int64("chat_id", chatID),
+					logger.Uint("old_session_id", existingSession.ID),
+				)
+			}
+		}
 	}
 
 	// Отправляем сообщение о начале генерации
@@ -103,6 +114,15 @@ func (b *Bot) handleNewGame(ctx context.Context, chatID int64, tgUserID int64, t
 					logger.Int64("chat_id", chatID),
 				)
 			} else {
+				if b.deleteSessionDataUC != nil && existing != nil {
+					if err := b.deleteSessionDataUC.Execute(ctx, existing.ID); err != nil {
+						logger.Error("Failed to delete RAG data after duplicate key error",
+							logger.ErrorField(err),
+							logger.Int64("chat_id", chatID),
+							logger.Uint("old_session_id", existing.ID),
+						)
+					}
+				}
 				logger.Info("Deleted existing session after duplicate key error, retrying save",
 					logger.Int64("chat_id", chatID),
 				)
@@ -282,4 +302,3 @@ func (b *Bot) handlePlayerAction(ctx context.Context, chatID int64, tgUserID int
 	}
 	return promptErr
 }
-

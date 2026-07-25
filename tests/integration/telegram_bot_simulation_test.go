@@ -337,6 +337,7 @@ func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
 		feedbackRepo,
 		eventRepo,
 		nil, // indexDocUC (skip embeddings calls from /roll)
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)

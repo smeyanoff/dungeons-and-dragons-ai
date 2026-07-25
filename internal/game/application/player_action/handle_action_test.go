@@ -57,6 +57,10 @@ func (m *mockVectorStore) Upsert(ctx context.Context, doc ragdomain.Document, em
 	return nil
 }
 
+func (m *mockVectorStore) Delete(ctx context.Context, sessionID uint) error {
+	return nil
+}
+
 func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]ragdomain.Document, error) {
 	if m.searchFunc != nil {
 		return m.searchFunc(ctx, sessionID, locationID, embedding, limit)

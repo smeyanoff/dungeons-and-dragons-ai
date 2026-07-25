@@ -51,6 +51,10 @@ func (m *mockVectorStore) Upsert(ctx context.Context, doc domain.Document, embed
 	return nil
 }
 
+func (m *mockVectorStore) Delete(ctx context.Context, sessionID uint) error {
+	return nil
+}
+
 // Mock EventRepository
 type mockEventRepository struct {
 	getBySessionIDFunc      func(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)

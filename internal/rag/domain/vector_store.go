@@ -18,4 +18,8 @@ type VectorStore interface {
 		embedding []float32,
 		limit int,
 	) ([]Document, error)
+	// Delete удаляет все документы данной сессии (кампании). Используется при
+	// завершении/удалении GameSession, чтобы её RAG-память не копилась в общей
+	// коллекции бессрочно после того, как сама сессия удалена из Postgres.
+	Delete(ctx context.Context, sessionID uint) error
 }
