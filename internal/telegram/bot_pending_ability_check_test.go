@@ -171,34 +171,35 @@ func TestMaybeSendPendingAbilityCheckPrompt_SendsOnceAndMarksNotified(t *testing
 	bot, err := NewBotWithAPIEndpoint(
 		"TEST_TOKEN",
 		apiEndpointFmt,
-		nil, // initCampaignUC
-		nil, // handleActionUC
-		nil, // createCharacterUC
-		nil, // getHistoryUC
-		nil, // getInventoryUC
-		nil, // addItemUC
-		nil, // handleCombatUC
-		nil, // rollDiceUC
-		nil, // getQuestsUC
-		nil, // getDailyQuestsUC
-		nil, // checkDailyProgressUC
-		nil, // getMapUC
-		nil, // moveToLocationUC
-		nil, // getAchievementsUC
-		nil, // getSpellsUC
-		nil, // useSpellUC
-		nil, // generateImageUC
-		nil, // getSubscriptionUC
-		nil, // checkLimitsUC
-		nil, // getLeaderboardUC
-		nil, // updateRatingUC
-		nil, // performAbilityCheckUC
+		nil,  // initCampaignUC
+		nil,  // handleActionUC
+		nil,  // createCharacterUC
+		nil,  // getHistoryUC
+		nil,  // getInventoryUC
+		nil,  // addItemUC
+		nil,  // handleCombatUC
+		nil,  // rollDiceUC
+		nil,  // getQuestsUC
+		nil,  // getDailyQuestsUC
+		nil,  // checkDailyProgressUC
+		nil,  // getMapUC
+		nil,  // moveToLocationUC
+		nil,  // getAchievementsUC
+		nil,  // getSpellsUC
+		nil,  // useSpellUC
+		nil,  // generateImageUC
+		nil,  // getSubscriptionUC
+		nil,  // checkLimitsUC
+		nil,  // getLeaderboardUC
+		nil,  // updateRatingUC
+		nil,  // performAbilityCheckUC
 		repo, // sessionRepo
-		nil, // playerRepo
-		nil, // combatRepo
-		nil, // feedbackRepo
-		nil, // eventRepo
-		nil, // indexDocUC
+		nil,  // playerRepo
+		nil,  // combatRepo
+		nil,  // feedbackRepo
+		nil,  // eventRepo
+		nil,  // indexDocUC
+		nil,  // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("NewBotWithAPIEndpoint: %v", err)

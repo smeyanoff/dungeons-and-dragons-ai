@@ -8,8 +8,8 @@ import (
 	"time"
 
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
+	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
@@ -79,6 +79,7 @@ func TestTelegramGameplay_ComprehensiveCampaignTest(t *testing.T) {
 		feedbackRepo,
 		eventRepo,
 		cfg.indexDocUC, // Включаем индексацию для анализа RAG
+		nil,            // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram бота: %v", err)
@@ -208,8 +209,8 @@ func TestTelegramGameplay_ComprehensiveCampaignTest(t *testing.T) {
 
 			// Проверяем наличие описания локации
 			if !strings.Contains(strings.ToLower(dmResponse), "локация") &&
-			   !strings.Contains(strings.ToLower(dmResponse), "место") &&
-			   !strings.Contains(strings.ToLower(dmResponse), "вокруг") {
+				!strings.Contains(strings.ToLower(dmResponse), "место") &&
+				!strings.Contains(strings.ToLower(dmResponse), "вокруг") {
 				llmFeedback := []string{"Ответ DM не содержит описания локации"}
 				writeToFeedback(llmFeedback)
 			}

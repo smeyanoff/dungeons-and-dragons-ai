@@ -328,6 +328,7 @@ func main() {
 
 	indexDocUC := ragapp.NewIndexDocument(embedder, vectorStore)
 	retrieveContextUC := ragapp.NewRetrieveContext(embedder, vectorStore)
+	deleteSessionDataUC := ragapp.NewDeleteSessionData(vectorStore)
 
 	// Инициализация репозиториев
 	worldRepo := persistence.NewWorldRepository(db)
@@ -544,7 +545,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err = telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, playerRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
+	bot, err = telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, playerRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC, deleteSessionDataUC)
 	if err != nil {
 		logger.Error("Failed to create bot - continuing without Telegram bot",
 			logger.ErrorField(err),

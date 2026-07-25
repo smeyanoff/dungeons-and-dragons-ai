@@ -78,6 +78,7 @@ func TestTelegramGameplay_RealLLM_PendingAbilityCheck_ManualAndRoll(t *testing.T
 		feedbackRepo,
 		eventRepo,
 		nil, // indexDocUC (avoid embeddings in tests)
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)

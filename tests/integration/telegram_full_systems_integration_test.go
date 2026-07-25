@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	abilitycheck "dungeons-and-dragons-ai/internal/game/application/ability_check"
-	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	mapapp "dungeons-and-dragons-ai/internal/game/application/worldmap"
+	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	telegrambot "dungeons-and-dragons-ai/internal/telegram"
 )
 
@@ -81,6 +81,7 @@ func TestTelegramGameplay_FullSystemsIntegration_RealLLM(t *testing.T) {
 		feedbackRepo,
 		eventRepo,
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot: %v", err)
@@ -312,7 +313,7 @@ func TestTelegramGameplay_FullSystemsIntegration_RealLLM(t *testing.T) {
 			if gs.GetFirstPlayer() != nil {
 				playerCount++
 			}
-				if gs.FindPlayerByTgUserID(player2UserID) != nil {
+			if gs.FindPlayerByTgUserID(player2UserID) != nil {
 				playerCount++
 			}
 

@@ -87,6 +87,7 @@ func TestTelegramGameplay_RealLLM_FullGameplayJourney(t *testing.T) {
 		feedbackRepo,
 		eventRepo,
 		nil, // indexDocUC - disabled to avoid costs
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Failed to create Telegram bot: %v", err)

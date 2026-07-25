@@ -78,6 +78,7 @@ func TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat(t *testing.T) {
 		feedbackRepo,
 		eventRepo,
 		cfg.indexDocUC,
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram бота: %v", err)

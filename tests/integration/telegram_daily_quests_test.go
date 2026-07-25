@@ -92,6 +92,7 @@ func TestTelegramDailyQuestsCommand(t *testing.T) {
 		feedbackRepo,
 		nil, // eventRepo
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot: %v", err)
@@ -273,6 +274,7 @@ func TestTelegramDailyQuestsNoCharacter(t *testing.T) {
 		feedbackRepo,
 		nil, // eventRepo
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot: %v", err)

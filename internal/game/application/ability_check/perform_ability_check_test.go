@@ -76,6 +76,10 @@ func (m *mockVectorStore) Search(ctx context.Context, sessionID uint, locationID
 	return nil, nil
 }
 
+func (m *mockVectorStore) Delete(ctx context.Context, sessionID uint) error {
+	return nil
+}
+
 func createSessionWithPendingCheck(t *testing.T, ability string, dc int) *session.GameSession {
 	t.Helper()
 	char, _ := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{
