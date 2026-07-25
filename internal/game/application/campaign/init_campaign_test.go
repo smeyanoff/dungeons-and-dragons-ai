@@ -1054,6 +1054,79 @@ func TestBuildWorld_WorldRepoSaveError(t *testing.T) {
 	}
 }
 
+// fakeCampaignFactRepo — фейковый репозиторий фактов кампании для тестов посева идентичности NPC.
+type fakeCampaignFactRepo struct {
+	saved []*world.CampaignFact
+}
+
+func (f *fakeCampaignFactRepo) Save(ctx context.Context, fact *world.CampaignFact) error {
+	f.saved = append(f.saved, fact)
+	return nil
+}
+
+func TestSeedNPCIdentityFacts(t *testing.T) {
+	locations := []LocationDTO{
+		{
+			Name: "Деревня",
+			NPCs: []NPCDTO{
+				{Name: "Тэсса", Role: "местная девушка", Relation: "дочь старосты Ольгерда"},
+				{Name: "Ольгерд", Role: "староста"}, // без Relation - не должен попасть в факты
+				{Name: "  ", Relation: "пустое имя после trim - тоже не должно попасть"},
+			},
+		},
+		{
+			Name: "Кузница",
+			NPCs: []NPCDTO{
+				{Name: "Тихон", Role: "кузнец", Relation: "сосед пропавшего мастера Эльвара"},
+			},
+		},
+	}
+
+	t.Run("saves a fact only for NPCs with non-empty relation", func(t *testing.T) {
+		repo := &fakeCampaignFactRepo{}
+		uc := NewInitCampaignUseCase(&mockLLM{}, &mockWorldRepo{})
+		uc.SetCampaignFactRepository(repo)
+
+		uc.seedNPCIdentityFacts(context.Background(), 42, locations)
+
+		if len(repo.saved) != 2 {
+			t.Fatalf("expected 2 saved facts, got %d: %+v", len(repo.saved), repo.saved)
+		}
+		for _, fact := range repo.saved {
+			if fact.WorldID != 42 {
+				t.Errorf("expected WorldID 42, got %d", fact.WorldID)
+			}
+			if fact.Category != world.FactCategoryNPCIdentity {
+				t.Errorf("expected category %q, got %q", world.FactCategoryNPCIdentity, fact.Category)
+			}
+		}
+		if repo.saved[0].Text != "Тэсса — дочь старосты Ольгерда" {
+			t.Errorf("unexpected fact text: %q", repo.saved[0].Text)
+		}
+		if repo.saved[1].Text != "Тихон — сосед пропавшего мастера Эльвара" {
+			t.Errorf("unexpected fact text: %q", repo.saved[1].Text)
+		}
+	})
+
+	t.Run("no-op when repository is not configured", func(t *testing.T) {
+		uc := NewInitCampaignUseCase(&mockLLM{}, &mockWorldRepo{})
+		// campaignFactRepo намеренно не задан - не должно паниковать
+		uc.seedNPCIdentityFacts(context.Background(), 42, locations)
+	})
+
+	t.Run("no-op when worldID is zero", func(t *testing.T) {
+		repo := &fakeCampaignFactRepo{}
+		uc := NewInitCampaignUseCase(&mockLLM{}, &mockWorldRepo{})
+		uc.SetCampaignFactRepository(repo)
+
+		uc.seedNPCIdentityFacts(context.Background(), 0, locations)
+
+		if len(repo.saved) != 0 {
+			t.Errorf("expected no facts saved for worldID=0, got %d", len(repo.saved))
+		}
+	})
+}
+
 func TestTryRepairTruncatedJSON(t *testing.T) {
 	tests := []struct {
 		name          string
