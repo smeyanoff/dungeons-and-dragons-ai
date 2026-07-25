@@ -44,12 +44,19 @@ func (t *SaveCampaignFactTool) Description() string {
 - Решение с долгими последствиями (например, "отпустил пленника, вместо того чтобы казнить")
 - Веха главного или побочного квеста (например, "нашел первый фрагмент древней карты")
 - Заметный сдвиг в отношениях с NPC или фракцией (например, "гильдия воров теперь считает игрока предателем")
+- Идентичность NPC — кто есть кто (например, "Мира — дочь старосты Ольгерда", "Кузнец Торин — вдовец, живёт у восточных ворот")
+
+ОБЯЗАТЕЛЬНО вызови этот инструмент с category="npc_identity" сразу, как только представляешь игроку
+именованного NPC с именем, ролью или родством/принадлежностью (дочь/сын/подмастерье/слуга кого-то,
+должность, отношение к другому NPC или фракции). Зафиксируй это сразу при первом представлении —
+не после, не в следующей сцене. Это нужно, чтобы DM не противоречил себе позже (например, не назвал
+того же персонажа то дочерью старосты, то дочерью кузнеца).
 
 НЕ используй для рутинных или локальных действий (осмотр комнаты, обычный диалог, находка мелкого предмета) —
 это не факт для памяти всей кампании, а часть текущей сцены.
 
 Параметры:
-- category (обязательно): "reputation", "quest", "decision" или "relationship"
+- category (обязательно): "reputation", "quest", "decision", "relationship" или "npc_identity"
 - text (обязательно): краткая формулировка факта (1 предложение, без пересказа диалога)`
 }
 
@@ -59,7 +66,7 @@ func (t *SaveCampaignFactTool) Parameters() json.RawMessage {
 			Type:        "string",
 			Description: "Категория факта",
 			Required:    true,
-			Enum:        []interface{}{"reputation", "quest", "decision", "relationship"},
+			Enum:        []interface{}{"reputation", "quest", "decision", "relationship", "npc_identity"},
 		},
 		"text": {
 			Type:        "string",
@@ -78,7 +85,8 @@ func (t *SaveCampaignFactTool) Execute(ctx context.Context, args map[string]inte
 
 	category := world.CampaignFactCategory(strings.TrimSpace(getStringParam(args, "category")))
 	switch category {
-	case world.FactCategoryReputation, world.FactCategoryQuest, world.FactCategoryDecision, world.FactCategoryRelationship:
+	case world.FactCategoryReputation, world.FactCategoryQuest, world.FactCategoryDecision,
+		world.FactCategoryRelationship, world.FactCategoryNPCIdentity:
 		// валидная категория
 	default:
 		category = world.FactCategoryDecision
