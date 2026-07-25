@@ -9,6 +9,7 @@ var (
 	outputLeakCount         int64 // срабатывание output-guard (удалён tool/internal текст из ответа игроку)
 	ragEmptyResultCount     int64 // found_docs > 0, но ни один документ не попал в контекст (docs_added = 0)
 	telegramPollingErrCount int64 // ошибки Telegram getUpdates (EOF/timeout/network/rate limit)
+	injectionAttempt        int64 // срабатывание input-guard (заблокирована попытка взлома сессии/DM)
 )
 
 // IncrementRAGFailure увеличивает счётчик неудач RAG и возвращает новое значение.
@@ -49,4 +50,16 @@ func IncrementTelegramPollingError() int64 {
 // TelegramPollingErrorCount возвращает текущее значение счётчика ошибок Telegram polling.
 func TelegramPollingErrorCount() int64 {
 	return atomic.LoadInt64(&telegramPollingErrCount)
+}
+
+// IncrementInjectionAttempt увеличивает счётчик заблокированных попыток взлома
+// сессии/DM (input-guard) и возвращает новое значение.
+func IncrementInjectionAttempt() int64 {
+	return atomic.AddInt64(&injectionAttempt, 1)
+}
+
+// InjectionAttemptCount возвращает текущее значение счётчика заблокированных
+// попыток взлома сессии/DM.
+func InjectionAttemptCount() int64 {
+	return atomic.LoadInt64(&injectionAttempt)
 }
