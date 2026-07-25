@@ -293,13 +293,13 @@ func TestAbilityCheck_RollWithoutPendingDoesNotResolve(t *testing.T) {
 	calls := fakeAPI.snapshotCalls()
 	found := false
 	for _, c := range calls {
-		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "🎲 Бросок") {
+		if c.Method == "sendMessage" && c.ChatID == chatID && strings.Contains(c.Text, "/roll") && strings.Contains(c.Text, "Мастер") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("Ожидали сообщение о броске кубика для /roll без pending")
+		t.Fatalf("Ожидали сообщение о том, что /roll работает только по запросу Мастера")
 	}
 }
 
