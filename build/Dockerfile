@@ -5,9 +5,9 @@ FROM golang:1.25-alpine AS builder
 # Фиксируем версии пакетов для воспроизводимости сборок (golang:1.25-alpine)
 # Регулярно обновляйте версии при обновлении базового образа
 RUN apk add --no-cache \
-    git=2.54.0-r0 \
-    ca-certificates=20260611-r0 \
-    tzdata=2026c-r0
+    git=2.52.0-r0 \
+    ca-certificates=20251003-r0 \
+    tzdata=2025c-r0
 
 # Рабочая директория
 WORKDIR /app
@@ -43,8 +43,8 @@ FROM alpine:3.20
 # Фиксируем версии пакетов для воспроизводимости сборок (Alpine 3.20)
 # Регулярно обновляйте версии при обновлении базового образа
 RUN apk --no-cache add \
-    ca-certificates=20260413-r0 \
-    tzdata=2026b-r0 \
+    ca-certificates=20250911-r0 \
+    tzdata=2025c-r0 \
     wget=1.24.5-r0
 
 WORKDIR /root/

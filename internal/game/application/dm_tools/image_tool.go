@@ -38,7 +38,6 @@ type GenerateImageRequest struct {
 	EntityName      string // Уникальное имя сущности для кэширования
 	ForceRegenerate bool
 	UserID          int64
-	ChatID          int64 // ID игры (сессии), к которой привязан лимит "изображений за игру"
 	SkipLimitCheck  bool
 }
 
@@ -188,7 +187,6 @@ func (t *GenerateImageTool) Execute(ctx context.Context, args map[string]interfa
 		EntityID:        entityID,
 		ForceRegenerate: forceRegenerate,
 		UserID:          t.userID,
-		ChatID:          t.chatID,
 		SkipLimitCheck:  skipLimitCheck,
 	}
 

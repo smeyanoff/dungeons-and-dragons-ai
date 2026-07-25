@@ -105,7 +105,6 @@ func (t *AddItemTool) Description() string {
 	return "Добавить предмет в инвентарь персонажа. " +
 		"Используй этот инструмент, когда игрок ПОДБИРАЕТ предмет из мира (действия: 'взять [предмет]', 'подобрать [предмет]', 'поднять [предмет]'). " +
 		"НЕ используй этот инструмент для использования предметов из инвентаря - для этого используй 'validate_item_usage' и 'remove_item_from_inventory'. " +
-		"Если добавляешь зелье или другой предмет, восстанавливающий здоровье при использовании, ОБЯЗАТЕЛЬНО укажи healing_amount (сколько HP восстанавливает ОДНА единица предмета) - иначе при использовании предмет не будет лечить. " +
 		"Возвращает успех операции и текущее состояние инвентаря."
 }
 
@@ -136,11 +135,6 @@ func (t *AddItemTool) Parameters() json.RawMessage {
 			Description: "Тип предмета: weapon, armor, potion, tool, consumable, misc",
 			Required:    false,
 			Enum:        []interface{}{"weapon", "armor", "potion", "tool", "consumable", "misc"},
-		},
-		"healing_amount": {
-			Type:        "integer",
-			Description: "Сколько HP восстанавливает ОДНА единица предмета при использовании (0 или не указано - предмет не лечит)",
-			Required:    false,
 		},
 	}
 	return BuildJSONSchema(properties, []string{"name"})
@@ -195,11 +189,6 @@ func (t *AddItemTool) Execute(ctx context.Context, args map[string]interface{}) 
 		}
 	}
 
-	var healingAmount int
-	if h, ok := args["healing_amount"].(float64); ok && h > 0 {
-		healingAmount = int(h)
-	}
-
 	// Определяем вес по умолчанию, если не указан
 	if weight <= 0 {
 		switch itemType {
@@ -233,7 +222,7 @@ func (t *AddItemTool) Execute(ctx context.Context, args map[string]interface{}) 
 	}
 
 	// Добавляем предмет
-	if err := inv.AddItem(name, description, weight, quantity, itemType, healingAmount); err != nil {
+	if err := inv.AddItem(name, description, weight, quantity, itemType); err != nil {
 		logger.Warn("AddItemTool: failed to add item",
 			logger.Uint("character_id", t.characterID),
 			logger.String("item_name", name),
@@ -278,20 +267,14 @@ func (t *AddItemTool) Execute(ctx context.Context, args map[string]interface{}) 
 // RemoveItemTool позволяет DM удалить предмет из инвентаря персонажа
 type RemoveItemTool struct {
 	inventoryRepo InventoryRepository
-	sessionRepo   SessionRepository
 	characterID   uint
-	chatID        int64
 }
 
-// NewRemoveItemTool создает новый инструмент для удаления предмета.
-// sessionRepo используется для применения эффекта предмета (например, лечения) при его использовании;
-// может быть nil - тогда эффекты предметов просто не применяются (предмет удаляется без последствий).
-func NewRemoveItemTool(inventoryRepo InventoryRepository, sessionRepo SessionRepository, characterID uint, chatID int64) *RemoveItemTool {
+// NewRemoveItemTool создает новый инструмент для удаления предмета
+func NewRemoveItemTool(inventoryRepo InventoryRepository, characterID uint) *RemoveItemTool {
 	return &RemoveItemTool{
 		inventoryRepo: inventoryRepo,
-		sessionRepo:   sessionRepo,
 		characterID:   characterID,
-		chatID:        chatID,
 	}
 }
 
@@ -300,9 +283,7 @@ func (t *RemoveItemTool) Name() string {
 }
 
 func (t *RemoveItemTool) Description() string {
-	return "Удалить предмет из инвентаря персонажа - используй, когда игрок ИСПОЛЬЗУЕТ/ПОТРЕБЛЯЕТ предмет (пьет зелье, ест еду, использует расходник). " +
-		"Удаляет указанное количество предметов по имени. Если у предмета указан healing_amount (например, лечебное зелье), " +
-		"здоровье персонажа автоматически восстанавливается на healing_amount * количество - отдельно вызывать лечение не нужно."
+	return "Удалить предмет из инвентаря персонажа. Удаляет указанное количество предметов по имени."
 }
 
 func (t *RemoveItemTool) Parameters() json.RawMessage {
@@ -352,8 +333,7 @@ func (t *RemoveItemTool) Execute(ctx context.Context, args map[string]interface{
 	}
 
 	// Удаляем предмет
-	removedItem, err := inv.RemoveItem(name, quantity)
-	if err != nil {
+	if err := inv.RemoveItem(name, quantity); err != nil {
 		logger.Warn("RemoveItemTool: failed to remove item",
 			logger.Uint("character_id", t.characterID),
 			logger.String("item_name", name),
@@ -384,23 +364,6 @@ func (t *RemoveItemTool) Execute(ctx context.Context, args map[string]interface{
 		"total_weight": inv.GetTotalWeight(),
 	}
 
-	// Если предмет лечит (healing_amount > 0) - применяем эффект к персонажу
-	if removedItem.HealingAmount > 0 && t.sessionRepo != nil {
-		healed, newHP, maxHP, healErr := t.applyHealing(ctx, removedItem.HealingAmount*quantity)
-		if healErr != nil {
-			logger.Error("RemoveItemTool: failed to apply healing",
-				logger.Uint("character_id", t.characterID),
-				logger.String("item_name", name),
-				logger.ErrorField(healErr),
-			)
-		} else if healed {
-			result["healed"] = true
-			result["healing_amount"] = removedItem.HealingAmount * quantity
-			result["hp"] = newHP
-			result["max_hp"] = maxHP
-		}
-	}
-
 	logger.Info("RemoveItemTool: completed successfully",
 		logger.Uint("character_id", t.characterID),
 		logger.String("item_name", name),
@@ -409,33 +372,4 @@ func (t *RemoveItemTool) Execute(ctx context.Context, args map[string]interface{
 	)
 
 	return result, nil
-}
-
-// applyHealing восстанавливает HP персонажа игрока на amount и сохраняет сессию.
-// Возвращает healed=false (без ошибки), если сессию/игрока найти не удалось - вызывающий код
-// в этом случае просто не проставляет поля лечения в результат тула.
-func (t *RemoveItemTool) applyHealing(ctx context.Context, amount int) (healed bool, newHP int, maxHP int, err error) {
-	gs, err := t.sessionRepo.GetByChatID(ctx, t.chatID)
-	if err != nil {
-		return false, 0, 0, fmt.Errorf("failed to get session: %w", err)
-	}
-	if gs == nil {
-		return false, 0, 0, nil
-	}
-
-	player := gs.GetFirstPlayer()
-	if player == nil {
-		return false, 0, 0, nil
-	}
-
-	if err := player.Character.Heal(amount); err != nil {
-		// Персонаж мертв или иное ожидаемое состояние - не считаем это ошибкой выполнения тула
-		return false, 0, 0, nil
-	}
-
-	if err := t.sessionRepo.Save(ctx, gs); err != nil {
-		return false, 0, 0, fmt.Errorf("failed to save session: %w", err)
-	}
-
-	return true, player.Character.HP, player.Character.MaxHP, nil
 }

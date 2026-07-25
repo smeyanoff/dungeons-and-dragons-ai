@@ -423,7 +423,6 @@ func (t *RequestAbilityCheckTool) Execute(ctx context.Context, args map[string]i
 		if t.eventRepo != nil {
 			_ = t.eventRepo.Save(ctx, &event.StoryEvent{
 				GameSessionID: gs.ID,
-				LocationID:    gs.CurrentLocationID,
 				AuthorType:    event.AuthorTypeDM,
 				Content:       message,
 				CreatedAt:     time.Now(),

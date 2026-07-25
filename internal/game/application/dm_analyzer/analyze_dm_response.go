@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -53,14 +52,6 @@ type DMResponseAnalysis struct {
 	LocationVisited *Location `json:"location_visited,omitempty"` // Локация, которую игрок впервые посетил
 	NPCMet          *NPC      `json:"npc_met,omitempty"`          // NPC, с которым игрок впервые встретился
 
-	// Компаньоны — присоединение/уход по ходу сюжета (не через ручные команды /dismiss
-	// и не через случайное событие локации recruit_companion, а из естественного текста DM)
-	CompanionJoined *CompanionJoined `json:"companion_joined,omitempty"` // NPC, присоединившийся к отряду
-	CompanionLeft   *CompanionLeft   `json:"companion_left,omitempty"`   // Компаньон, покинувший отряд
-	// CompanionEventMessage — сообщение игроку о присоединении/уходе компаньона,
-	// заполняется после обработки (не приходит от LLM)
-	CompanionEventMessage string `json:"-"`
-
 	// Автоматически сгенерированные изображения
 	GeneratedImages []GeneratedImage `json:"generated_images,omitempty"` // Пути к автоматически сгенерированным изображениям
 
@@ -68,16 +59,6 @@ type DMResponseAnalysis struct {
 	ImageLimitReachedMessage string `json:"image_limit_reached_message,omitempty"`
 	// ImagesGeneratedInSession — число изображений в сессии после этого ответа (для сохранения в GameSession)
 	ImagesGeneratedInSession int `json:"images_generated_in_session,omitempty"`
-
-	// KeyFacts — устойчивые факты кампании (репутация, вехи квеста, решения с долгими
-	// последствиями), которые должны быть видны DM независимо от текущей локации.
-	KeyFacts []KeyFact `json:"key_facts,omitempty"`
-}
-
-// KeyFact представляет один устойчивый факт кампании, извлечённый из ответа DM.
-type KeyFact struct {
-	Category string `json:"category"` // reputation|quest|decision|relationship
-	Text     string `json:"text"`     // Краткая формулировка факта
 }
 
 var invalidAnalyzerJSONCount uint64
@@ -102,12 +83,11 @@ type Enemy struct {
 
 // Item представляет предмет, полученный игроком
 type Item struct {
-	Name          string  `json:"name"`        // Название предмета
-	Description   string  `json:"description"` // Описание предмета
-	Weight        float64 `json:"weight"`      // Вес в кг (оценка, если не указано)
-	Quantity      int     `json:"quantity"`    // Количество (по умолчанию 1)
-	Type          string  `json:"type"`        // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
-	HealingAmount int     `json:"healing_amount"` // Сколько HP восстанавливает ОДНА единица предмета при использовании (0 - не лечит)
+	Name        string  `json:"name"`        // Название предмета
+	Description string  `json:"description"` // Описание предмета
+	Weight      float64 `json:"weight"`      // Вес в кг (оценка, если не указано)
+	Quantity    int     `json:"quantity"`    // Количество (по умолчанию 1)
+	Type        string  `json:"type"`        // Тип предмета: "weapon", "armor", "potion", "tool", "misc", "consumable"
 }
 
 // Location представляет локацию, которую игрок посетил
@@ -122,20 +102,6 @@ type NPC struct {
 	Name           string `json:"name"`             // Имя NPC
 	Description    string `json:"description"`      // Описание NPC
 	IsFirstMeeting bool   `json:"is_first_meeting"` // Первая ли это встреча
-}
-
-// CompanionJoined представляет NPC, присоединившегося к отряду игрока по ходу сюжета
-type CompanionJoined struct {
-	Name        string `json:"name"`        // Имя нового компаньона
-	Class       string `json:"class"`       // Класс/роль (Воин, Маг, Разбойник, Целитель и т.п.)
-	Description string `json:"description"` // Краткое описание персонажа
-}
-
-// CompanionLeft представляет компаньона, покинувшего отряд по ходу сюжета
-// (погиб, ушёл по своим делам, предал и т.п. — не ручной /dismiss)
-type CompanionLeft struct {
-	Name   string `json:"name"`   // Имя компаньона, покидающего отряд
-	Reason string `json:"reason"` // Причина ухода из текста DM
 }
 
 // CombatRepository интерфейс для работы с боями
@@ -168,7 +134,6 @@ type AnalyzeDMResponseUseCase struct {
 	characterID              uint                      // ID персонажа игрока
 	playerID                 uint                      // ID игрока (для проверки достижений)
 	combatStartMessage       string                    // Сообщение о порядке ходов при начале боя
-	companionEventMessage    string                    // Сообщение о присоединении/уходе компаньона
 	imageLimitReachedMessage string                    // Сообщение при достижении лимита изображений на сессию
 	checkAchievementsUC      AchievementChecker        // Опциональная зависимость для проверки достижений
 	notificationService      NotificationService       // Опциональная зависимость для отправки уведомлений
@@ -181,7 +146,6 @@ type AnalyzeDMResponseUseCase struct {
 	fullSessionRepo          FullSessionRepository     // Репозиторий для доступа к полной сессии (для pending проверок)
 	eventRepo                StoryEventRepository      // Репозиторий для записи событий истории
 	indexDocUC               RAGIndexer                // Индексатор RAG для событий
-	campaignFactRepo         CampaignFactRepository    // Репозиторий для записи ключевых фактов кампании
 	imagesGeneratedInSession int                       // Счетчик изображений, сгенерированных в этой сессии
 	maxImagesPerSession      int                       // Максимальное количество изображений за сессию
 	autoGenerateImages       bool                      // Включить/отключить автоматическую генерацию изображений
@@ -291,7 +255,6 @@ type GenerateImageRequest struct {
 	EntityName      string // Уникальное имя сущности для кэширования
 	ForceRegenerate bool
 	UserID          int64
-	ChatID          int64 // ID игры (сессии), к которой привязан лимит "изображений за игру"
 	SkipLimitCheck  bool
 }
 
@@ -399,16 +362,6 @@ func (uc *AnalyzeDMResponseUseCase) SetRAGIndexer(indexer RAGIndexer) {
 	uc.indexDocUC = indexer
 }
 
-// CampaignFactRepository интерфейс для записи ключевых фактов кампании
-type CampaignFactRepository interface {
-	Save(ctx context.Context, fact *world.CampaignFact) error
-}
-
-// SetCampaignFactRepository устанавливает репозиторий ключевых фактов кампании
-func (uc *AnalyzeDMResponseUseCase) SetCampaignFactRepository(repo CampaignFactRepository) {
-	uc.campaignFactRepo = repo
-}
-
 // Execute анализирует ответ DM и выполняет необходимые действия
 func (uc *AnalyzeDMResponseUseCase) Execute(
 	ctx context.Context,
@@ -442,12 +395,6 @@ func (uc *AnalyzeDMResponseUseCase) Execute(
 	// Сообщение при достижении лимита изображений на сессию
 	analysis.ImageLimitReachedMessage = uc.imageLimitReachedMessage
 	analysis.ImagesGeneratedInSession = uc.imagesGeneratedInSession
-
-	// Сообщение о присоединении/уходе компаньона (если было обработано)
-	if uc.companionEventMessage != "" {
-		analysis.CompanionEventMessage = uc.companionEventMessage
-		uc.companionEventMessage = "" // Очищаем для следующего использования
-	}
 
 	return analysis, nil
 }
@@ -535,10 +482,7 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 		len(analysis.ItemsReceived) == 0 &&
 		analysis.LocationVisited == nil &&
 		analysis.NPCMet == nil &&
-		analysis.CompanionJoined == nil &&
-		analysis.CompanionLeft == nil &&
-		len(analysis.GeneratedImages) == 0 &&
-		len(analysis.KeyFacts) == 0
+		len(analysis.GeneratedImages) == 0
 
 	if isEmptyAnalysis {
 		log.Printf("[DM Analyzer] Analysis appears to be empty/default values, this may indicate LLM parsing issues")
@@ -627,30 +571,6 @@ func validateAnalysisStrict(analysis *DMResponseAnalysis) (*DMResponseAnalysis, 
 		}
 	}
 
-	// Валидируем присоединение компаньона
-	if analysis.CompanionJoined != nil {
-		if strings.TrimSpace(analysis.CompanionJoined.Name) == "" {
-			log.Printf("[DM Analyzer] Companion joined but name is empty, clearing companion_joined")
-			analysis.CompanionJoined = nil
-		}
-	}
-
-	// Валидируем уход компаньона
-	if analysis.CompanionLeft != nil {
-		if strings.TrimSpace(analysis.CompanionLeft.Name) == "" {
-			log.Printf("[DM Analyzer] Companion left but name is empty, clearing companion_left")
-			analysis.CompanionLeft = nil
-		}
-	}
-
-	// Компаньон не может одновременно присоединиться и покинуть отряд под одним и тем же именем
-	if analysis.CompanionJoined != nil && analysis.CompanionLeft != nil &&
-		strings.EqualFold(strings.TrimSpace(analysis.CompanionJoined.Name), strings.TrimSpace(analysis.CompanionLeft.Name)) {
-		log.Printf("[DM Analyzer] Companion joined and left with the same name in one response, ignoring both")
-		analysis.CompanionJoined = nil
-		analysis.CompanionLeft = nil
-	}
-
 	return analysis, nil
 }
 
@@ -669,8 +589,6 @@ func validateJSONSchemaStrict(prompt string) error {
 		"items_received",
 		"location_visited",
 		"npc_met",
-		"companion_joined",
-		"companion_left",
 		"generated_images",
 	}
 
@@ -962,20 +880,22 @@ func (uc *AnalyzeDMResponseUseCase) analyzeWithLLMWithRetry(
 		return fallbackAnalysisFromResponse(dmResponse), nil
 	}
 
-	// Пустой анализ (все поля false/пусто) — легитимный результат для обычного
-	// повествовательного хода без механических последствий, а не признак сбоя парсинга:
-	// JSON успешно и строго распарсился (decodeStrictAnalysis выше не вернул ошибку).
-	// Раньше это трактовалось как невалидный ответ и приводило к 5 лишним retry на
-	// каждый обычный ход (доп. задержка и расход токенов на большинстве ходов, где
-	// объективно ничего не произошло). Сохраняем только текстовый fallback как
-	// подстраховку на случай, если DM явно описал бой, а анализатор его не заметил —
-	// но без повторных вызовов LLM, сразу по первому пустому результату.
 	if isEmptyAnalysis(analysis) {
+		// Пустой анализ считаем невалидным и делаем retry до maxRetries раз
+		if attempt < maxRetries {
+			log.Printf("[DM Analyzer] Empty analysis (attempt: %d), retrying...", attempt+1)
+			return uc.analyzeWithLLMWithRetry(ctx, dmResponse, attempt+1, maxRetries)
+		}
+
+		// После всех retry используем fallback если есть маркеры боя
 		if detectsCombatMarker(dmResponse) {
-			log.Printf("[DM Analyzer] Empty analysis but combat markers found in DM text, using text-based fallback (attempt: %d)", attempt+1)
+			log.Printf("[DM Analyzer] Empty analysis after all retries but combat markers detected, using fallback analysis")
 			return fallbackAnalysisFromResponse(dmResponse), nil
 		}
-		log.Printf("[DM Analyzer] Empty analysis, no combat markers — trusting parsed result (attempt: %d)", attempt+1)
+
+		// Если нет маркеров боя, возвращаем пустой анализ
+		log.Printf("[DM Analyzer] Empty analysis after all retries, no combat markers detected")
+		return analysis, nil
 	}
 
 	// Валидируем анализ боя
@@ -1215,211 +1135,7 @@ func (uc *AnalyzeDMResponseUseCase) processAnalysis(
 		}
 	}
 
-	// Обрабатываем присоединение/уход компаньонов по ходу сюжета
-	if analysis.CompanionJoined != nil {
-		if err := uc.handleCompanionJoined(ctx, analysis.CompanionJoined); err != nil {
-			log.Printf("[DM Analyzer] Failed to handle companion joined: %v", err)
-		}
-	}
-	if analysis.CompanionLeft != nil {
-		if err := uc.handleCompanionLeft(ctx, analysis.CompanionLeft); err != nil {
-			log.Printf("[DM Analyzer] Failed to handle companion left: %v", err)
-		}
-	}
-
-	// Сохраняем ключевые факты кампании (глобальная память, не привязанная к локации)
-	if len(analysis.KeyFacts) > 0 {
-		uc.recordCampaignFacts(ctx, analysis.KeyFacts)
-	}
-
 	return nil
-}
-
-// recordCampaignFacts сохраняет устойчивые факты кампании, извлечённые из ответа DM.
-// Ошибки записи не прерывают обработку ответа — эта память является дополнительной.
-func (uc *AnalyzeDMResponseUseCase) recordCampaignFacts(ctx context.Context, facts []KeyFact) {
-	if uc.campaignFactRepo == nil || uc.worldID == 0 {
-		return
-	}
-
-	for _, kf := range facts {
-		text := strings.TrimSpace(kf.Text)
-		if text == "" {
-			continue
-		}
-
-		category := world.CampaignFactCategory(strings.TrimSpace(kf.Category))
-		switch category {
-		case world.FactCategoryReputation, world.FactCategoryQuest, world.FactCategoryDecision, world.FactCategoryRelationship:
-			// валидная категория
-		default:
-			category = world.FactCategoryDecision
-		}
-
-		fact := &world.CampaignFact{
-			WorldID:  uc.worldID,
-			Category: category,
-			Text:     text,
-		}
-		if err := uc.campaignFactRepo.Save(ctx, fact); err != nil {
-			log.Printf("[DM Analyzer] Failed to save campaign fact: %v", err)
-		}
-	}
-}
-
-// companionStatRNG — источник случайности для генерации характеристик компаньонов,
-// присоединяющихся по ходу сюжета (аналог rng в player_action.recruitCompanion).
-var companionStatRNG = rand.New(rand.NewSource(time.Now().UnixNano()))
-
-// handleCompanionJoined добавляет NPC в отряд игрока, когда DM явно описал
-// присоединение компаньона по ходу сюжета (не через ручной /recruit или
-// случайное событие локации). Ошибка не прерывает обработку остального анализа.
-func (uc *AnalyzeDMResponseUseCase) handleCompanionJoined(ctx context.Context, joined *CompanionJoined) error {
-	if uc.fullSessionRepo == nil {
-		log.Printf("[DM Analyzer] Full session repo is nil, skipping companion joined handling")
-		return nil
-	}
-
-	name := strings.TrimSpace(joined.Name)
-	if name == "" {
-		return nil
-	}
-
-	gs, err := uc.fullSessionRepo.GetByChatID(ctx, uc.chatID)
-	if err != nil {
-		return fmt.Errorf("failed to get session for companion joined: %w", err)
-	}
-	if gs == nil {
-		return fmt.Errorf("session not found for companion joined")
-	}
-
-	// Не дублируем компаньона, если он уже в отряде
-	for _, existing := range gs.Companions {
-		if strings.EqualFold(existing.Name, name) {
-			log.Printf("[DM Analyzer] Companion %q already in party, skipping duplicate join", name)
-			return nil
-		}
-	}
-
-	class := strings.TrimSpace(joined.Class)
-	if class == "" {
-		class = "Соратник"
-	}
-	description := strings.TrimSpace(joined.Description)
-	if description == "" {
-		description = fmt.Sprintf("%s присоединился к отряду", name)
-	}
-
-	level, hp, ac, attackBonus, damageDice := generateCompanionStats(class)
-
-	companion := &session.Companion{
-		GameSessionID: gs.ID,
-		Name:          name,
-		Description:   description,
-		Class:         class,
-		Level:         level,
-		HP:            hp,
-		MaxHP:         hp,
-		AC:            ac,
-		AttackBonus:   attackBonus,
-		DamageDice:    damageDice,
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
-	}
-
-	gs.AddCompanion(companion)
-
-	if err := uc.fullSessionRepo.Save(ctx, gs); err != nil {
-		return fmt.Errorf("failed to save session after companion joined: %w", err)
-	}
-
-	log.Printf("[DM Analyzer] Companion joined party: %s (%s, %d ур)", name, class, level)
-	uc.companionEventMessage = fmt.Sprintf("🎉 К вашему отряду присоединился компаньон: %s (%s, %d ур)", name, class, level)
-
-	return nil
-}
-
-// handleCompanionLeft удаляет NPC из отряда игрока, когда DM явно описал
-// окончательный уход компаньона по ходу сюжета (гибель, расставание, предательство).
-// Ошибка не прерывает обработку остального анализа.
-func (uc *AnalyzeDMResponseUseCase) handleCompanionLeft(ctx context.Context, left *CompanionLeft) error {
-	if uc.fullSessionRepo == nil {
-		log.Printf("[DM Analyzer] Full session repo is nil, skipping companion left handling")
-		return nil
-	}
-
-	name := strings.TrimSpace(left.Name)
-	if name == "" {
-		return nil
-	}
-
-	gs, err := uc.fullSessionRepo.GetByChatID(ctx, uc.chatID)
-	if err != nil {
-		return fmt.Errorf("failed to get session for companion left: %w", err)
-	}
-	if gs == nil {
-		return fmt.Errorf("session not found for companion left")
-	}
-
-	var companionID uint
-	found := false
-	for _, existing := range gs.Companions {
-		if strings.EqualFold(existing.Name, name) {
-			companionID = existing.ID
-			found = true
-			break
-		}
-	}
-	if !found {
-		log.Printf("[DM Analyzer] Companion %q not found in party, nothing to remove", name)
-		return nil
-	}
-
-	gs.RemoveCompanion(companionID)
-
-	if err := uc.fullSessionRepo.Save(ctx, gs); err != nil {
-		return fmt.Errorf("failed to save session after companion left: %w", err)
-	}
-
-	reason := strings.TrimSpace(left.Reason)
-	log.Printf("[DM Analyzer] Companion left party: %s (reason: %s)", name, reason)
-	if reason != "" {
-		uc.companionEventMessage = fmt.Sprintf("👋 Компаньон %s покинул отряд. Причина: %s", name, reason)
-	} else {
-		uc.companionEventMessage = fmt.Sprintf("👋 Компаньон %s покинул отряд.", name)
-	}
-
-	return nil
-}
-
-// generateCompanionStats генерирует базовые характеристики компаньона на основе класса —
-// аналогично player_action.recruitCompanion, но для компаньонов, присоединяющихся
-// по ходу сюжета, а не через случайное событие локации.
-func generateCompanionStats(class string) (level, hp, ac, attackBonus int, damageDice string) {
-	level = 1 + companionStatRNG.Intn(3) // 1-3
-	hp = 20 + companionStatRNG.Intn(30)  // 20-49
-	ac = 12 + companionStatRNG.Intn(4)   // 12-15
-	attackBonus = 2 + companionStatRNG.Intn(3)
-	damageDice = "1d8"
-
-	switch strings.ToLower(strings.TrimSpace(class)) {
-	case "маг", "волшебник", "чародей":
-		ac -= 1
-		damageDice = "1d6"
-	case "целитель", "жрец", "друид":
-		attackBonus -= 1
-	case "разбойник", "плут":
-		attackBonus += 1
-		damageDice = "1d6"
-	}
-	if ac < 10 {
-		ac = 10
-	}
-	if attackBonus < 1 {
-		attackBonus = 1
-	}
-
-	return level, hp, ac, attackBonus, damageDice
 }
 
 // generateImagesForItems автоматически генерирует изображения для полученных предметов
@@ -1464,7 +1180,6 @@ func (uc *AnalyzeDMResponseUseCase) generateImagesForItems(
 			EntityName:      item.Name, // Используем имя предмета для кэширования
 			ForceRegenerate: false,
 			UserID:          uc.userID,
-			ChatID:          uc.chatID,
 			SkipLimitCheck:  false, // Проверяем лимиты
 		}
 
@@ -1565,7 +1280,6 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForLocation(
 		EntityName:      location.Name, // Используем имя локации для кэширования
 		ForceRegenerate: false,
 		UserID:          uc.userID,
-		ChatID:          uc.chatID,
 		SkipLimitCheck:  false, // Проверяем лимиты
 	}
 
@@ -1667,7 +1381,6 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForNPC(
 		EntityName:      npc.Name, // Используем имя NPC для кэширования
 		ForceRegenerate: false,
 		UserID:          uc.userID,
-		ChatID:          uc.chatID,
 		SkipLimitCheck:  false, // Проверяем лимиты
 	}
 
@@ -1719,7 +1432,6 @@ func (uc *AnalyzeDMResponseUseCase) generateImageForCombatEnd(ctx context.Contex
 		EntityName:      "combat_end",
 		ForceRegenerate: false,
 		UserID:          uc.userID,
-		ChatID:          uc.chatID,
 		SkipLimitCheck:  false,
 	}
 	resp, err := uc.imageGenerationService.GenerateImage(imgCtx, req)
@@ -2044,7 +1756,7 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 		}
 
 		// Добавляем предмет в инвентарь
-		if err := inv.AddItem(item.Name, description, weight, quantity, itemType, item.HealingAmount); err != nil {
+		if err := inv.AddItem(item.Name, description, weight, quantity, itemType); err != nil {
 			log.Printf("Failed to add item '%s' to inventory: %v", item.Name, err)
 			// Продолжаем добавление остальных предметов даже при ошибке
 			continue
@@ -2064,7 +1776,7 @@ func (uc *AnalyzeDMResponseUseCase) handleItemsReceived(
 
 // buildAnalysisPrompt создает промпт для анализа ответа DM
 func buildAnalysisPrompt(dmResponse string, strict bool) string {
-	skeleton := `{"combat_detected":false,"combat_ended":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"companion_joined":null,"companion_left":null,"generated_images":[],"key_facts":[]}`
+	skeleton := `{"combat_detected":false,"combat_ended":false,"enemies":[],"quest_completed":false,"quest_failed":false,"quest_title":"","experience_gained":0,"experience_reason":"","items_received":[],"location_visited":null,"npc_met":null,"generated_images":[]}`
 	criticalFooter := ""
 	if strict {
 		criticalFooter = "\n\nСТРОГОЕ ПРАВИЛО ДЛЯ РЕТРАЯ:\n- НЕ возвращай пустой JSON {} или пустой ответ\n- Если нет событий, верни этот скелет без изменений: " + skeleton
@@ -2098,8 +1810,7 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
       "description": "описание предмета",
       "weight": число,
       "quantity": число,
-      "type": "weapon|armor|potion|tool|consumable|misc",
-      "healing_amount": число
+      "type": "weapon|armor|potion|tool|consumable|misc"
     }
   ],
   "location_visited": {
@@ -2112,22 +1823,7 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
     "description": "описание NPC",
     "is_first_meeting": true/false
   },
-  "companion_joined": {
-    "name": "имя компаньона",
-    "class": "класс/роль",
-    "description": "краткое описание персонажа"
-  },
-  "companion_left": {
-    "name": "имя компаньона",
-    "reason": "причина ухода"
-  },
-  "generated_images": [],
-  "key_facts": [
-    {
-      "category": "reputation|quest|decision|relationship",
-      "text": "краткая формулировка факта"
-    }
-  ]
+  "generated_images": []
 }
 
 БОЙ И ВРАГИ (combat_detected):
@@ -2181,11 +1877,8 @@ func buildAnalysisPrompt(dmResponse string, strict bool) string {
 - experience_reason - кратко объясни причину
 
 ПРЕДМЕТЫ (items_received):
-- Добавляй ТОЛЬКО если игрок явно получил НОВЫЙ предмет (слова: "получаешь", "находишь", "поднимаешь", "вручает", "дает", "дарит")
+- Добавляй ТОЛЬКО если игрок явно получил предмет (слова: "получаешь", "находишь", "поднимаешь", "вручает", "дает", "дарит")
 - НЕ добавляй если предмет только упоминается или игрок его еще не получил
-- НЕ добавляй, если игрок ИСПОЛЬЗУЕТ/ПОТРЕБЛЯЕТ уже имеющийся у него предмет (слова: "пьешь", "выпиваешь", "используешь", "применяешь", "съедаешь", "расходуешь") - это НЕ получение предмета, а его расход, items_received для этого не предназначен
-- Примеры, когда items_received НЕ добавляется: "Ты выпиваешь зелье лечения, тепло разливается по телу" / "Ты используешь последний факел" / "Ты съедаешь кусок хлеба из своих запасов"
-- Если у полученного предмета есть эффект восстановления здоровья (лечебное зелье и т.п.) - обязательно укажи healing_amount (сколько HP восстанавливает ОДНА единица), иначе 0
 
 ЛОКАЦИИ (location_visited):
 - Устанавливай только при первом посещении новой локации
@@ -2196,20 +1889,6 @@ NPC (npc_met):
 - Устанавливай только при первой встрече с NPC
 - Ключевые слова: "встречаешь", "видишь", "подходит", "появляется", "знакомишься"
 - is_first_meeting=true для новых NPC
-
-КОМПАНЬОНЫ, ПРИСОЕДИНЯЮЩИЕСЯ К ОТРЯДУ (companion_joined):
-- Устанавливай companion_joined, ТОЛЬКО если NPC явно и окончательно присоединяется к отряду игрока как соратник/спутник
-- Ключевые слова: "присоединяется к вам", "теперь с вами", "идёт с вами", "вступает в отряд", "готов сражаться на вашей стороне", "становится вашим спутником"
-- НЕ устанавливай, если NPC просто помогает разово, даёт совет, сопровождает временно в пределах одной сцены или это союзник только на время одного боя
-- НЕ устанавливай для NPC, которые просто идут в том же направлении или встречены мимоходом
-- name — имя компаньона, class — его класс/роль (Воин, Маг, Разбойник, Целитель и т.п., по контексту), description — 1 короткое предложение
-
-КОМПАНЬОНЫ, ПОКИДАЮЩИЕ ОТРЯД (companion_left):
-- Устанавливай companion_left, ТОЛЬКО если ранее присоединившийся компаньон явно и окончательно покидает отряд по ходу сюжета: гибнет, уходит по своим делам, предаёт, остаётся в другом месте
-- Ключевые слова: "покидает отряд", "прощается с вами", "остаётся здесь", "погибает", "больше не с вами", "уходит своей дорогой", "предаёт вас"
-- НЕ устанавливай для временной разлуки в пределах одной сцены (например, компаньон отошёл в соседнюю комнату)
-- name — имя компаньона, reason — краткая причина ухода из текста DM
-- Устанавливай ТОЛЬКО одно из полей companion_joined/companion_left за раз для одного и того же имени компаньона в одном ответе
 
 КРИТИЧЕСКИ ВАЖНО:
 - ВСЕГДА возвращай ПОЛНЫЙ JSON со ВСЕМИ полями (даже если значения по умолчанию)
@@ -2230,16 +1909,6 @@ NPC (npc_met):
 - Устанавливай combat_ended=true ТОЛЬКО когда в ответе DM явно описан КОНЕЦ боя: победа, враги повержены, отступление, разгром, бой завершён.
 - Ключевые слова: "победа", "повержен", "побеждаете", "враг пал", "бой окончен", "закончился бой", "отступают", "разгром", "триумф".
 - combat_ended=false во время боя или когда бой только начинается.
-
-КЛЮЧЕВЫЕ ФАКТЫ КАМПАНИИ (key_facts):
-- Добавляй запись, ТОЛЬКО если произошло что-то значимое для ВСЕЙ кампании, а не только для текущей локации:
-  устойчивое изменение репутации, важное решение с долгими последствиями, веха главного или побочного квеста,
-  заметный сдвиг в отношениях с NPC/фракцией
-- category: "reputation" (репутация), "quest" (веха квеста), "decision" (решение с последствиями),
-  "relationship" (отношения с NPC/фракцией)
-- text — 1 короткое предложение, без пересказа диалога
-- НЕ добавляй факты о рутинных или локальных действиях (осмотр комнаты, обычный диалог, находка мелкого предмета)
-- Если ничего значимого для кампании не произошло, оставь key_facts пустым массивом []
 
 ЗНАЧИМЫЕ СОБЫТИЯ ДЛЯ АВТОГЕНА ИЗОБРАЖЕНИЙ (только эти три; предметы — нет):
 - Новая локация (location_visited с is_first_visit=true)
@@ -2713,30 +2382,13 @@ func detectsCombatMarker(dmResponse string) bool {
 		"initiative", "hit", "damage", "wound", "kill", "die",
 		"sword", "axe", "bow", "crossbow", "spear", "shield",
 	}
-	words := combatMarkerWordRe.FindAllString(lower, -1)
 	for _, marker := range markers {
-		if strings.Contains(marker, " ") {
-			// Фразовые маркеры (несколько слов) — ищем как подстроку во всём тексте.
-			if strings.Contains(lower, marker) {
-				return true
-			}
-			continue
-		}
-		// Однословные маркеры сравниваем только с началом целого слова, а не с
-		// произвольной подстрокой — иначе короткие маркеры вроде "лед" или "яд"
-		// ложно срабатывают внутри обычных слов ("последовать", "исследовать").
-		for _, w := range words {
-			if strings.HasPrefix(w, marker) {
-				return true
-			}
+		if strings.Contains(lower, marker) {
+			return true
 		}
 	}
 	return false
 }
-
-// combatMarkerWordRe разбивает текст на слова (последовательности unicode-букв)
-// для поиска однословных маркеров боя по началу слова, а не по произвольной подстроке.
-var combatMarkerWordRe = regexp.MustCompile(`[\p{L}]+`)
 
 func isEmptyAnalysis(analysis *DMResponseAnalysis) bool {
 	if analysis == nil {
@@ -2754,10 +2406,7 @@ func isEmptyAnalysis(analysis *DMResponseAnalysis) bool {
 		len(analysis.ItemsReceived) == 0 &&
 		analysis.LocationVisited == nil &&
 		analysis.NPCMet == nil &&
-		analysis.CompanionJoined == nil &&
-		analysis.CompanionLeft == nil &&
-		len(analysis.GeneratedImages) == 0 &&
-		len(analysis.KeyFacts) == 0
+		len(analysis.GeneratedImages) == 0
 }
 
 func recordAnalyzerJSONFailure(reason string) {
@@ -3384,12 +3033,10 @@ func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
 	}
 
 	content := buildLocationEventStory(resp.Event, resp.Description)
-	locationID := resp.Event.RequiredLocationID
 
 	if uc.eventRepo != nil {
 		eventItem := &event.StoryEvent{
 			GameSessionID: uc.sessionID,
-			LocationID:    locationID,
 			AuthorType:    event.AuthorTypeDM,
 			Content:       content,
 			CreatedAt:     time.Now(),
@@ -3402,12 +3049,11 @@ func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
 	if uc.indexDocUC != nil {
 		// Индексируем location event как StoryEvent для истории
 		storyDoc := ragdomain.Document{
-			ID:         uuid.New().String(),
-			Source:     ragdomain.SourceEvent,
-			SessionID:  uc.sessionID,
-			LocationID: locationID,
-			Text:       content,
-			Timestamp:  time.Now(),
+			ID:        uuid.New().String(),
+			Source:    ragdomain.SourceEvent,
+			SessionID: uc.sessionID,
+			Text:      content,
+			Timestamp: time.Now(),
 		}
 		if err := uc.indexDocUC.Execute(ctx, storyDoc); err != nil {
 			log.Printf("[DM Analyzer] Failed to index location event story in RAG: %v", err)
@@ -3417,12 +3063,11 @@ func (uc *AnalyzeDMResponseUseCase) recordLocationEvent(
 		// Дополнительно индексируем location event как отдельный документ для лучшего поиска RAG
 		// Это позволяет находить информацию о location events через семантический поиск
 		locationDoc := ragdomain.Document{
-			ID:         uuid.New().String(),
-			Source:     ragdomain.SourceLocation,
-			SessionID:  uc.sessionID,
-			LocationID: locationID,
-			Text:       fmt.Sprintf("Локация: %s. %s", resp.Event.Name, resp.Event.Description),
-			Timestamp:  time.Now(),
+			ID:        uuid.New().String(),
+			Source:    ragdomain.SourceLocation,
+			SessionID: uc.sessionID,
+			Text:      fmt.Sprintf("Локация: %s. %s", resp.Event.Name, resp.Event.Description),
+			Timestamp: time.Now(),
 		}
 		if err := uc.indexDocUC.Execute(ctx, locationDoc); err != nil {
 			log.Printf("[DM Analyzer] Failed to index location event as separate document: %v", err)

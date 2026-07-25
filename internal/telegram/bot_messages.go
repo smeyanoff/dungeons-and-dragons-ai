@@ -138,40 +138,11 @@ func sanitizeUTF8(s string) string {
 	return result.String()
 }
 
-// knownToolNames — имена всех инструментов, регистрируемых для DM (см. Name() в internal/game/application/dm_tools).
-// DM всегда пишет по-русски, поэтому голое упоминание одного из этих идентификаторов в тексте —
-// признак утечки внутреннего маркера (например, "🎯 perform_combat_attack"), а не легитимный текст.
-var knownToolNames = []string{
-	"save_campaign_fact",
-	"get_character_stats",
-	"request_ability_check",
-	"request_saving_throw",
-	"evaluate_check",
-	"get_character_abilities",
-	"roll_dice",
-	"check_combat_status",
-	"perform_combat_attack",
-	"apply_damage",
-	"get_battlefield_status",
-	"perform_enemy_attack",
-	"get_combat_participant_stats",
-	"compare_attack_vs_defense",
-	"generate_image",
-	"send_followup_message",
-	"validate_item_usage",
-	"check_stat_requirements",
-	"use_spell",
-	"get_inventory",
-	"add_item_to_inventory",
-	"remove_item_from_inventory",
-}
-
 var (
 	toolCallBlockRe   = regexp.MustCompile(`(?s)<tool_call>.*?</tool_call>`)
 	toolResultBlockRe = regexp.MustCompile(`(?s)<tool_result>.*?</tool_result>`)
 	codeFenceRe       = regexp.MustCompile("(?s)```.*?```")
 	jsonObjectRe      = regexp.MustCompile(`(?s)\{[^{}]*\"[^\"]+\"\s*:\s*[^{}]*\}`)
-	toolNameMentionRe = regexp.MustCompile(`(?i)\b(` + strings.Join(knownToolNames, "|") + `)\b`)
 )
 
 func sanitizeTelegramOutput(text string, chatID int64, source string) string {
@@ -251,8 +222,7 @@ func stripSuspiciousLines(text string) (string, bool) {
 			strings.Contains(trimmed, "</tool_call>") ||
 			strings.Contains(trimmed, "<tool_result>") ||
 			strings.Contains(trimmed, "</tool_result>") ||
-			looksLikeJSONLine(trimmed) ||
-			toolNameMentionRe.MatchString(trimmed) {
+			looksLikeJSONLine(trimmed) {
 			removed = true
 			continue
 		}

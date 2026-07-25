@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http/httptest"
 	"strings"
@@ -232,20 +233,33 @@ func TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat(t *testing.T) {
 	} else if len(logs) == 0 {
 		problems = append(problems, "не найдено ни одного llm_logs по chat_id (ожидали мониторинг промптов)")
 	} else {
-		// Целевой флоу — analyzer-first: request_ability_check не регистрируется как tool для DM
-		// (см. createToolRegistry в handle_action.go), проверка навыка создаётся системой напрямую
-		// по флагу needs_ability_check из dm_analyzer.AnalyzePlayerActionUseCase. Player-facing
-		// prompt проверки уже проверен выше (шаг 3, foundPrompt) — это и есть подтверждение флоу,
-		// а не наличие tool-вызова request_ability_check в llm_logs. Здесь проверяем только то,
-		// что tools вообще используются DM (combat/inventory/etc — см. /attack на шаге 7).
+		toolNames := map[string]bool{}
 		withTools := 0
 		for _, l := range logs {
-			if l != nil && l.HasTools {
+			if l == nil {
+				continue
+			}
+			if l.HasTools {
 				withTools++
+				if l.ToolsCalls != nil && strings.TrimSpace(*l.ToolsCalls) != "" {
+					var calls []struct {
+						Name string `json:"name"`
+					}
+					_ = json.Unmarshal([]byte(*l.ToolsCalls), &calls)
+					for _, c := range calls {
+						if strings.TrimSpace(c.Name) != "" {
+							toolNames[c.Name] = true
+						}
+					}
+				}
 			}
 		}
 		if withTools == 0 {
 			problems = append(problems, fmt.Sprintf("llm_logs есть (%d), но нет ни одного запроса с tools", len(logs)))
+		}
+		if !toolNames["request_ability_check"] {
+			// Not fatal for the whole gameplay, but important for “tool-first” coverage.
+			problems = append(problems, "в llm_logs не нашли tool вызов request_ability_check (ожидали tool-first ability check)")
 		}
 	}
 

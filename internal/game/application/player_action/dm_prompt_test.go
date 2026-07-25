@@ -189,8 +189,8 @@ func TestBuildDMPrompt_DMInstructionsIncluded(t *testing.T) {
 
 	// Check that all important DM instructions are included
 	requiredInstructions := []string{
-		"Проверки навыков решает СИСТЕМА",
-		"ЗАПРЕЩЕНО называть конкретную характеристику/навык проверки",
+		"Проверки навыков решает система",
+		"не проси игрока ничего бросать",
 		"ключевых моментов",
 		"Инструменты",
 		"АВТОМАТИЧЕСКИ опиши последствия",

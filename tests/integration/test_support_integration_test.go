@@ -49,7 +49,6 @@ import (
 	llmdomain "dungeons-and-dragons-ai/internal/llm/domain"
 	llminfrastructure "dungeons-and-dragons-ai/internal/llm/infrastructure"
 	ragapp "dungeons-and-dragons-ai/internal/rag/application"
-	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 	ragembeddings "dungeons-and-dragons-ai/internal/rag/infrastructure/embeddings"
 	ragvectorstore "dungeons-and-dragons-ai/internal/rag/infrastructure/vectorstore"
 	"dungeons-and-dragons-ai/pkg/gigachat"
@@ -200,54 +199,27 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 		t.Skip("Контейнеры не запущены или недоступны. Запустите: make docker-up")
 	}
 
-	// Cassette record/replay: см. llm_cassette_test.go. LLM_CASSETTE_MODE=replay воспроизводит ранее
-	// записанные ответы LLM/эмбеддера офлайн, без сети и GigaChat credentials.
-	cassetteMode := getEnv("LLM_CASSETTE_MODE", "")
-	cassetteFile := getEnv("LLM_CASSETTE_FILE", "")
-	if cassetteMode == "record" || cassetteMode == "replay" {
-		if cassetteFile == "" {
-			t.Fatalf("LLM_CASSETTE_MODE=%s требует LLM_CASSETTE_FILE", cassetteMode)
-		}
+	// GigaChat credentials: если нет — skip LLM-dependent integration tests.
+	gigachatClientID := getEnv("GIGACHAT_CLIENT_ID", "")
+	gigachatClientSecret := getEnv("GIGACHAT_CLIENT_SECRET", "")
+	if gigachatClientID == "" || gigachatClientSecret == "" {
+		t.Skip("GIGACHAT_CLIENT_ID и GIGACHAT_CLIENT_SECRET не установлены. Пропускаем тесты, требующие LLM.")
 	}
 
-	var gigachatClient *gigachat.Client
+	skipTLSVerify := getEnv("GIGACHAT_SKIP_TLS_VERIFY", "false") == "true"
+	gigachatCfg := gigachat.Config{
+		AuthBaseURL:   getEnv("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443"),
+		APIBaseURL:    getEnv("GIGACHAT_API_URL", "https://gigachat.devices.sberbank.ru/api/v1"),
+		ClientID:      gigachatClientID,
+		ClientSecret:  gigachatClientSecret,
+		Scope:         getEnv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
+		SkipTLSVerify: skipTLSVerify,
+	}
+	gigachatClient := gigachat.NewClient(gigachatCfg)
 	gigachatModel := getEnv("GIGACHAT_MODEL", "GigaChat")
 
-	if cassetteMode != "replay" {
-		// GigaChat credentials: если нет — skip LLM-dependent integration tests.
-		gigachatClientID := getEnv("GIGACHAT_CLIENT_ID", "")
-		gigachatClientSecret := getEnv("GIGACHAT_CLIENT_SECRET", "")
-		if gigachatClientID == "" || gigachatClientSecret == "" {
-			t.Skip("GIGACHAT_CLIENT_ID и GIGACHAT_CLIENT_SECRET не установлены. Пропускаем тесты, требующие LLM.")
-		}
-
-		skipTLSVerify := getEnv("GIGACHAT_SKIP_TLS_VERIFY", "false") == "true"
-		gigachatCfg := gigachat.Config{
-			AuthBaseURL:   getEnv("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443"),
-			APIBaseURL:    getEnv("GIGACHAT_API_URL", "https://gigachat.devices.sberbank.ru/api/v1"),
-			ClientID:      gigachatClientID,
-			ClientSecret:  gigachatClientSecret,
-			Scope:         getEnv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
-			SkipTLSVerify: skipTLSVerify,
-		}
-		gigachatClient = gigachat.NewClient(gigachatCfg)
-	}
-	// В режиме replay credentials не проверяются и не нужны — gigachatClient остаётся nil,
-	// исходные "сырые" ответы приходят из replayingLLM/replayingEmbedder (кассета).
-
-	// LLM: реальный GigaChat (record/passthrough) либо воспроизведение из кассеты (replay).
-	var baseLLM llmdomain.LLM
-	if cassetteMode == "replay" {
-		replayLLM, err := newReplayingLLM(cassetteFile)
-		if err != nil {
-			t.Fatalf("не удалось загрузить кассету %s: %v", cassetteFile, err)
-		}
-		baseLLM = replayLLM
-	} else {
-		baseLLM = llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
-	}
-
-	// Monitoring (+ llm_logs) — общий для обоих режимов, чтобы проверки по llm_logs работали одинаково.
+	// LLM (+ monitoring + test-only rate limit, чтобы не DDOSить модель при полном прогоне).
+	baseLLM := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatModel)
 	llmLogRepo := persistence.NewLLMLogRepository(db)
 	monitoredLLM := llminfrastructure.NewMonitoredLLM(baseLLM, llmLogRepo)
 	if shutdowner, ok := interface{}(monitoredLLM).(interface {
@@ -259,13 +231,7 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 			_ = shutdowner.Shutdown(shutdownCtx)
 		})
 	}
-
-	var llm llmdomain.LLM = monitoredLLM
-	if cassetteMode != "replay" {
-		// Rate-limit защищает реальный API от бурста; в replay реального API нет — только замедляет тест.
-		llm = wrapLLMWithTestRateLimit(monitoredLLM)
-	}
-
+	llm := wrapLLMWithTestRateLimit(monitoredLLM)
 	imageGenerator := llminfrastructure.NewGigachatImageGenerator(gigachatClient, gigachatModel)
 
 	// Image storage (локально).
@@ -275,33 +241,13 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 		t.Fatalf("Не удалось создать image storage: %v", err)
 	}
 	generateImageUC := imageapp.NewImageGenerationUseCase(imageGenerator, imageStorage)
+	dailyLimit := 5
+	fallbackLimiter := imageapp.NewInMemoryRateLimiter(dailyLimit)
+	generateImageUC.SetLimiter(fallbackLimiter)
 
-	// RAG: эмбеддер — та же развилка, что и для LLM. DM-промпт почти всегда включает RAG-контекст,
-	// поэтому эмбеддер обязательно кассетируется наравне с LLM — иначе текст prompt разойдётся
-	// между записью и воспроизведением и ключи cassetteLLMKey перестанут совпадать.
-	var embedder ragdomain.Embedder
-	if cassetteMode == "replay" {
-		replayEmbedder, err := newReplayingEmbedder(cassetteFile)
-		if err != nil {
-			t.Fatalf("не удалось загрузить embed-кассету %s: %v", cassetteFile, err)
-		}
-		embedder = replayEmbedder
-	} else {
-		embedder = ragembeddings.NewGigachatEmbedder(gigachatClient)
-	}
-
-	if cassetteMode == "record" {
-		writer := newCassetteWriter(cassetteFile)
-		llm = newRecordingLLM(llm, writer)
-		embedder = newRecordingEmbedder(embedder, writer)
-	}
-
-	vectorStore := ragvectorstore.NewQdrantStore(qdrantClient, 0) // 0 => дефолтная размерность (1024, GigaChat-Embeddings)
-	if cassetteMode != "" {
-		// Чистим коллекцию перед стартом — иначе точки из предыдущих прогонов накопятся и RAG-поиск
-		// разойдётся между записью и воспроизведением (см. llm_cassette_test.go).
-		_ = qdrantClient.DeleteCollection(ctx, "dnd")
-	}
+	// RAG
+	embedder := ragembeddings.NewGigachatEmbedder(gigachatClient)
+	vectorStore := ragvectorstore.NewQdrantStore(qdrantClient)
 	if err := vectorStore.EnsureCollection(ctx); err != nil {
 		t.Fatalf("Не удалось создать коллекцию Qdrant: %v", err)
 	}
@@ -324,8 +270,8 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 	ratingRepo := persistence.NewRatingRepository(db)
 
 	// Use-cases + wiring (по аналогии с main.go)
-	checkLimitsUC := subscriptionapp.NewCheckLimitsUseCase(subscriptionRepo, sessionRepo, sessionRepo, eventRepo)
-	subscriptionImageLimiter := subscriptionapp.NewSubscriptionImageLimiter(checkLimitsUC)
+	checkLimitsUC := subscriptionapp.NewCheckLimitsUseCase(subscriptionRepo, sessionRepo, sessionRepo, eventRepo, fallbackLimiter)
+	subscriptionImageLimiter := subscriptionapp.NewSubscriptionImageLimiter(checkLimitsUC, fallbackLimiter)
 	generateImageUC.SetLimiter(subscriptionImageLimiter)
 
 	responseCache := dmcache.NewDMResponseCache(1 * time.Hour)

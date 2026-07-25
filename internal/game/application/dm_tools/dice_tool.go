@@ -22,16 +22,14 @@ type RollDiceTool struct {
 	rollDiceUC *dice.RollDiceUseCase
 	eventRepo  DiceEventRepository
 	sessionID  uint
-	locationID *uint
 }
 
 // NewRollDiceTool создает новый инструмент для бросков кубиков
-func NewRollDiceTool(rollDiceUC *dice.RollDiceUseCase, eventRepo DiceEventRepository, sessionID uint, locationID *uint) *RollDiceTool {
+func NewRollDiceTool(rollDiceUC *dice.RollDiceUseCase, eventRepo DiceEventRepository, sessionID uint) *RollDiceTool {
 	return &RollDiceTool{
 		rollDiceUC: rollDiceUC,
 		eventRepo:  eventRepo,
 		sessionID:  sessionID,
-		locationID: locationID,
 	}
 }
 
@@ -92,7 +90,6 @@ func (t *RollDiceTool) Execute(ctx context.Context, args map[string]interface{})
 	if t.eventRepo != nil {
 		dmEvent := &event.StoryEvent{
 			GameSessionID: t.sessionID,
-			LocationID:    t.locationID,
 			AuthorType:    event.AuthorTypeDM,
 			Content:       fmt.Sprintf("🎲 DM бросает кубик %s: %s", diceExpr, resultText),
 			CreatedAt:     time.Now(),

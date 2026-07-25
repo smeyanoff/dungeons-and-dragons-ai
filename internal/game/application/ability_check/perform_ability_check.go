@@ -133,7 +133,6 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 	// Сохраняем событие и индексируем в RAG
 	eventItem := &event.StoryEvent{
 		GameSessionID: gs.ID,
-		LocationID:    gs.CurrentLocationID,
 		AuthorType:    event.AuthorTypeDM,
 		Content:       message,
 		CreatedAt:     time.Now(),
@@ -145,12 +144,11 @@ func (uc *PerformAbilityCheckUseCase) execute(ctx context.Context, chatID int64,
 		)
 	} else if uc.indexDocUC != nil {
 		doc := ragdomain.Document{
-			ID:         uuid.New().String(),
-			Source:     ragdomain.SourceEvent,
-			SessionID:  gs.ID,
-			LocationID: gs.CurrentLocationID,
-			Text:       message,
-			Timestamp:  time.Now(),
+			ID:        uuid.New().String(),
+			Source:    ragdomain.SourceEvent,
+			SessionID: gs.ID,
+			Text:      message,
+			Timestamp: time.Now(),
 		}
 		if err := uc.indexDocUC.Execute(ctx, doc); err != nil {
 			logger.Warn("Failed to index ability check event",

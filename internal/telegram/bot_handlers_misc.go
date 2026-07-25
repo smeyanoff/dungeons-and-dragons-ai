@@ -156,10 +156,10 @@ func (b *Bot) handleSubscription(ctx context.Context, chatID int64, tgUserID int
 		message.WriteString(fmt.Sprintf("  💬 Сообщений/день: %d\n", details.MaxMessagesPerDay))
 	}
 
-	if details.MaxImagesPerGame == 0 {
-		message.WriteString("  ✅ Изображений за игру: безлимит\n")
+	if details.MaxImagesPerDay == 0 {
+		message.WriteString("  ✅ Изображений/день: безлимит\n")
 	} else {
-		message.WriteString(fmt.Sprintf("  🖼️ Изображений за игру: %d\n", details.MaxImagesPerGame))
+		message.WriteString(fmt.Sprintf("  🖼️ Изображений/день: %d\n", details.MaxImagesPerDay))
 	}
 
 	if details.MaxSaves == 0 {
@@ -204,7 +204,7 @@ func (b *Bot) handleSubscribe(ctx context.Context, chatID int64, tgUserID int64,
 	message.WriteString("🆓 Free - Бесплатно\n")
 	message.WriteString("  • 1 активная игра\n")
 	message.WriteString("  • 50 сообщений/день\n")
-	message.WriteString("  • 3 изображения за игру\n")
+	message.WriteString("  • 5 изображений/день\n")
 	message.WriteString("  • 1 сохранение\n")
 	message.WriteString("  • 30 слотов инвентаря\n\n")
 
@@ -251,8 +251,7 @@ func (b *Bot) handleImage(ctx context.Context, chatID int64, tgUserID int64, arg
 		// Проверяем лимит изображений
 		limitReq := subscriptionapp.CheckLimitRequest{
 			TgUserID:  tgUserID,
-			ChatID:    chatID,
-			LimitType: subscriptionapp.LimitTypeImagesPerGame,
+			LimitType: subscriptionapp.LimitTypeImagesPerDay,
 		}
 		limitResp, err := b.checkLimitsUC.Execute(ctx, limitReq)
 		if err == nil {
@@ -279,7 +278,7 @@ func (b *Bot) handleImage(ctx context.Context, chatID int64, tgUserID int64, arg
 /image древний лес с магическими рунами
 /image эльфийский воин в доспехах
 
-📝 Генерация изображений ограничена 3 изображениями за игру для Free пользователей.
+📝 Генерация изображений ограничена 5 изображениями в день для Free пользователей.
 Для Premium пользователей лимит снят.
 
 💡 Изображения автоматически кэшируются для повторного использования.`)
@@ -303,13 +302,12 @@ func (b *Bot) handleImage(ctx context.Context, chatID int64, tgUserID int64, arg
 		EntityID:        0,
 		ForceRegenerate: false,
 		UserID:          tgUserID,
-		ChatID:          chatID,
 		SkipLimitCheck:  skipLimitCheck, // Проверяется через checkLimitsUC
 	}
 
 	resp, err := b.generateImageUC.Execute(ctx, req)
 	if err != nil {
-		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при генерации изображения: %v\n\nВозможно, достигнут лимит генерации изображений за эту игру (3 изображения для Free).", err))
+		errorMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при генерации изображения: %v\n\nВозможно, достигнут дневной лимит генерации (5 изображений/день).", err))
 		return b.sendMessage(errorMsg)
 	}
 

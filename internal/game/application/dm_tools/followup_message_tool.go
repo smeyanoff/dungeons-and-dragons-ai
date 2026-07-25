@@ -18,19 +18,17 @@ type FollowupEventRepository interface {
 // SendFollowupMessageTool позволяет DM отправить дополнительное сообщение после обработки основного действия
 // DM вызывает этот инструмент и знает, что к нему придет еще один запрос для генерации дополнительного сообщения
 type SendFollowupMessageTool struct {
-	eventRepo  FollowupEventRepository
-	sessionID  uint
-	chatID     int64
-	locationID *uint
+	eventRepo FollowupEventRepository
+	sessionID uint
+	chatID    int64
 }
 
 // NewSendFollowupMessageTool создает новый инструмент для отправки дополнительных сообщений
-func NewSendFollowupMessageTool(eventRepo FollowupEventRepository, sessionID uint, chatID int64, locationID *uint) *SendFollowupMessageTool {
+func NewSendFollowupMessageTool(eventRepo FollowupEventRepository, sessionID uint, chatID int64) *SendFollowupMessageTool {
 	return &SendFollowupMessageTool{
-		eventRepo:  eventRepo,
-		sessionID:  sessionID,
-		chatID:     chatID,
-		locationID: locationID,
+		eventRepo: eventRepo,
+		sessionID: sessionID,
+		chatID:    chatID,
 	}
 }
 
@@ -94,7 +92,6 @@ func (t *SendFollowupMessageTool) Execute(ctx context.Context, args map[string]i
 	// Сохраняем информацию в Content в структурированном формате для последующего парсинга
 	followupEvent := &event.StoryEvent{
 		GameSessionID: t.sessionID,
-		LocationID:    t.locationID,
 		AuthorType:    event.AuthorTypeDM,
 		Content:       fmt.Sprintf("[FOLLOWUP_REQUEST] message_type=%s context=%s", messageType, contextStr),
 		CreatedAt:     time.Now(),

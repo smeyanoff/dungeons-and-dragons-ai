@@ -30,7 +30,6 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/feedback"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
-	"dungeons-and-dragons-ai/internal/metrics"
 	ragdomain "dungeons-and-dragons-ai/internal/rag/domain"
 	"dungeons-and-dragons-ai/pkg/logger"
 
@@ -89,10 +88,6 @@ type Bot struct {
 	// Health check state.
 	lastHealthCheck time.Time
 	healthCheckMu   sync.RWMutex
-
-	// httpTransport — транспорт HTTP-клиента Telegram Bot API. Хранится, чтобы принудительно
-	// закрывать простаивающие соединения при сетевых ошибках polling (см. Start).
-	httpTransport *http.Transport
 }
 
 type FeedbackDialogState struct {
@@ -370,6 +365,7 @@ func (b *Bot) setupBotCommands() error {
 		{Command: "abilities", Description: "Способности персонажа"},
 		{Command: "spells", Description: "Просмотр заклинаний"},
 		{Command: "cast", Description: "Использовать заклинание"},
+		{Command: "roll", Description: "Бросить кубик"},
 		{Command: "history", Description: "История игры"},
 		{Command: "quests", Description: "Активные квесты"},
 		{Command: "daily", Description: "Ежедневные задания"},
@@ -438,7 +434,6 @@ func (b *Bot) Start(ctx context.Context) error {
 		updates, err := b.api.GetUpdates(updateConfig)
 		if err != nil {
 			consecutiveErrors++
-			metrics.IncrementTelegramPollingError()
 			errStr := err.Error()
 
 			isEOFError := strings.Contains(errStr, "unexpected EOF")
@@ -446,13 +441,6 @@ func (b *Bot) Start(ctx context.Context) error {
 			isNetworkError := strings.Contains(errStr, "connection") || strings.Contains(errStr, "network") ||
 				strings.Contains(errStr, "reset") || strings.Contains(errStr, "broken pipe")
 			isRateLimitError := strings.Contains(errStr, "429") || strings.Contains(errStr, "Too Many Requests")
-
-			// Защита от повторного попадания на уже нерабочее соединение при ретрае.
-			// DisableKeepAlives в configureHTTPClient уже должен устранять эту причину EOF,
-			// но это дешёвая дополнительная страховка на случай переиспользования пула.
-			if (isEOFError || isNetworkError) && b.httpTransport != nil {
-				b.httpTransport.CloseIdleConnections()
-			}
 
 			var currentBackoff time.Duration
 			var backoffMultiplier float64
@@ -607,21 +595,12 @@ func isDuplicateChatIDError(err error) bool {
 }
 
 func (b *Bot) configureHTTPClient() {
-	// DisableKeepAlives: true — намеренно.
-	// GetUpdates — long-polling запрос (держит соединение до 60 сек в ожидании апдейтов от Telegram),
-	// после чего цикл обработки апдейтов синхронно вызывает GigaChat/БД/генерацию изображений,
-	// что может занимать десятки секунд. Всё это время соединение простаивает в пуле keep-alive.
-	// Если инфраструктура Telegram (или промежуточный прокси) за это время молча закрывает
-	// "неактивное" TCP-соединение, следующий вызов GetUpdates пытается переиспользовать уже
-	// мёртвое соединение и получает "unexpected EOF" при чтении ответа — см. PROBLEMS.md P1 #5.
-	// Каждый запрос на новом соединении полностью устраняет этот класс ошибок; накладные расходы
-	// (TCP+TLS handshake) пренебрежимо малы на фоне 60-секундного long-poll.
 	transport := &http.Transport{
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: 10,
 		MaxConnsPerHost:     20,
 		IdleConnTimeout:     90 * time.Second,
-		DisableKeepAlives:   true,
+		DisableKeepAlives:   false,
 	}
 
 	httpClient := &http.Client{
@@ -631,8 +610,7 @@ func (b *Bot) configureHTTPClient() {
 
 	if httpClientField := reflect.ValueOf(b.api).Elem().FieldByName("Client"); httpClientField.IsValid() && httpClientField.CanSet() {
 		httpClientField.Set(reflect.ValueOf(httpClient))
-		b.httpTransport = transport
-		logger.Info("Configured HTTP client for Telegram Bot API (keep-alive disabled to avoid stale-connection EOF on long-polling)")
+		logger.Info("Configured HTTP client with connection pooling for Telegram Bot API")
 	} else {
 		logger.Warn("Unable to configure custom HTTP client - tgbotapi.BotAPI may not support client injection")
 	}
@@ -716,3 +694,4 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) error {
 	)
 	return b.handlePlayerAction(ctx, chatID, int64(userID), text)
 }
+

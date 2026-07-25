@@ -126,13 +126,6 @@ func main() {
 	gigachatClientID := getEnv("GIGACHAT_CLIENT_ID", "")
 	gigachatClientSecret := getEnv("GIGACHAT_CLIENT_SECRET", "")
 	gigachatModel := getEnv("GIGACHAT_MODEL", "GigaChat")
-	// Отдельная (обычно более дешёвая) модель для "проверочных" вызовов LLM — структурного
-	// анализа ответа DM (бой/квесты/предметы) и pre-check нужна ли проверка навыка.
-	// Это не творческая генерация текста, а классификация/извлечение JSON, так что топовая
-	// модель DM здесь не нужна — разделение экономит токены на каждом ходу (2 из 3 LLM-вызовов
-	// на ход раньше шли через ту же модель, что и сам DM).
-	gigachatAnalyzerModel := getEnv("GIGACHAT_ANALYZER_MODEL", "GigaChat-2")
-	gigachatEmbeddingModel := getEnv("GIGACHAT_EMBEDDINGS_MODEL", string(gigachat.ModelEmbeddings))
 	qdrantHost := getEnv("QDRANT_HOST", "localhost")
 	qdrantPortStr := getEnv("QDRANT_PORT", "6334")
 	qdrantPort := 6334
@@ -179,25 +172,6 @@ func main() {
 		RPSLimit:         5.0, // Увеличиваем до 5 RPS для генерации контента
 		RateBurst:        3,   // Burst до 3 запросов для сложных операций
 		SkipTLSVerify:    skipTLSVerify,
-		EmbeddingModel:   gigachatEmbeddingModel,
-	}
-
-	// Мягкая проверка моделей по каталогу из документации GigaChat (см. pkg/gigachat/models.go).
-	// Неизвестное имя не блокирует запуск — API может поддерживать модели, отсутствующие в списке.
-	if !gigachat.IsKnownChatModel(gigachatModel) {
-		logger.Warn("GIGACHAT_MODEL не входит в список задокументированных chat-моделей",
-			logger.String("model", gigachatModel),
-		)
-	}
-	if !gigachat.IsKnownChatModel(gigachatAnalyzerModel) {
-		logger.Warn("GIGACHAT_ANALYZER_MODEL не входит в список задокументированных chat-моделей",
-			logger.String("model", gigachatAnalyzerModel),
-		)
-	}
-	if !gigachat.IsKnownEmbeddingModel(gigachatEmbeddingModel) {
-		logger.Warn("GIGACHAT_EMBEDDINGS_MODEL не входит в список задокументированных моделей эмбеддингов",
-			logger.String("model", gigachatEmbeddingModel),
-		)
 	}
 
 	// Валидация GigaChat credentials
@@ -227,8 +201,6 @@ func main() {
 		logger.String("apiURL", gigachatCfg.APIBaseURL),
 		logger.String("scope", gigachatScope),
 		logger.String("model", gigachatModel),
-		logger.String("analyzer_model", gigachatAnalyzerModel),
-		logger.String("embedding_model", gigachatEmbeddingModel),
 		logger.String("clientID", maskClientID(gigachatCfg.ClientID)),
 		logger.Bool("skip_tls_verify", gigachatCfg.SkipTLSVerify),
 		logger.Float64("rps_limit", gigachatCfg.RPSLimit),
@@ -265,12 +237,6 @@ func main() {
 	llm := llminfrastructure.NewMonitoredLLM(baseLLM, llmLogRepo)
 	logger.Info("LLM monitoring initialized")
 
-	// Отдельный LLM для "проверочных" вызовов (структурный анализ ответа DM, pre-check
-	// проверок навыков) — использует свой gigachatClient (общий HTTP-клиент/токен), но
-	// другую (обычно более дешёвую) модель, заданную GIGACHAT_ANALYZER_MODEL.
-	analyzerBaseLLM := llminfrastructure.NewGigachatLLM(gigachatClient, gigachatAnalyzerModel)
-	analyzerLLM := llminfrastructure.NewMonitoredLLM(analyzerBaseLLM, llmLogRepo)
-
 	// Инициализация ImageGenerator для генерации изображений
 	imageGenerator := llminfrastructure.NewGigachatImageGenerator(gigachatClient, gigachatModel)
 
@@ -288,9 +254,21 @@ func main() {
 	)
 
 	// Создаем ImageGenerationUseCase
-	// Лимитер (по подписке, "N изображений за игру") настраивается ниже,
-	// после создания subscriptionRepo/checkLimitsUC.
 	generateImageUC := imageapp.NewImageGenerationUseCase(imageGenerator, imageStorage)
+
+	// Настраиваем лимитер для генерации изображений (5/день для Free по умолчанию)
+	// Будет обновлен после создания subscriptionRepo для интеграции с подписками
+	dailyLimit := 5
+	if envLimit := getEnv("IMAGE_DAILY_LIMIT", ""); envLimit != "" {
+		if limit, err := strconv.Atoi(envLimit); err == nil && limit > 0 {
+			dailyLimit = limit
+		}
+	}
+	fallbackLimiter := imageapp.NewInMemoryRateLimiter(dailyLimit)
+	generateImageUC.SetLimiter(fallbackLimiter)
+	logger.Info("Image generation rate limiter configured (will be updated with subscription integration)",
+		logger.Int("daily_limit", dailyLimit),
+	)
 
 	// Инициализация Qdrant
 	logger.Info("Initializing Qdrant client",
@@ -315,7 +293,7 @@ func main() {
 	// Инициализация RAG компонентов
 	logger.Info("Initializing RAG components")
 	embedder := ragembeddings.NewGigachatEmbedder(gigachatClient)
-	vectorStore := ragvectorstore.NewQdrantStore(qdrantClient, gigachat.EmbeddingDimension(gigachat.EmbeddingModel(gigachatEmbeddingModel)))
+	vectorStore := ragvectorstore.NewQdrantStore(qdrantClient)
 
 	// Инициализация коллекции Qdrant
 	logger.Info("Ensuring Qdrant collection exists")
@@ -343,18 +321,17 @@ func main() {
 	achievementRepo := persistence.NewAchievementRepository(db)
 	spellRepo := persistence.NewSpellRepository(db)
 	subscriptionRepo := persistence.NewSubscriptionRepository(db)
-	campaignFactRepo := persistence.NewCampaignFactRepository(db)
 
 	// Создаем use cases для подписок (нужно для лимитера изображений)
 	getSubscriptionUC := subscriptionapp.NewGetSubscriptionUseCase(subscriptionRepo)
 	// Передаем sessionRepo как SessionCountRepository (GameSessionRepository реализует нужные методы)
 	// и eventRepo как EventCountRepository (GameEventRepository реализует нужные методы)
-	checkLimitsUC := subscriptionapp.NewCheckLimitsUseCase(subscriptionRepo, sessionRepo, sessionRepo, eventRepo)
+	checkLimitsUC := subscriptionapp.NewCheckLimitsUseCase(subscriptionRepo, sessionRepo, sessionRepo, eventRepo, fallbackLimiter)
 
-	// Лимитер изображений: "N изображений за игру" по тарифу подписки (безлимит для Premium/Pro)
-	subscriptionImageLimiter := subscriptionapp.NewSubscriptionImageLimiter(checkLimitsUC)
+	// Обновляем лимитер изображений для использования системы подписок
+	subscriptionImageLimiter := subscriptionapp.NewSubscriptionImageLimiter(checkLimitsUC, fallbackLimiter)
 	generateImageUC.SetLimiter(subscriptionImageLimiter)
-	logger.Info("Image generation rate limiter configured (per-game limit via subscription)")
+	logger.Info("Image generation rate limiter updated with subscription integration")
 
 	// Инициализация кэша ответов DM (TTL 1 час)
 	responseCache := dmcache.NewDMResponseCache(1 * time.Hour)
@@ -367,7 +344,6 @@ func main() {
 	simpleContextBuilder := contextbuilder.NewSimpleContextBuilder()
 	ragContextBuilder := contextbuilder.NewRAGContextBuilder(simpleContextBuilder, retrieveContextUC, eventRepo, inventoryRepo, combatRepo)
 	ragContextBuilder.SetWorldEventRepository(worldEventRepo)
-	ragContextBuilder.SetCampaignFactRepository(campaignFactRepo)
 	addExperienceUC := characterapp.NewAddExperienceUseCase(playerRepo, sessionRepo)
 	checkAchievementsUC := achievementapp.NewCheckAchievementsUseCase(achievementRepo, playerRepo)
 
@@ -401,15 +377,13 @@ func main() {
 	// Создаем адаптер для RatingUpdater из updateRatingUC
 	ratingUpdaterAdapterAction := &ratingUpdaterAdapterAction{uc: updateRatingUC}
 	// Создаем анализатор действий игрока для определения необходимости проверок
-	analyzePlayerActionUC := dm_analyzer.NewAnalyzePlayerActionUseCase(analyzerLLM, eventRepo)
+	analyzePlayerActionUC := dm_analyzer.NewAnalyzePlayerActionUseCase(llm, eventRepo)
 
 	// Создаем генератор событий локаций
 	locationEventRepo := &locationEventRepoAdapter{repo: worldEventRepo}
 	generateLocationEventUC := locationeventapp.NewLocationEventGenerator(locationEventRepo)
 
 	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator, dailyQuestProgressAdapter, getSubscriptionUC, ratingUpdaterAdapterAction, analyzePlayerActionUC, generateLocationEventUC)
-	handleActionUC.SetCampaignFactRepository(campaignFactRepo)
-	handleActionUC.SetAnalyzerLLM(analyzerLLM)
 	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
@@ -750,7 +724,6 @@ func runMigrations(db *gorm.DB) error {
 		&spell.Spell{},
 		&spell.CharacterSpell{},
 		&subscription.Subscription{},
-		&world.CampaignFact{},
 	)
 }
 

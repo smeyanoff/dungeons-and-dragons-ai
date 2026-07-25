@@ -5,10 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
-	"dungeons-and-dragons-ai/internal/game/domain/player"
-	"dungeons-and-dragons-ai/internal/game/domain/session"
 )
 
 // Mock Inventory Repository
@@ -67,8 +64,8 @@ func TestGetInventoryTool_Execute(t *testing.T) {
 			setupMock: func(repo *mockInventoryRepo) {
 				repo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					inv := inventory.NewInventory(characterID)
-					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon, 0)
-					inv.AddItem("Зелье", "Зелье лечения", 0.5, 2, inventory.ItemTypePotion, 0)
+					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon)
+					inv.AddItem("Зелье", "Зелье лечения", 0.5, 2, inventory.ItemTypePotion)
 					return inv, nil
 				}
 			},
@@ -313,7 +310,7 @@ func TestAddItemTool_Execute(t *testing.T) {
 				repo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					inv := inventory.NewInventory(characterID)
 					// Заполняем почти весь инвентарь
-					inv.AddItem("Предмет", "Описание", 25.0, 1, inventory.ItemTypeMisc, 0)
+					inv.AddItem("Предмет", "Описание", 25.0, 1, inventory.ItemTypeMisc)
 					return inv, nil
 				}
 			},
@@ -391,21 +388,21 @@ func TestAddItemTool_Execute(t *testing.T) {
 }
 
 func TestRemoveItemTool_Name(t *testing.T) {
-	tool := NewRemoveItemTool(nil, nil, 1, 1)
+	tool := NewRemoveItemTool(nil, 1)
 	if tool.Name() != "remove_item_from_inventory" {
 		t.Errorf("expected name 'remove_item_from_inventory', got '%s'", tool.Name())
 	}
 }
 
 func TestRemoveItemTool_Description(t *testing.T) {
-	tool := NewRemoveItemTool(nil, nil, 1, 1)
+	tool := NewRemoveItemTool(nil, 1)
 	if tool.Description() == "" {
 		t.Error("expected non-empty description")
 	}
 }
 
 func TestRemoveItemTool_Parameters(t *testing.T) {
-	tool := NewRemoveItemTool(nil, nil, 1, 1)
+	tool := NewRemoveItemTool(nil, 1)
 	params := tool.Parameters()
 	if len(params) == 0 {
 		t.Error("expected non-empty parameters")
@@ -430,7 +427,7 @@ func TestRemoveItemTool_Execute(t *testing.T) {
 			setupMock: func(repo *mockInventoryRepo) {
 				repo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					inv := inventory.NewInventory(characterID)
-					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon, 0)
+					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon)
 					return inv, nil
 				}
 				repo.saveFunc = func(ctx context.Context, inv *inventory.Inventory) error {
@@ -463,7 +460,7 @@ func TestRemoveItemTool_Execute(t *testing.T) {
 			setupMock: func(repo *mockInventoryRepo) {
 				repo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					inv := inventory.NewInventory(characterID)
-					inv.AddItem("Стрела", "Обычная стрела", 0.1, 5, inventory.ItemTypeMisc, 0)
+					inv.AddItem("Стрела", "Обычная стрела", 0.1, 5, inventory.ItemTypeMisc)
 					return inv, nil
 				}
 				repo.saveFunc = func(ctx context.Context, inv *inventory.Inventory) error {
@@ -530,7 +527,7 @@ func TestRemoveItemTool_Execute(t *testing.T) {
 			setupMock: func(repo *mockInventoryRepo) {
 				repo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					inv := inventory.NewInventory(characterID)
-					inv.AddItem("Стрела", "Обычная стрела", 0.1, 3, inventory.ItemTypeMisc, 0)
+					inv.AddItem("Стрела", "Обычная стрела", 0.1, 3, inventory.ItemTypeMisc)
 					return inv, nil
 				}
 			},
@@ -568,7 +565,7 @@ func TestRemoveItemTool_Execute(t *testing.T) {
 			setupMock: func(repo *mockInventoryRepo) {
 				repo.getByCharacterIDFunc = func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
 					inv := inventory.NewInventory(characterID)
-					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon, 0)
+					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon)
 					return inv, nil
 				}
 				repo.saveFunc = func(ctx context.Context, inv *inventory.Inventory) error {
@@ -586,7 +583,7 @@ func TestRemoveItemTool_Execute(t *testing.T) {
 				tt.setupMock(repo)
 			}
 
-			tool := NewRemoveItemTool(repo, nil, tt.characterID, 1)
+			tool := NewRemoveItemTool(repo, tt.characterID)
 			result, err := tool.Execute(context.Background(), tt.args)
 
 			if tt.expectedError {
@@ -602,137 +599,5 @@ func TestRemoveItemTool_Execute(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestRemoveItemTool_Execute_UsingHealingPotion_HealsAndDecrementsQuantity(t *testing.T) {
-	char, err := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{
-		Strength: 10, Dexterity: 10, Constitution: 10, Intelligence: 10, Wisdom: 10, Charisma: 10,
-	})
-	if err != nil {
-		t.Fatalf("failed to create character: %v", err)
-	}
-	char.ID = 1
-	char.MaxHP = 30
-	char.HP = 10 // раненый персонаж
-
-	gs := &session.GameSession{
-		ChatID: 42,
-		Players: []player.Player{
-			{Character: *char},
-		},
-	}
-	gs.Model.ID = 1
-
-	inventoryRepo := &mockInventoryRepo{
-		getByCharacterIDFunc: func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
-			inv := inventory.NewInventory(characterID)
-			// В инвентаре 2 зелья, каждое лечит 15 HP.
-			if err := inv.AddItem("Зелье лечения", "Восстанавливает HP", 0.5, 2, inventory.ItemTypePotion, 15); err != nil {
-				t.Fatalf("setup: failed to add item: %v", err)
-			}
-			return inv, nil
-		},
-		saveFunc: func(ctx context.Context, inv *inventory.Inventory) error {
-			return nil
-		},
-	}
-
-	sessionRepo := &mockSessionRepoForCharacter{
-		getByChatIDFunc: func(ctx context.Context, chatID int64) (*session.GameSession, error) {
-			return gs, nil
-		},
-	}
-
-	tool := NewRemoveItemTool(inventoryRepo, sessionRepo, char.ID, gs.ChatID)
-	result, err := tool.Execute(context.Background(), map[string]interface{}{
-		"name":     "Зелье лечения",
-		"quantity": 1.0,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap, ok := result.(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected map[string]interface{}, got %T", result)
-	}
-
-	if success, _ := resultMap["success"].(bool); !success {
-		t.Fatalf("expected success=true, got %v", resultMap["success"])
-	}
-	if quantity, _ := resultMap["quantity"].(int); quantity != 1 {
-		t.Errorf("expected quantity removed=1, got %v", resultMap["quantity"])
-	}
-	if healed, _ := resultMap["healed"].(bool); !healed {
-		t.Fatalf("expected healed=true in result, got %v", resultMap["healed"])
-	}
-	if healing, _ := resultMap["healing_amount"].(int); healing != 15 {
-		t.Errorf("expected healing_amount=15, got %v", resultMap["healing_amount"])
-	}
-
-	// HP персонажа должно вырасти с 10 до 25 (не быть неизменным и уж тем более не упасть).
-	if gs.Players[0].Character.HP != 25 {
-		t.Errorf("expected character HP=25 after healing, got %d", gs.Players[0].Character.HP)
-	}
-	if sessionRepo.savedSession == nil {
-		t.Error("expected session to be saved after healing")
-	}
-
-	// Инвентарь должен сохранять сокращённое количество зелий (репозиторий сохраняет весь inv через saveFunc,
-	// здесь достаточно убедиться, что вызов не сообщает об увеличении).
-	if item, _ := resultMap["item_removed"].(string); item != "Зелье лечения" {
-		t.Errorf("expected item_removed='Зелье лечения', got %v", resultMap["item_removed"])
-	}
-}
-
-func TestRemoveItemTool_Execute_NonHealingItem_DoesNotTouchHP(t *testing.T) {
-	char, err := character.NewCharacter("Test Hero", character.ClassFighter, character.RaceHuman, character.Stats{
-		Strength: 10, Dexterity: 10, Constitution: 10, Intelligence: 10, Wisdom: 10, Charisma: 10,
-	})
-	if err != nil {
-		t.Fatalf("failed to create character: %v", err)
-	}
-	char.ID = 1
-	char.MaxHP = 30
-	char.HP = 10
-
-	gs := &session.GameSession{
-		ChatID:  42,
-		Players: []player.Player{{Character: *char}},
-	}
-	gs.Model.ID = 1
-
-	inventoryRepo := &mockInventoryRepo{
-		getByCharacterIDFunc: func(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
-			inv := inventory.NewInventory(characterID)
-			if err := inv.AddItem("Факел", "Освещает путь", 0.5, 1, inventory.ItemTypeTool, 0); err != nil {
-				t.Fatalf("setup: failed to add item: %v", err)
-			}
-			return inv, nil
-		},
-		saveFunc: func(ctx context.Context, inv *inventory.Inventory) error { return nil },
-	}
-	sessionRepo := &mockSessionRepoForCharacter{
-		getByChatIDFunc: func(ctx context.Context, chatID int64) (*session.GameSession, error) {
-			return gs, nil
-		},
-	}
-
-	tool := NewRemoveItemTool(inventoryRepo, sessionRepo, char.ID, gs.ChatID)
-	result, err := tool.Execute(context.Background(), map[string]interface{}{"name": "Факел"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	resultMap := result.(map[string]interface{})
-	if _, ok := resultMap["healed"]; ok {
-		t.Errorf("expected no 'healed' field for a non-healing item, got %v", resultMap["healed"])
-	}
-	if gs.Players[0].Character.HP != 10 {
-		t.Errorf("expected HP to stay unchanged at 10, got %d", gs.Players[0].Character.HP)
-	}
-	if sessionRepo.savedSession != nil {
-		t.Error("expected session NOT to be saved when item has no healing effect")
 	}
 }

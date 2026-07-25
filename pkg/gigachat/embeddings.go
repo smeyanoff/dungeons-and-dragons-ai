@@ -7,16 +7,17 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 )
 
-const defaultEmbeddingModel = string(ModelEmbeddings)
+const defaultEmbeddingModel = "Embeddings"
 
-// embeddingModel возвращает модель эмбеддингов из Config клиента, либо значение по умолчанию,
-// если Config.EmbeddingModel не задан. Доступные модели см. в models.go (KnownEmbeddingModels).
-func (c *Client) embeddingModel() string {
-	if c.cfg.EmbeddingModel != "" {
-		return c.cfg.EmbeddingModel
+// getEmbeddingModel возвращает название модели эмбеддингов из переменной окружения
+// или значение по умолчанию. Доступные модели: "Embeddings", "EmbeddingsGigaR"
+func getEmbeddingModel() string {
+	if model := os.Getenv("GIGACHAT_EMBEDDINGS_MODEL"); model != "" {
+		return model
 	}
 	return defaultEmbeddingModel
 }
@@ -38,7 +39,7 @@ func (c *Client) EmbedBatch(
 ) ([][]float32, error) {
 
 	reqBody := EmbeddingRequest{
-		Model: c.embeddingModel(),
+		Model: getEmbeddingModel(),
 		Input: texts,
 	}
 
