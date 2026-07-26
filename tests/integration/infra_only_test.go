@@ -18,10 +18,10 @@ import (
 // infraOnlyConfig — минимальная конфигурация для интеграционных тестов,
 // которые не требуют LLM/Qdrant (например, ability check guardrails, callback flows).
 type infraOnlyConfig struct {
-	db          *gorm.DB
-	ctx         context.Context
-	chatID      int64
-	tgUserID    int64
+	db            *gorm.DB
+	ctx           context.Context
+	chatID        int64
+	tgUserID      int64
 	sessionRepo   session.Repository
 	worldRepo     *persistence.WorldRepository
 	playerRepo    *persistence.PlayerRepository
@@ -75,10 +75,10 @@ func setupInfraOnlyIntegrationTest(t *testing.T) *infraOnlyConfig {
 	chatID, tgUserID := generateTestIDs(t)
 
 	return &infraOnlyConfig{
-		db:          db,
-		ctx:         ctx,
-		chatID:      chatID,
-		tgUserID:    tgUserID,
+		db:            db,
+		ctx:           ctx,
+		chatID:        chatID,
+		tgUserID:      tgUserID,
 		sessionRepo:   persistence.NewGameSessionRepository(db),
 		worldRepo:     persistence.NewWorldRepository(db),
 		playerRepo:    persistence.NewPlayerRepository(db),
