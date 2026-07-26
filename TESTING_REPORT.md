@@ -63,41 +63,12 @@ go test -v -count=1 -timeout 60m ./tests/integration/... -run 'TestTelegramGamep
 
 ---
 
-Ниже дописывается секция **«Анализ запросов/ответов/промптов/тулзов»** после каждого прогона теста `TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat`.
+**request_ability_check в llm_logs (закрыто 2026-07-23):** ранее тест ожидал tool-вызов
+`request_ability_check` в логах (tool-first ability check). Текущий флоу — analyzer-first:
+проверка решается отдельным LLM-анализом действия (`needs_ability_check` в JSON), а не
+вызовом tool DM — `request_ability_check` структурно не регистрируется как tool для DM.
+Тест `TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat` обновлён — сигналом флоу
+служит player-facing prompt ability check (см. «Ключевые проверки» выше).
 
-## Анализ запросов/ответов/промптов/тулзов (2026-02-05 14:26:40)
-
-chat_id=1770290740524597943, логов=11
-
-| #1 | prompt_len=7038 | response_len=408 | has_tools=false | tools= |
-|     | response_preview: ```json {   "combat_detected": false,   "enemies": [],   "combat_ended": false, ... |
-| #2 | prompt_len=3693 | response_len=715 | has_tools=false | tools= |
-|     | response_preview: ### Финальный ответ:  Эребос, едва успев спрятаться в тени, слышит приближающиес... |
-| #3 | prompt_len=2887 | response_len=783 | has_tools=true | tools=generate_image |
-|     | response_preview: Эребос тяжело сглотнул, услышав характерный скрип двери, открывшейся не так, как... |
-| #4 | prompt_len=4062 | response_len=468 | has_tools=false | tools= |
-|     | response_preview: {   "needs_ability_check": true,   "ability_check": {     "ability": "dexterity"... |
-| #5 | prompt_len=616 | response_len=1183 | has_tools=false | tools= |
-|     | response_preview: {   "connections": {     "Руины Черного замка": [       {         "to_location":... |
-| #6 | prompt_len=381 | response_len=285 | has_tools=false | tools= |
-|     | response_preview: {   "npcs": [     {       "name": "Аббадон Серые Очи",       "role": "Маг-путеше... |
-| #7 | prompt_len=362 | response_len=349 | has_tools=false | tools= |
-|     | response_preview: {   "npcs": [     {       "name": "Граф Дарквуд",       "role": "главный антагон... |
-| #8 | prompt_len=365 | response_len=282 | has_tools=false | tools= |
-|     | response_preview: {   "npcs": [     {       "name": "Таградар Кровавая Коготь",       "role": "стр... |
-| #9 | prompt_len=580 | response_len=405 | has_tools=false | tools= |
-|     | response_preview: {   "locations": [     {       "name": "Руины Черного замка",       "description... |
-| #10 | prompt_len=600 | response_len=634 | has_tools=false | tools= |
-|     | response_preview: {   "locations": [     {       "name": "Руины древнего храма Вельзира",       "d... |
-| #11 | prompt_len=503 | response_len=757 | has_tools=false | tools= |
-|     | response_preview: {   "title": "Проклятая книга теней",   "description": "Игроки исследуют древние... |
-
----
-
-## Проблемы, найденные при интеграционном тестировании (2026-02-05 14:26:40)
-
-1. в llm_logs не нашли tool вызов request_ability_check (ожидали tool-first ability check)  
-   **Уточнение (2026-02-09):** текущий флоу — analyzer-first: проверка решается отдельным LLM-анализом действия (`needs_ability_check` в JSON), а не вызовом tool DM. Ожидание «request_ability_check в llm_logs» может быть неверным; см. CODE_REVIEW.md P1 п.3 — уточнить тест или документацию.  
-   **Решено (2026-07-23):** тест `TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat` обновлён — убрана проверка на tool-вызов `request_ability_check` в `llm_logs` (структурно невозможна, т.к. тул не регистрируется для DM), сигналом analyzer-first флоу служит player-facing prompt ability check, который тест уже проверял отдельно (шаг 3).
-
----
+Для анализа конкретных запросов/ответов/тулзов по свежим прогонам используйте
+`.claude/skills/read-dnd-bot-logs` (JSON API поверх `llm_logs`) вместо статичных дампов здесь.

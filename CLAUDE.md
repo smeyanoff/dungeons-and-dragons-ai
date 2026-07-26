@@ -62,4 +62,4 @@ make security-scan               # gosec + trivy + semgrep + trufflehog + snyk (
 
 - `pkg/version` версия отдаётся на `/version`, health check — через глобальную переменную `bot` в `main.go`.
 - Секреты токена Telegram могут попадать в stdlib `log` от `go-telegram-bot-api` — в `main.go` стоит редактирующий `io.Writer` (`newRedactingWriter`), который вырезает токен из URL перед выводом; не убирать при рефакторинге логирования.
-- Продакшн — Docker Compose (`build/docker-compose.prod.yml`) + k8s-манифесты в `k8s/`; подробности — `DEPLOY.md`/`INFRASTRUCTURE.md`.
+- Продакшн — Docker Compose (`build/docker-compose.prod.yml`) + k8s-манифесты в `k8s/`; подробности — `DEPLOY.md`.
