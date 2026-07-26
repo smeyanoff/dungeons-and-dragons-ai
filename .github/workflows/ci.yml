@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, dev ]
 
 env:
   REGISTRY: ghcr.io
@@ -14,23 +14,30 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
           cache-dependency-path: go.sum
-      
+
       - name: Run linter
-        uses: golangci/golangci-lint-action@v3
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
-      
-      - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./...
-      
+          version: v2.12
+          only-new-issues: true
+
+      # tests/integration требуют живых Postgres/Qdrant (и часто GigaChat-креды) — см. Makefile
+      # (test-integration, test-telegram-*) и tests/integration/README.md. В CI перед PR гоняем
+      # только юнит-тесты; интеграционные — через `make docker-up && make test-integration` локально.
+      - name: Run unit tests
+        run: go test -v -race -coverprofile=coverage.out $(go list ./... | grep -v '/tests/integration')
+
       - name: Upload coverage
         uses: codecov/codecov-action@v3
         with:
@@ -68,7 +75,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' }}
       
       - name: Set version info
         id: version
