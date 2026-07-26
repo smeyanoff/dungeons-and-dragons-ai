@@ -93,7 +93,9 @@ func (b *Bot) handleCreateCharacter(ctx context.Context, chatID int64, args stri
 🛡️ Телосложение: %d
 🧠 Интеллект: %d
 🔮 Мудрость: %d
-💬 Харизма: %d`,
+💬 Харизма: %d
+
+🎒 Стартовое снаряжение и немного золота уже ждут в /inventory`,
 		player.Character.Name,
 		player.Character.Race,
 		player.Character.Class,

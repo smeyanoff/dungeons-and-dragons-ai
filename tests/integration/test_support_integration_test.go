@@ -373,7 +373,7 @@ func setupIntegrationTest(t *testing.T) *testConfig {
 		analyzePlayerActionUC, locationEventGenerator,
 	)
 
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
 	addItemUC := inventoryapp.NewAddItemUseCase(sessionRepo, inventoryRepo)

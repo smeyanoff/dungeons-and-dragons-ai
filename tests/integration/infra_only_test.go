@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	worlddomain "dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
@@ -21,10 +22,11 @@ type infraOnlyConfig struct {
 	ctx         context.Context
 	chatID      int64
 	tgUserID    int64
-	sessionRepo session.Repository
-	worldRepo   *persistence.WorldRepository
-	playerRepo  *persistence.PlayerRepository
-	eventRepo   *persistence.GameEventRepository
+	sessionRepo   session.Repository
+	worldRepo     *persistence.WorldRepository
+	playerRepo    *persistence.PlayerRepository
+	eventRepo     *persistence.GameEventRepository
+	inventoryRepo *persistence.InventoryRepository
 }
 
 func setupInfraOnlyIntegrationTest(t *testing.T) *infraOnlyConfig {
@@ -66,6 +68,9 @@ func setupInfraOnlyIntegrationTest(t *testing.T) *infraOnlyConfig {
 	if err := db.AutoMigrate(&worlddomain.WorldEvent{}); err != nil {
 		t.Fatalf("Не удалось выполнить AutoMigrate для world_events: %v", err)
 	}
+	if err := db.AutoMigrate(&inventory.Inventory{}, &inventory.InventoryItem{}); err != nil {
+		t.Fatalf("Не удалось выполнить AutoMigrate для inventories: %v", err)
+	}
 
 	chatID, tgUserID := generateTestIDs(t)
 
@@ -74,9 +79,10 @@ func setupInfraOnlyIntegrationTest(t *testing.T) *infraOnlyConfig {
 		ctx:         ctx,
 		chatID:      chatID,
 		tgUserID:    tgUserID,
-		sessionRepo: persistence.NewGameSessionRepository(db),
-		worldRepo:   persistence.NewWorldRepository(db),
-		playerRepo:  persistence.NewPlayerRepository(db),
-		eventRepo:   persistence.NewGameEventRepository(db),
+		sessionRepo:   persistence.NewGameSessionRepository(db),
+		worldRepo:     persistence.NewWorldRepository(db),
+		playerRepo:    persistence.NewPlayerRepository(db),
+		eventRepo:     persistence.NewGameEventRepository(db),
+		inventoryRepo: persistence.NewInventoryRepository(db),
 	}
 }

@@ -52,7 +52,7 @@ func TestTelegramBattlefieldCommand(t *testing.T) {
 	}
 
 	// Character (no real LLM).
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	player, err := createCharacterUC.Execute(ctx, newCharacterRequest(chatID))
 	if err != nil {
 		t.Fatalf("Не удалось создать персонажа: %v", err)
@@ -187,7 +187,7 @@ func TestTelegramBattlefieldCommandFormats(t *testing.T) {
 	}
 
 	// Character
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	player, err := createCharacterUC.Execute(ctx, newCharacterRequest(chatID))
 	if err != nil {
 		t.Fatalf("Не удалось создать персонажа: %v", err)
@@ -353,7 +353,7 @@ func TestTelegramBattlefieldCommandNoCombat(t *testing.T) {
 	}
 
 	// Character
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	_, err := createCharacterUC.Execute(ctx, newCharacterRequest(chatID))
 	if err != nil {
 		t.Fatalf("Не удалось создать персонажа: %v", err)

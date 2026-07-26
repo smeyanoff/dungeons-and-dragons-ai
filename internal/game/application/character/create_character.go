@@ -8,13 +8,15 @@ import (
 	"strings"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 )
 
 type CreateCharacterUseCase struct {
-	sessionRepo session.Repository
-	playerRepo  PlayerRepository
+	sessionRepo   session.Repository
+	playerRepo    PlayerRepository
+	inventoryRepo InventoryRepository
 }
 
 type PlayerRepository interface {
@@ -22,13 +24,19 @@ type PlayerRepository interface {
 	Save(ctx context.Context, p *player.Player) error
 }
 
+type InventoryRepository interface {
+	Save(ctx context.Context, inv *inventory.Inventory) error
+}
+
 func NewCreateCharacterUseCase(
 	sessionRepo session.Repository,
 	playerRepo PlayerRepository,
+	inventoryRepo InventoryRepository,
 ) *CreateCharacterUseCase {
 	return &CreateCharacterUseCase{
-		sessionRepo: sessionRepo,
-		playerRepo:  playerRepo,
+		sessionRepo:   sessionRepo,
+		playerRepo:    playerRepo,
+		inventoryRepo: inventoryRepo,
 	}
 }
 
@@ -99,6 +107,12 @@ func (uc *CreateCharacterUseCase) Execute(
 
 	if err := uc.playerRepo.Save(ctx, p); err != nil {
 		return nil, fmt.Errorf("failed to save player: %w", err)
+	}
+
+	// Выдаём стартовое снаряжение и немного золота
+	startingInventory := buildStartingInventory(p.Character.ID, req.Class)
+	if err := uc.inventoryRepo.Save(ctx, startingInventory); err != nil {
+		return nil, fmt.Errorf("failed to save starting inventory: %w", err)
 	}
 
 	return p, nil

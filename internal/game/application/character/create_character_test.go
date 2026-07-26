@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
@@ -53,6 +54,16 @@ func (m *mockPlayerRepo) Save(ctx context.Context, p *player.Player) error {
 		m.savedPlayers = make([]*player.Player, 0)
 	}
 	m.savedPlayers = append(m.savedPlayers, p)
+	return nil
+}
+
+// Mock Inventory Repository
+type mockInventoryRepo struct {
+	savedInventories []*inventory.Inventory
+}
+
+func (m *mockInventoryRepo) Save(ctx context.Context, inv *inventory.Inventory) error {
+	m.savedInventories = append(m.savedInventories, inv)
 	return nil
 }
 
@@ -326,7 +337,8 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				tt.setupMocks(sessionRepo, playerRepo)
 			}
 
-			uc := NewCreateCharacterUseCase(sessionRepo, playerRepo)
+			inventoryRepo := &mockInventoryRepo{}
+			uc := NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo)
 
 			result, err := uc.Execute(context.Background(), tt.req)
 
