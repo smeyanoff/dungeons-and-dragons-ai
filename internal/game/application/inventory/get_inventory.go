@@ -67,6 +67,7 @@ func (uc *GetInventoryUseCase) Execute(
 	parts = append(parts, fmt.Sprintf("🎒 Инвентарь персонажа %s", char.Name))
 	parts = append(parts, fmt.Sprintf("Вес: %.2f / %.2f кг", inv.GetTotalWeight(), inventory.MaxWeight))
 	parts = append(parts, fmt.Sprintf("Предметов: %d", inv.GetItemCount()))
+	parts = append(parts, fmt.Sprintf("💰 Золото: %d", inv.Gold))
 	parts = append(parts, "")
 
 	if len(inv.Items) == 0 {

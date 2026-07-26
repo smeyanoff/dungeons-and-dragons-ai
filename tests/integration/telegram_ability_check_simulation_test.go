@@ -45,7 +45,7 @@ func TestTelegramGameplay_BotSimulation_AbilityCheckOneTap(t *testing.T) {
 	}
 
 	// Create character (no LLM)
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
 		ChatID: chatID,
 		Name:   "ТестовыйГерой",
