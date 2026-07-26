@@ -234,6 +234,20 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 		problems = append(problems, fmt.Sprintf("/createcharacter: %v", err))
 	}
 
+	// Персонаж должен сразу получить стартовое снаряжение и золото (starting_kit.go).
+	// Это детерминированная логика приложения (не поведение LLM), поэтому проверяем жёстко.
+	inventoryText, err := getInventoryUC.Execute(ctx, chatID, tgUserID)
+	if err != nil {
+		t.Errorf("getInventoryUC after /createcharacter: %v", err)
+	} else {
+		if !strings.Contains(inventoryText, "Золото: 12") {
+			t.Errorf("Ожидали стартовое золото разбойника (12) в инвентаре, получили: %s", inventoryText)
+		}
+		if !strings.Contains(inventoryText, "Короткий меч") {
+			t.Errorf("Ожидали стартовое оружие разбойника в инвентаре, получили: %s", inventoryText)
+		}
+	}
+
 	// 3) player action -> tool-first ability check prompt + /roll d20
 	beforeCalls := fakeAPI.snapshotCalls()
 	if err := bot.HandleUpdate(ctx, makeMessageUpdate(chatID, tgUserID, "Пытаюсь вскрыть замок на сундуке")); err != nil {

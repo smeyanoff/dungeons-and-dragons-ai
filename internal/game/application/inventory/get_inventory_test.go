@@ -80,6 +80,7 @@ func TestGetInventoryUseCase_Execute(t *testing.T) {
 					inv := inventory.NewInventory(characterID)
 					inv.AddItem("Меч", "Обычный меч", 2.0, 1, inventory.ItemTypeWeapon, 0)
 					inv.AddItem("Зелье лечения", "Восстанавливает HP", 0.5, 2, inventory.ItemTypePotion, 0)
+					inv.Gold = 42
 					return inv, nil
 				}
 			},
@@ -96,6 +97,9 @@ func TestGetInventoryUseCase_Execute(t *testing.T) {
 				}
 				if !strings.Contains(result, "Меч") {
 					t.Error("result should contain item name")
+				}
+				if !strings.Contains(result, "Золото: 42") {
+					t.Errorf("result should contain gold amount 'Золото: 42', got: %s", result)
 				}
 			},
 		},
@@ -163,6 +167,9 @@ func TestGetInventoryUseCase_Execute(t *testing.T) {
 			},
 			expectedError: false,
 			validate: func(t *testing.T, result string) {
+				if !strings.Contains(result, "Золото: 0") {
+					t.Errorf("expected empty inventory to still show 0 gold, got: %s", result)
+				}
 				if !strings.Contains(result, "Инвентарь пуст") {
 					t.Errorf("expected empty inventory message, got: %s", result)
 				}
