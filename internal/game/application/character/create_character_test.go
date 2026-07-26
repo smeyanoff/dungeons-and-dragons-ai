@@ -59,10 +59,14 @@ func (m *mockPlayerRepo) Save(ctx context.Context, p *player.Player) error {
 
 // Mock Inventory Repository
 type mockInventoryRepo struct {
+	saveFunc         func(ctx context.Context, inv *inventory.Inventory) error
 	savedInventories []*inventory.Inventory
 }
 
 func (m *mockInventoryRepo) Save(ctx context.Context, inv *inventory.Inventory) error {
+	if m.saveFunc != nil {
+		return m.saveFunc(ctx, inv)
+	}
 	m.savedInventories = append(m.savedInventories, inv)
 	return nil
 }
@@ -71,9 +75,9 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 	tests := []struct {
 		name          string
 		req           CreateCharacterRequest
-		setupMocks    func(*mockSessionRepo, *mockPlayerRepo)
+		setupMocks    func(*mockSessionRepo, *mockPlayerRepo, *mockInventoryRepo)
 		expectedError bool
-		validate      func(*testing.T, *player.Player)
+		validate      func(*testing.T, *player.Player, *mockInventoryRepo)
 	}{
 		{
 			name: "successful character creation",
@@ -83,7 +87,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Race:   character.RaceHuman,
 				Class:  character.ClassFighter,
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return &session.GameSession{
 						ChatID: chatID,
@@ -96,7 +100,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				}
 			},
 			expectedError: false,
-			validate: func(t *testing.T, p *player.Player) {
+			validate: func(t *testing.T, p *player.Player, inventoryRepo *mockInventoryRepo) {
 				if p == nil {
 					t.Fatal("expected player, got nil")
 				}
@@ -112,6 +116,23 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				if p.Character.Level != 1 {
 					t.Errorf("expected level 1, got %d", p.Character.Level)
 				}
+				// Персонаж должен получить стартовое снаряжение и золото (starting_kit.go).
+				if len(inventoryRepo.savedInventories) != 1 {
+					t.Fatalf("expected starting inventory to be saved once, got %d saves", len(inventoryRepo.savedInventories))
+				}
+				startingInv := inventoryRepo.savedInventories[0]
+				if startingInv.CharacterID != p.Character.ID {
+					t.Errorf("expected starting inventory CharacterID=%d, got %d", p.Character.ID, startingInv.CharacterID)
+				}
+				if startingInv.Gold != 15 {
+					t.Errorf("expected fighter starting gold=15, got %d", startingInv.Gold)
+				}
+				if len(startingInv.Items) == 0 {
+					t.Error("expected starting inventory to contain items for a fighter")
+				}
+				if len(startingInv.GetEquippedItems()) == 0 {
+					t.Error("expected fighter to start with an equipped weapon/armor")
+				}
 			},
 		},
 		{
@@ -122,7 +143,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Race:   character.RaceHuman,
 				Class:  character.ClassFighter,
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return nil, nil
 				}
@@ -137,7 +158,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Race:   character.RaceHuman,
 				Class:  character.ClassFighter,
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return &session.GameSession{
 						ChatID: chatID,
@@ -155,7 +176,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Race:   character.RaceHuman,
 				Class:  character.ClassFighter,
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return &session.GameSession{
 						ChatID: chatID,
@@ -180,7 +201,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Class:  character.ClassFighter,
 				Stats:  nil, // Should be auto-generated
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return &session.GameSession{
 						ChatID: chatID,
@@ -192,7 +213,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				}
 			},
 			expectedError: false,
-			validate: func(t *testing.T, p *player.Player) {
+			validate: func(t *testing.T, p *player.Player, inventoryRepo *mockInventoryRepo) {
 				if p == nil {
 					t.Fatal("expected player, got nil")
 				}
@@ -223,7 +244,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 					Charisma:     10,
 				},
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return &session.GameSession{
 						ChatID: chatID,
@@ -235,7 +256,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				}
 			},
 			expectedError: false,
-			validate: func(t *testing.T, p *player.Player) {
+			validate: func(t *testing.T, p *player.Player, inventoryRepo *mockInventoryRepo) {
 				if p == nil {
 					t.Fatal("expected player, got nil")
 				}
@@ -253,7 +274,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Race:   character.RaceHuman,
 				Class:  character.ClassFighter,
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return nil, errors.New("database error")
 				}
@@ -268,7 +289,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Race:   character.RaceHuman,
 				Class:  character.ClassFighter,
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return &session.GameSession{
 						ChatID: chatID,
@@ -285,6 +306,30 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 			expectedError: true,
 		},
 		{
+			name: "inventory repo save error",
+			req: CreateCharacterRequest{
+				ChatID: 12345,
+				Name:   "Test Hero",
+				Race:   character.RaceHuman,
+				Class:  character.ClassFighter,
+			},
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
+				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					return &session.GameSession{
+						ChatID: chatID,
+						State:  session.StateActive,
+					}, nil
+				}
+				playerRepo.getByTgUserIDAndSessionIDFunc = func(ctx context.Context, tgUserID int64, sessionID uint) (*player.Player, error) {
+					return nil, nil
+				}
+				inventoryRepo.saveFunc = func(ctx context.Context, inv *inventory.Inventory) error {
+					return errors.New("inventory save error")
+				}
+			},
+			expectedError: true,
+		},
+		{
 			name: "empty name - should fail validation",
 			req: CreateCharacterRequest{
 				ChatID: 12345,
@@ -292,7 +337,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Race:   character.RaceHuman,
 				Class:  character.ClassFighter,
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return &session.GameSession{
 						ChatID: chatID,
@@ -313,7 +358,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				Race:   character.RaceHuman,
 				Class:  character.ClassFighter,
 			},
-			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo) {
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
 				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
 					return &session.GameSession{
 						ChatID: chatID,
@@ -332,12 +377,12 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionRepo := &mockSessionRepo{}
 			playerRepo := &mockPlayerRepo{}
+			inventoryRepo := &mockInventoryRepo{}
 
 			if tt.setupMocks != nil {
-				tt.setupMocks(sessionRepo, playerRepo)
+				tt.setupMocks(sessionRepo, playerRepo, inventoryRepo)
 			}
 
-			inventoryRepo := &mockInventoryRepo{}
 			uc := NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo)
 
 			result, err := uc.Execute(context.Background(), tt.req)
@@ -351,7 +396,7 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 					t.Errorf("unexpected error: %v", err)
 				}
 				if tt.validate != nil {
-					tt.validate(t, result)
+					tt.validate(t, result, inventoryRepo)
 				}
 			}
 		})

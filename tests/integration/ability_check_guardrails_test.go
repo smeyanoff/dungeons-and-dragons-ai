@@ -174,7 +174,7 @@ func TestAbilityCheck_Guardrails_AlreadyChecked_DifferentLocation(t *testing.T) 
 	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
 		t.Fatalf("Не удалось сохранить сессию: %v", err)
 	}
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
 		ChatID: chatID, Name: "Герой", Race: character.RaceElf, Class: character.ClassWizard,
 	}); err != nil {
