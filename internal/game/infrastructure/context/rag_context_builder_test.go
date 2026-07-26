@@ -51,6 +51,10 @@ func (m *mockVectorStore) Upsert(ctx context.Context, doc domain.Document, embed
 	return nil
 }
 
+func (m *mockVectorStore) Delete(ctx context.Context, sessionID uint) error {
+	return nil
+}
+
 // Mock EventRepository
 type mockEventRepository struct {
 	getBySessionIDFunc      func(ctx context.Context, sessionID uint, limit int) ([]event.StoryEvent, error)
@@ -858,6 +862,62 @@ func TestRAGContextBuilder_BuildContext_PlayerCount(t *testing.T) {
 		// Проверяем критическую инструкцию
 		if !contains(result, "НЕ выдумывай союзников, товарищей или NPC") {
 			t.Error("expected instruction about not inventing allies")
+		}
+	})
+}
+
+func TestEventLinesTiered(t *testing.T) {
+	longContent := "Очень длинный текст сообщения, который должен обрезаться по-разному в зависимости от того, насколько старое это событие в списке — свежие сообщения получают больше символов, старые заметно меньше."
+
+	makeEvents := func(n int) []event.StoryEvent {
+		events := make([]event.StoryEvent, n)
+		for i := range events {
+			events[i] = event.StoryEvent{AuthorType: event.AuthorTypePlayer, Content: longContent}
+		}
+		return events
+	}
+
+	t.Run("budget decreases with age and floors at minChars", func(t *testing.T) {
+		events := makeEvents(5)
+		lines := eventLinesTiered(events, 100, 20)
+
+		if len(lines) != 5 {
+			t.Fatalf("expected 5 lines, got %d", len(lines))
+		}
+
+		lengths := make([]int, len(lines))
+		for i, l := range lines {
+			lengths[i] = len(l)
+		}
+
+		// Каждая следующая (более старая) строка не длиннее предыдущей.
+		for i := 1; i < len(lengths); i++ {
+			if lengths[i] > lengths[i-1] {
+				t.Errorf("expected non-increasing lengths by age, got %v", lengths)
+				break
+			}
+		}
+		// Самая свежая строка должна использовать заметно больший бюджет, чем самая старая.
+		if lengths[0] <= lengths[len(lengths)-1] {
+			t.Errorf("expected the newest line to be longer than the oldest, got lengths %v", lengths)
+		}
+	})
+
+	t.Run("minChars greater than maxChars falls back to maxChars for every line", func(t *testing.T) {
+		events := makeEvents(3)
+		untruncated := formatStoryEventLine(events[0], len(longContent))
+		lines := eventLinesTiered(events, 50, 500)
+		for i, l := range lines {
+			if len(l) >= len(untruncated) {
+				t.Errorf("line %d expected to be truncated (shorter than %q), got %q", i, untruncated, l)
+			}
+		}
+	})
+
+	t.Run("empty input returns empty slice", func(t *testing.T) {
+		lines := eventLinesTiered(nil, 100, 20)
+		if len(lines) != 0 {
+			t.Errorf("expected no lines for empty input, got %d", len(lines))
 		}
 	})
 }

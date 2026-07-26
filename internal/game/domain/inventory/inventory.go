@@ -9,6 +9,8 @@ type Inventory struct {
 	ID          uint `gorm:"primaryKey"`
 	CharacterID uint `gorm:"uniqueIndex"`
 
+	Gold int `gorm:"default:0"` // деньги персонажа (золотые монеты)
+
 	Items []InventoryItem `gorm:"foreignKey:InventoryID"`
 }
 

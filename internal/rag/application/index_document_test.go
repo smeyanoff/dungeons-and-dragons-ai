@@ -41,6 +41,10 @@ func (m *mockIndexVectorStore) Upsert(ctx context.Context, doc domain.Document, 
 	return nil
 }
 
+func (m *mockIndexVectorStore) Delete(ctx context.Context, sessionID uint) error {
+	return nil
+}
+
 func (m *mockIndexVectorStore) Search(ctx context.Context, sessionID uint, locationID *uint, embedding []float32, limit int) ([]domain.Document, error) {
 	if m.searchFunc != nil {
 		return m.searchFunc(ctx, sessionID, locationID, embedding, limit)

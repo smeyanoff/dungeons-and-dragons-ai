@@ -328,6 +328,7 @@ func main() {
 
 	indexDocUC := ragapp.NewIndexDocument(embedder, vectorStore)
 	retrieveContextUC := ragapp.NewRetrieveContext(embedder, vectorStore)
+	deleteSessionDataUC := ragapp.NewDeleteSessionData(vectorStore)
 
 	// Инициализация репозиториев
 	worldRepo := persistence.NewWorldRepository(db)
@@ -364,6 +365,7 @@ func main() {
 
 	// Инициализация use cases
 	initCampaignUC := campaign.NewInitCampaignUseCase(llm, worldRepo)
+	initCampaignUC.SetCampaignFactRepository(campaignFactRepo)
 	simpleContextBuilder := contextbuilder.NewSimpleContextBuilder()
 	ragContextBuilder := contextbuilder.NewRAGContextBuilder(simpleContextBuilder, retrieveContextUC, eventRepo, inventoryRepo, combatRepo)
 	ragContextBuilder.SetWorldEventRepository(worldEventRepo)
@@ -410,7 +412,7 @@ func main() {
 	handleActionUC := player_action.NewHandleActionUseCase(llm, sessionRepo, ragContextBuilder, eventRepo, indexDocUC, combatRepo, questRepo, inventoryRepo, addExperienceUC, checkWorldEventsUC, checkAchievementsUC, notificationService, generateImageUC, useSpellUC, responseCache, actionValidator, dailyQuestProgressAdapter, getSubscriptionUC, ratingUpdaterAdapterAction, analyzePlayerActionUC, generateLocationEventUC)
 	handleActionUC.SetCampaignFactRepository(campaignFactRepo)
 	handleActionUC.SetAnalyzerLLM(analyzerLLM)
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
 	addItemUC := inventoryapp.NewAddItemUseCase(sessionRepo, inventoryRepo)
@@ -423,6 +425,7 @@ func main() {
 	getQuestsUC := questapp.NewGetQuestsUseCase(sessionRepo, questRepo)
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
 	moveToLocationUC := mapapp.NewMoveToLocationUseCase(llm, sessionRepo, worldEventRepo, eventRepo, indexDocUC)
+	handleActionUC.SetLocationMover(moveToLocationUC)
 	getAchievementsUC := achievementapp.NewGetAchievementsUseCase(achievementRepo, sessionRepo)
 	getSpellsUC := spellapp.NewGetSpellsUseCase(spellRepo, sessionRepo)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(sessionRepo, eventRepo, indexDocUC)
@@ -544,7 +547,7 @@ func main() {
 
 	// Инициализация бота
 	logger.Info("Initializing Telegram bot")
-	bot, err = telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, playerRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC)
+	bot, err = telegram.NewBot(telegramToken, initCampaignUC, handleActionUC, createCharacterUC, getHistoryUC, getInventoryUC, addItemUC, handleCombatUC, rollDiceUC, getQuestsUC, getDailyQuestsUC, checkDailyProgressUC, getMapUC, moveToLocationUC, getAchievementsUC, getSpellsUC, useSpellUC, generateImageUC, getSubscriptionUC, checkLimitsUC, getLeaderboardUC, updateRatingUC, performAbilityCheckUC, sessionRepo, playerRepo, combatRepo, feedbackRepo, eventRepo, indexDocUC, deleteSessionDataUC)
 	if err != nil {
 		logger.Error("Failed to create bot - continuing without Telegram bot",
 			logger.ErrorField(err),

@@ -130,7 +130,7 @@ func TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit(t *testing.T) {
 	}
 
 	// Create character (no real LLM).
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
 		ChatID: chatID,
 		Name:   "ТестовыйГерой",
@@ -229,6 +229,7 @@ func TestTelegramGameplay_BotSimulation_LocationEvent_FirstVisit(t *testing.T) {
 		nil, // feedbackRepo
 		nil, // eventRepo (/roll history)
 		nil, // indexDocUC (/roll RAG)
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)

@@ -50,7 +50,7 @@ func TestTelegramDailyQuestsCommand(t *testing.T) {
 	}
 
 	// Создаем персонажа
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	player, err := createCharacterUC.Execute(ctx, newCharacterRequest(chatID))
 	if err != nil {
 		t.Fatalf("Не удалось создать персонажа: %v", err)
@@ -92,6 +92,7 @@ func TestTelegramDailyQuestsCommand(t *testing.T) {
 		feedbackRepo,
 		nil, // eventRepo
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot: %v", err)
@@ -273,6 +274,7 @@ func TestTelegramDailyQuestsNoCharacter(t *testing.T) {
 		feedbackRepo,
 		nil, // eventRepo
 		nil, // indexDocUC
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot: %v", err)
@@ -322,7 +324,7 @@ func TestTelegramDailyQuestsProgressUpdate(t *testing.T) {
 	}
 
 	// Создаем персонажа
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	player, err := createCharacterUC.Execute(ctx, newCharacterRequest(chatID))
 	if err != nil {
 		t.Fatalf("Не удалось создать персонажа: %v", err)
@@ -429,7 +431,7 @@ func TestTelegramDailyQuestsStreakUpdate(t *testing.T) {
 	}
 
 	// Создаем персонажа
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
 	player, err := createCharacterUC.Execute(ctx, newCharacterRequest(cfg.chatID))
 	if err != nil {
 		t.Fatalf("Не удалось создать персонажа: %v", err)

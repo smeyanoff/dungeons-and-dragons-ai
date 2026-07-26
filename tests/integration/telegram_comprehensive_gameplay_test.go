@@ -76,6 +76,7 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 		feedbackRepo,
 		eventRepo,
 		nil, // indexDocUC - mock (избегаем RAG вызовов)
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot: %v", err)

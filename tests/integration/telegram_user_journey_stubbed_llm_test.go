@@ -130,7 +130,7 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 
 	// Use-cases (no real LLM / no real embeddings)
 	initCampaignUC := campaign.NewInitCampaignUseCase(&initCampaignStubLLM{}, worldRepo)
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
 
@@ -205,6 +205,7 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 		nil, // feedbackRepo
 		eventRepo,
 		nil, // indexDocUC (/roll)
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)

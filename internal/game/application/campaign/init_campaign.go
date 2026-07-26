@@ -24,15 +24,58 @@ type WorldRepository interface {
 	Save(ctx context.Context, w *world.World) error
 }
 
+// CampaignFactRepository — репозиторий устойчивых фактов кампании (память "кто есть кто",
+// не привязанная к локации). Опционален: если не задан, посев фактов при генерации мира пропускается.
+type CampaignFactRepository interface {
+	Save(ctx context.Context, fact *world.CampaignFact) error
+}
+
 type InitCampaignUseCase struct {
-	llm       domain.LLM
-	worldRepo WorldRepository
+	llm              domain.LLM
+	worldRepo        WorldRepository
+	campaignFactRepo CampaignFactRepository
 }
 
 func NewInitCampaignUseCase(llm domain.LLM, worldRepo WorldRepository) *InitCampaignUseCase {
 	return &InitCampaignUseCase{
 		llm:       llm,
 		worldRepo: worldRepo,
+	}
+}
+
+// SetCampaignFactRepository устанавливает репозиторий для посева фактов идентичности NPC
+// (родство/принадлежность) в память кампании сразу при генерации мира.
+func (uc *InitCampaignUseCase) SetCampaignFactRepository(repo CampaignFactRepository) {
+	uc.campaignFactRepo = repo
+}
+
+// seedNPCIdentityFacts сохраняет факт "кто есть кто" для каждого NPC с заполненным Relation,
+// сгенерированный вместе с миром. Ошибки записи не прерывают создание кампании — это
+// дополнительная память, а не критический путь.
+func (uc *InitCampaignUseCase) seedNPCIdentityFacts(ctx context.Context, worldID uint, locations []LocationDTO) {
+	if uc.campaignFactRepo == nil || worldID == 0 {
+		return
+	}
+	for _, locDTO := range locations {
+		for _, npcDTO := range locDTO.NPCs {
+			name := strings.TrimSpace(npcDTO.Name)
+			relation := strings.TrimSpace(npcDTO.Relation)
+			if name == "" || relation == "" {
+				continue
+			}
+			fact := &world.CampaignFact{
+				WorldID:  worldID,
+				Category: world.FactCategoryNPCIdentity,
+				Text:     fmt.Sprintf("%s — %s", name, relation),
+			}
+			if err := uc.campaignFactRepo.Save(ctx, fact); err != nil {
+				logger.Warn("Failed to seed NPC identity fact",
+					logger.String("npc_name", name),
+					logger.Uint("world_id", worldID),
+					logger.ErrorField(err),
+				)
+			}
+		}
 	}
 }
 
@@ -104,6 +147,10 @@ func (uc *InitCampaignUseCase) Execute(
 	if err != nil {
 		return nil, err
 	}
+
+	// Шаг 4.5: Сохраняем идентичность NPC (родство/принадлежность) в память кампании сразу
+	// при создании мира — до того, как DM успеет сымпровизировать и позже себе противоречить.
+	uc.seedNPCIdentityFacts(ctx, w.ID, locations)
 
 	// Шаг 5: Playbook для каждой локации (hook → 2–4 сцены → критический выбор → последствия; связь с NPC и квестовыми предметами).
 	// Включается переменной окружения ENABLE_PLAYBOOK_GENERATION=true (в тестах по умолчанию выключено).

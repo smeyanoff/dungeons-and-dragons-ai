@@ -33,8 +33,9 @@ type ConnectionDTO struct {
 }
 
 type NPCDTO struct {
-	Name string `json:"name"`
-	Role string `json:"role"`
+	Name     string `json:"name"`
+	Role     string `json:"role"`
+	Relation string `json:"relation,omitempty"` // Родство/принадлежность к другому NPC или фракции (если применимо)
 }
 
 type ItemDTO struct {

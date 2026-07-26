@@ -79,6 +79,7 @@ func TestTelegramGameplay_RealLLM_UserJourney_MainMechanics(t *testing.T) {
 		feedbackRepo,
 		eventRepo,
 		nil, // indexDocUC (avoid embeddings calls from /roll)
+		nil, // deleteSessionDataUC
 	)
 	if err != nil {
 		t.Fatalf("Не удалось создать Telegram bot (fake API): %v", err)

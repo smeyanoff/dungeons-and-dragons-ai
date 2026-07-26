@@ -109,11 +109,15 @@ func GenerateLocationNPCsPrompt(locationName, locationDescription string) string
 
 Создай 1-3 NPC для этой локации. Каждый NPC должен иметь уникальную роль.
 
+Если у NPC есть родство или принадлежность к другому персонажу/фракции (например, "дочь старосты
+Ольгерда", "подмастерье кузнеца"), укажи это в поле "relation" — это будет запомнено как факт и не должно
+позже противоречиво меняться. Если родства/принадлежности нет, оставь "relation" пустой строкой.
+
 Ответь ТОЛЬКО валидным JSON без markdown блоков:
 
 {
   "npcs": [
-    { "name": "имя NPC", "role": "роль NPC (например: торговец, страж, маг)" }
+    { "name": "имя NPC", "role": "роль NPC (например: торговец, страж, маг)", "relation": "родство/принадлежность или пустая строка" }
   ]
 }`, locationName, locationDescription)
 }
@@ -129,12 +133,12 @@ func GenerateLocationNPCsPromptStrict(locationName, locationDescription string) 
 Ответ ТОЛЬКО в JSON:
 {
   "npcs": [
-    { "name": "имя NPC", "role": "роль NPC" }
+    { "name": "имя NPC", "role": "роль NPC", "relation": "родство/принадлежность или пустая строка" }
   ]
 }
 
 Требования:
-- Имя и роль обязательны
+- Имя и роль обязательны, relation — пустая строка, если родства/принадлежности нет
 - Никакого дополнительного текста вне JSON`, locationName, locationDescription)
 }
 

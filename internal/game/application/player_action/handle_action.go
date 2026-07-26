@@ -74,12 +74,21 @@ type HandleActionUseCase struct {
 	generateLocationEventUC LocationEventGenerator                  // Генератор событий локаций
 	campaignFactRepo        dm_tools.CampaignFactRepository         // Репозиторий ключевых фактов кампании (опционально)
 	analyzerLLM             domain.LLM                              // LLM для структурного анализа ответа DM (обычно более дешёвая модель, чем у самого DM)
+	locationMover           dm_tools.LocationMover                  // Перемещение по карте мира, используемое инструментом move_to_location (опционально)
 }
 
 // SetCampaignFactRepository устанавливает репозиторий ключевых фактов кампании,
 // используемый инструментом save_campaign_fact.
 func (uc *HandleActionUseCase) SetCampaignFactRepository(repo dm_tools.CampaignFactRepository) {
 	uc.campaignFactRepo = repo
+}
+
+// SetLocationMover устанавливает реализацию перемещения по карте мира,
+// используемую инструментом move_to_location — чтобы сюжетное перемещение
+// игрока ("иду в лес") обновляло текущую локацию на карте и продвигало
+// игровое время так же, как навигация по inline-кнопкам карты.
+func (uc *HandleActionUseCase) SetLocationMover(mover dm_tools.LocationMover) {
+	uc.locationMover = mover
 }
 
 // SetAnalyzerLLM устанавливает отдельный LLM для анализа ответа DM (dm_analyzer),
@@ -1507,9 +1516,9 @@ func summarizeBlockContent(title, content string, maxLen int) string {
 	}
 
 	switch title {
-	case "Последние сообщения":
+	case "Последние сообщения", "Память этой локации":
 		return summarizeRecentMessages(content, maxLen)
-	case "Релевантная история игры (найдено через поиск)":
+	case "Память этой локации (похожие моменты, найдено через поиск)":
 		return summarizeRAGHistory(content, maxLen)
 	case "Инвентарь персонажа":
 		return summarizeInventory(content, maxLen)
@@ -1638,9 +1647,13 @@ func contextBlockPriority(title string) int {
 		return 2
 	case "Последние сообщения":
 		return 2
+	case "Память этой локации":
+		return 2
+	case "Ключевые факты кампании":
+		return 2
 	case "Инвентарь персонажа":
 		return 2
-	case "Релевантная история игры (найдено через поиск)":
+	case "Память этой локации (похожие моменты, найдено через поиск)":
 		return 3
 	case "Игроки в сессии":
 		return 4
@@ -1985,6 +1998,11 @@ func (uc *HandleActionUseCase) createToolRegistry(gs *session.GameSession, playe
 	// Регистрируем инструмент для явного сохранения ключевых фактов кампании
 	if uc.campaignFactRepo != nil {
 		registry.Register(dm_tools.NewSaveCampaignFactTool(uc.campaignFactRepo, gs.World.ID))
+	}
+
+	// Регистрируем инструмент перемещения по карте мира (иду в лес / возвращаюсь в город и т.п.)
+	if uc.locationMover != nil {
+		registry.Register(dm_tools.NewMoveToLocationTool(uc.locationMover, gs.ChatID, gs.World.Locations))
 	}
 
 	return registry

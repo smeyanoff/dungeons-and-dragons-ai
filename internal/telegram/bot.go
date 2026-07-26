@@ -72,8 +72,9 @@ type Bot struct {
 	playerRepo            *persistence.PlayerRepository
 	combatRepo            CombatRepository
 	feedbackRepo          FeedbackRepository
-	eventRepo             EventRepository      // saves dice rolls to history
-	indexDocUC            IndexDocumentUseCase // indexes rolls in RAG
+	eventRepo             EventRepository          // saves dice rolls to history
+	indexDocUC            IndexDocumentUseCase     // indexes rolls in RAG
+	deleteSessionDataUC   DeleteSessionDataUseCase // deletes session's RAG memory on session removal
 
 	// Circuit breaker for Telegram API.
 	errorCount    int
@@ -114,6 +115,10 @@ type IndexDocumentUseCase interface {
 	Execute(ctx context.Context, doc ragdomain.Document) error
 }
 
+type DeleteSessionDataUseCase interface {
+	Execute(ctx context.Context, sessionID uint) error
+}
+
 type CombatRepository interface {
 	GetActiveBySessionID(ctx context.Context, sessionID uint) (*combat.Combat, error)
 	Save(ctx context.Context, c *combat.Combat) error
@@ -149,6 +154,7 @@ func NewBot(
 	feedbackRepo FeedbackRepository,
 	eventRepo EventRepository,
 	indexDocUC IndexDocumentUseCase,
+	deleteSessionDataUC DeleteSessionDataUseCase,
 ) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
@@ -201,6 +207,7 @@ func NewBot(
 		feedbackRepo,
 		eventRepo,
 		indexDocUC,
+		deleteSessionDataUC,
 	)
 }
 
@@ -235,6 +242,7 @@ func NewBotWithAPIEndpoint(
 	feedbackRepo FeedbackRepository,
 	eventRepo EventRepository,
 	indexDocUC IndexDocumentUseCase,
+	deleteSessionDataUC DeleteSessionDataUseCase,
 ) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPIWithAPIEndpoint(token, apiEndpoint)
 	if err != nil {
@@ -271,6 +279,7 @@ func NewBotWithAPIEndpoint(
 		feedbackRepo,
 		eventRepo,
 		indexDocUC,
+		deleteSessionDataUC,
 	)
 }
 
@@ -304,6 +313,7 @@ func newBotWithAPI(
 	feedbackRepo FeedbackRepository,
 	eventRepo EventRepository,
 	indexDocUC IndexDocumentUseCase,
+	deleteSessionDataUC DeleteSessionDataUseCase,
 ) (*Bot, error) {
 	bot := &Bot{
 		api:                   api,
@@ -335,6 +345,7 @@ func newBotWithAPI(
 		feedbackRepo:          feedbackRepo,
 		eventRepo:             eventRepo,
 		indexDocUC:            indexDocUC,
+		deleteSessionDataUC:   deleteSessionDataUC,
 		feedbackState:         make(map[int64]*FeedbackDialogState),
 	}
 
