@@ -75,7 +75,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix={{branch}}-,enable=${{ github.event_name != 'pull_request' }}
       
       - name: Set version info
         id: version
