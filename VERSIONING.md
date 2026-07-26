@@ -26,13 +26,10 @@ var (
 
 ### Проверка версии
 
-Версию можно проверить через HTTP endpoint:
-
 ```bash
 curl http://localhost:8080/version
 ```
 
-Ответ:
 ```json
 {
   "version": "v1.2.3",
@@ -42,7 +39,15 @@ curl http://localhost:8080/version
 }
 ```
 
-Версия также отображается в логах при запуске приложения.
+Версия также выводится в логах при старте приложения (`Starting bot... Version: v1.2.3, ...`)
+и доступна программно:
+
+```go
+import "dungeons-and-dragons-ai/pkg/version"
+
+ver := version.Get()
+fmt.Printf("Version: %s\n", ver.Version)
+```
 
 ## Версионирование образов Docker
 
@@ -188,33 +193,6 @@ git push origin v1.3.0
 ```bash
 git tag -a v2.0.0 -m "Breaking: описание изменений"
 git push origin v2.0.0
-```
-
-## Проверка версии в runtime
-
-Версия доступна через несколько способов:
-
-### 1. HTTP endpoint
-
-```bash
-curl http://localhost:8080/version
-```
-
-### 2. Логи при запуске
-
-Версия выводится при старте приложения:
-
-```
-Starting bot... Version: v1.2.3, Commit: abc123, BuildTime: 2024-01-01T12:00:00Z
-```
-
-### 3. Программно
-
-```go
-import "dungeons-and-dragons-ai/pkg/version"
-
-ver := version.Get()
-fmt.Printf("Version: %s\n", ver.Version)
 ```
 
 ## Troubleshooting

@@ -69,8 +69,12 @@ make test-integration
 
 ### Другие тесты (опционально)
 
-- `TestTelegramGameplay_CompleteFlow`, `TestTelegramGameplay_CombatFlow` — use-case уровень, без fake Telegram.
-- `make test-telegram-real-all` — полный набор real-LLM тестов.
+- `TestTelegramGameplay_CompleteFlow`, `TestTelegramGameplay_CombatFlow`,
+  `TestTelegramGameplay_DailyQuests`, `TestTelegramGameplay_SpellSystem` — use-case уровень,
+  без fake Telegram.
+- `TestLLM_RealIntegration_CombatAnalysis`, `TestLLM_RealIntegration_RateLimit`,
+  `TestTelegramGameplay_CoreMechanics_RealLLM` — точечные real-LLM тесты (анализ боя,
+  rate limiting, комплексный journey); входят в `make test-telegram-real-all`.
 
 ## Cassette-тестирование (record/replay)
 
@@ -117,3 +121,10 @@ make test-telegram-replay CASSETTE=tests/integration/cassettes/single_campaign.j
 
 ### Пропуск тестов из-за отсутствия GigaChat credentials
 Подхватите `.env`: `set -a && source .env && set +a` перед запуском тестов.
+
+### `tls: failed to verify certificate: x509: certificate signed by unknown authority`
+На хосте (macOS/Linux без сертификатов Сбербанка) добавьте в `.env`:
+`GIGACHAT_SKIP_TLS_VERIFY=true`. Внутри Docker-образа сертификаты Сбербанка уже установлены
+(см. `build/Dockerfile`), поэтому запуск через `make test-integration-gameplay-docker` или
+`docker exec dnd-bot-prod sh -c "cd /root && go test -v -timeout 60m ./tests/integration/... -run 'TestTelegramGameplay'"`
+не требует этой переменной.
