@@ -289,6 +289,14 @@ func (c *Character) IsSpellcaster() bool {
 	return c.Class == ClassWizard || c.Class == ClassCleric || c.Class == ClassRanger
 }
 
+// UsesSpellbook проверяет, ограничен ли персонаж фиксированной книгой заклинаний
+// (изученным списком spell.CharacterSpell), а не полным списком заклинаний класса.
+// В D&D 5e маг заучивает заклинания в книгу и может кастовать только их; жрец/следопыт —
+// подготавливающие заклинатели, им доступен весь список заклинаний класса при наличии слота.
+func (c *Character) UsesSpellbook() bool {
+	return c.Class == ClassWizard
+}
+
 // InitializeSpellSlots инициализирует слоты заклинаний для магического класса
 func (c *Character) InitializeSpellSlots() {
 	if c.IsSpellcaster() {

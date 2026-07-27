@@ -133,10 +133,15 @@ func (uc *GetSpellsUseCase) Execute(ctx context.Context, req GetSpellsRequest) (
 				icon = "✨"
 			}
 
-			// Проверяем, известно ли заклинание
+			// Для книги заклинаний (маг) заклинание должно быть отдельно изучено.
+			// Подготавливающие заклинатели (жрец, следопыт) имеют доступ ко всему
+			// списку заклинаний класса, ограниченные только слотами.
 			known := knownSpellsMap[s.ID]
 			status := "❌ Не изучено"
-			if known {
+			if !player.Character.UsesSpellbook() {
+				known = true
+				status = "✅ Доступно"
+			} else if known {
 				status = "✅ Изучено"
 			}
 
