@@ -45,6 +45,22 @@ func getAbilityNameForContext(ability string) string {
 	}
 }
 
+// attitudeDescription переводит значение Attitude NPC в инструкцию для DM о том, как этот
+// NPC должен вести себя с игроком. Персонажи, злые по своей природе (attitude=hostile),
+// должны относиться к игроку враждебно, а не нейтрально по умолчанию.
+func attitudeDescription(attitude string) string {
+	switch attitude {
+	case "hostile":
+		return "враждебно настроен к игроку — проявляет агрессию, угрозы или прямое противодействие при подходящем поводе, не притворяется дружелюбным"
+	case "wary":
+		return "насторожен и подозрителен к игроку — держит дистанцию, не доверяет сразу"
+	case "friendly":
+		return "дружелюбно настроен к игроку — охотно помогает и идёт навстречу"
+	default:
+		return "нейтрален к игроку — обычное поведение без выраженного отношения"
+	}
+}
+
 type SimpleContextBuilder struct{}
 
 func NewSimpleContextBuilder() *SimpleContextBuilder {
@@ -103,6 +119,14 @@ func (b *SimpleContextBuilder) BuildContext(ctx context.Context, gs *session.Gam
 		parts = append(parts, fmt.Sprintf("Локация: %s", currentLoc.Name))
 		if strings.TrimSpace(currentLoc.Description) != "" {
 			parts = append(parts, fmt.Sprintf("Описание: %s", truncateRunes(currentLoc.Description, 150)))
+		}
+
+		if len(currentLoc.NPCs) > 0 {
+			parts = append(parts, "NPC локации (отношение к игроку задано при создании — держись его):")
+			for _, n := range currentLoc.NPCs {
+				line := fmt.Sprintf("- %s (%s): %s", n.Name, n.Role, attitudeDescription(n.Attitude))
+				parts = append(parts, line)
+			}
 		}
 
 		// Карта ID → название, чтобы выводить связи читаемо.

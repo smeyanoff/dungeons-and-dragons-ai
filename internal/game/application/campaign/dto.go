@@ -36,6 +36,7 @@ type NPCDTO struct {
 	Name     string `json:"name"`
 	Role     string `json:"role"`
 	Relation string `json:"relation,omitempty"` // Родство/принадлежность к другому NPC или фракции (если применимо)
+	Attitude string `json:"attitude,omitempty"` // Отношение к игроку: hostile/wary/neutral/friendly
 }
 
 type ItemDTO struct {
