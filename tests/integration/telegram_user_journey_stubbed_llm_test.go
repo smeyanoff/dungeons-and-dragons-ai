@@ -130,7 +130,7 @@ func TestTelegramGameplay_BotSimulation_UserJourney_StubbedLLM(t *testing.T) {
 
 	// Use-cases (no real LLM / no real embeddings)
 	initCampaignUC := campaign.NewInitCampaignUseCase(&initCampaignStubLLM{}, worldRepo)
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo, cfg.spellRepo)
 	getHistoryUC := history.NewGetHistoryUseCase(sessionRepo, eventRepo)
 	getInventoryUC := inventoryapp.NewGetInventoryUseCase(sessionRepo, inventoryRepo)
 
