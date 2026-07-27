@@ -622,7 +622,7 @@ func (uc *InitCampaignUseCase) buildWorld(
 	for _, locDTO := range locations {
 		loc := location.New(locDTO.Name, locDTO.Description)
 		for _, npcDTO := range locDTO.NPCs {
-			loc.AddNPC(npc.New(npcDTO.Name, npcDTO.Role))
+			loc.AddNPC(npc.New(npcDTO.Name, npcDTO.Role, normalizeAttitude(npcDTO.Attitude)))
 		}
 
 		// Добавляем локацию без предопределенных проверок
@@ -734,6 +734,23 @@ func (uc *InitCampaignUseCase) GenerateOpeningMessage(ctx context.Context, w *wo
 	}
 
 	return msg, nil
+}
+
+// normalizeAttitude приводит значение attitude, полученное от LLM, к одному из допустимых
+// значений ("hostile", "wary", "neutral", "friendly"). Неизвестное или пустое значение
+// трактуется как "neutral", чтобы NPC без явно заданного отношения не становились
+// непреднамеренно враждебными или дружелюбными.
+func normalizeAttitude(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "hostile":
+		return "hostile"
+	case "wary":
+		return "wary"
+	case "friendly":
+		return "friendly"
+	default:
+		return "neutral"
+	}
 }
 
 // cleanJSONResponse очищает ответ LLM от markdown блоков кода

@@ -6,4 +6,7 @@ type NPC struct {
 	Name        string
 	Role        string
 	Personality string
+	// Attitude — отношение NPC к игроку (hostile/wary/neutral/friendly), заданное при создании
+	// и передаваемое в контекст промпта DM, чтобы поведение NPC соответствовало характеру.
+	Attitude string
 }
