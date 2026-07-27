@@ -185,6 +185,7 @@ func (uc *MoveToLocationUseCase) Execute(ctx context.Context, req MoveToLocation
 
 	// Создаем сообщение о перемещении
 	msg := uc.buildMovementMessage(current, to, travelHours, &gs.World)
+	msg += uc.maybeGenerateRandomEncounter(ctx, gs, current, to, travelHours)
 	return &MoveToLocationResponse{
 		From:    current,
 		To:      to,
@@ -261,7 +262,8 @@ func isLocationEventType(t world.WorldEventType) bool {
 		world.WorldEventTypeLocationItem,
 		world.WorldEventTypeLocationTrap,
 		world.WorldEventTypeLocationPuzzle,
-		world.WorldEventTypeLocationEncounter:
+		world.WorldEventTypeLocationEncounter,
+		world.WorldEventTypeRandomEncounter:
 		return true
 	default:
 		return false

@@ -2288,7 +2288,8 @@ func isLocationEventType(t world.WorldEventType) bool {
 		world.WorldEventTypeLocationItem,
 		world.WorldEventTypeLocationTrap,
 		world.WorldEventTypeLocationPuzzle,
-		world.WorldEventTypeLocationEncounter:
+		world.WorldEventTypeLocationEncounter,
+		world.WorldEventTypeRandomEncounter:
 		return true
 	default:
 		return false
