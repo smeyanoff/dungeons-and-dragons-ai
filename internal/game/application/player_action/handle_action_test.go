@@ -1051,7 +1051,7 @@ func TestCreateAbilityCheckFromAnalyzer_RepeatInScene_DoesNotCreatePendingCheck(
 		DC:      12,
 		Reason:  "новая попытка осмотреться",
 		Stakes:  "найти улики",
-	})
+	}, "осмотреться в комнате")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1063,5 +1063,57 @@ func TestCreateAbilityCheckFromAnalyzer_RepeatInScene_DoesNotCreatePendingCheck(
 	}
 	if strings.Contains(msg, "Напишите /roll") {
 		t.Fatalf("rejection message must not tell the player to /roll when no pending check was created, got: %q", msg)
+	}
+}
+
+// TestCreateAbilityCheckFromAnalyzer_EmptyReason_FallsBackToPlayerAction — если анализатор
+// не заполнил reason, проверка всё равно должна ссылаться на конкретное действие игрока
+// (взятое из его реплики), а не на обезличенную формулировку.
+func TestCreateAbilityCheckFromAnalyzer_EmptyReason_FallsBackToPlayerAction(t *testing.T) {
+	locationID := uint(5)
+	gs := &session.GameSession{
+		ChatID:            698225385,
+		CurrentLocationID: &locationID,
+		Players: []player.Player{
+			{
+				TgUserID: 1,
+				Character: character.Character{
+					Name:  "Hero",
+					Stats: character.Stats{Wisdom: 14},
+				},
+			},
+		},
+	}
+
+	sessionRepo := &mockSessionRepo{
+		getByChatIDFunc: func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+			return gs, nil
+		},
+		saveFunc: func(ctx context.Context, s *session.GameSession) error {
+			return nil
+		},
+	}
+	eventRepo := &mockEventRepo{}
+
+	uc := NewHandleActionUseCase(
+		nil, sessionRepo, nil, eventRepo, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+
+	msg, handled, err := uc.createAbilityCheckFromAnalyzer(context.Background(), gs, &dm_analyzer.AbilityCheckDetails{
+		Ability: "wisdom",
+		DC:      12,
+	}, "прислушаться у двери в подвал")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected handled=true")
+	}
+	if strings.Contains(msg, "неопределенным исходом") {
+		t.Fatalf("reason must be tied to the player's concrete action, not a generic placeholder, got: %q", msg)
+	}
+	if !strings.Contains(msg, "прислушаться у двери в подвал") {
+		t.Fatalf("reason must reference the player's specific action, got: %q", msg)
 	}
 }
