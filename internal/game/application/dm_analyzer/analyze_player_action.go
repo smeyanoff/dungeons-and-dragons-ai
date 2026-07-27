@@ -186,7 +186,7 @@ func buildPlayerActionAnalysisPrompt(playerMessage, gameContext string, recentEv
   "ability_check": {
     "ability": "wisdom",
     "dc": 12,
-    "reason": "Коротко: зачем нужна проверка (что делает игрок)",
+    "reason": "Коротко и конкретно: назови само действие игрока, для которого нужна проверка (не абстрактная формулировка типа 'на удачу')",
     "stakes": "Коротко: что произойдет при успехе/провале"
   },
   "needs_predefined_check": true/false,
@@ -206,7 +206,7 @@ func buildPlayerActionAnalysisPrompt(playerMessage, gameContext string, recentEv
 	parts = append(parts, "")
 	parts = append(parts, "⚠️ ВАЖНО:")
 	parts = append(parts, "- Если действие простое или описательное, установи 'simple_action': true")
-	parts = append(parts, "- Если нужна проверка навыка, установи 'needs_ability_check': true и заполни 'ability_check' (включая stakes)")
+	parts = append(parts, "- Если нужна проверка навыка, установи 'needs_ability_check': true и заполни 'ability_check' (включая stakes); reason обязан ссылаться на конкретное действие игрока из его реплики, а не быть общей формулировкой")
 	parts = append(parts, "- Если нужна предопределенная проверка, установи 'needs_predefined_check': true и заполни 'predefined_check'")
 	parts = append(parts, "- Если нужен случайный бросок, установи 'needs_random_roll': true и заполни 'random_roll'")
 
