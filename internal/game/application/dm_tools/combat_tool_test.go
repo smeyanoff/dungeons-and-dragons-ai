@@ -31,6 +31,27 @@ func (m *mockCombatRepo) Save(ctx context.Context, c *combat.Combat) error {
 	return nil
 }
 
+func (m *mockCombatRepo) WithLockedActiveCombat(ctx context.Context, sessionID uint, fn func(*combat.Combat) error) error {
+	var c *combat.Combat
+	if m.getActiveBySessionIDFunc != nil {
+		var err error
+		c, err = m.getActiveBySessionIDFunc(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+	}
+	if err := fn(c); err != nil {
+		return err
+	}
+	if c == nil {
+		return nil
+	}
+	if m.saveFunc != nil {
+		return m.saveFunc(ctx, c)
+	}
+	return nil
+}
+
 // Mock Game Session Repository
 type mockGameSessionRepo struct {
 	getByChatIDFunc func(ctx context.Context, chatID int64) (*session.GameSession, error)

@@ -217,6 +217,20 @@ func (m *mockCombatRepo) GetActiveBySessionID(ctx context.Context, sessionID uin
 	return nil, nil
 }
 
+func (m *mockCombatRepo) WithLockedActiveCombat(ctx context.Context, sessionID uint, fn func(*combat.Combat) error) error {
+	c, err := m.GetActiveBySessionID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err := fn(c); err != nil {
+		return err
+	}
+	if c == nil {
+		return nil
+	}
+	return m.Save(ctx, c)
+}
+
 // Mock Quest Repository
 type mockQuestRepo struct {
 	getByWorldIDFunc func(ctx context.Context, worldID uint) ([]*quest.Quest, error)

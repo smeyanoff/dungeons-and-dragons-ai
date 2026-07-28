@@ -17,6 +17,11 @@ import (
 type CombatRepository interface {
 	GetActiveBySessionID(ctx context.Context, sessionID uint) (*combat.Combat, error)
 	Save(ctx context.Context, c *combat.Combat) error
+	// WithLockedActiveCombat атомарно читает активный бой с блокировкой строки, передаёт его в fn
+	// для изменения и сохраняет результат — всё в одной транзакции. Используется инструментами,
+	// которые применяют урон/атаку, чтобы исключить потерю обновлений при параллельной обработке
+	// одного и того же боя (см. WithLockedActiveCombat в persistence.CombatRepository).
+	WithLockedActiveCombat(ctx context.Context, sessionID uint, fn func(*combat.Combat) error) error
 }
 
 // CheckCombatStatusTool позволяет DM проверить статус активного боя
@@ -167,133 +172,124 @@ func (t *PerformCombatAttackTool) Execute(ctx context.Context, args map[string]i
 		logger.Uint("session_id", t.sessionID),
 	)
 
-	// Получаем активный бой
-	activeCombat, err := t.combatRepo.GetActiveBySessionID(ctx, t.sessionID)
+	var attackResult map[string]interface{}
+
+	// Читаем и изменяем бой в одной транзакции с блокировкой строки (SELECT ... FOR UPDATE),
+	// чтобы параллельная обработка того же боя (напр. повторно доставленный апдейт Telegram)
+	// не перезаписала это изменение и не применила атаку дважды.
+	err := t.combatRepo.WithLockedActiveCombat(ctx, t.sessionID, func(activeCombat *combat.Combat) error {
+		if activeCombat == nil || !activeCombat.IsActive() {
+			logger.Info("PerformCombatAttackTool: no active combat",
+				logger.Uint("session_id", t.sessionID),
+			)
+			attackResult = map[string]interface{}{
+				"error": "Нет активного боя. Используй этот инструмент только во время активного боя.",
+			}
+			return nil
+		}
+
+		// Находим игрока в бою
+		var playerParticipant *combat.CombatParticipant
+		for i := range activeCombat.Participants {
+			if activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
+				playerParticipant = &activeCombat.Participants[i]
+				break
+			}
+		}
+
+		if playerParticipant == nil {
+			attackResult = map[string]interface{}{
+				"error": "Персонаж игрока не участвует в бою или мертв.",
+			}
+			return nil
+		}
+
+		// Находим цель (первого живого врага)
+		var targetParticipant *combat.CombatParticipant
+		for i := range activeCombat.Participants {
+			if !activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
+				targetParticipant = &activeCombat.Participants[i]
+				break
+			}
+		}
+
+		if targetParticipant == nil {
+			// Все враги мертвы - завершаем бой
+			activeCombat.State = combat.CombatStateFinished
+			attackResult = map[string]interface{}{
+				"message":         "🎉 Все враги побеждены! Бой окончен.",
+				"combat_finished": true,
+			}
+			return nil
+		}
+
+		// Определяем выражение урона по классу персонажа
+		damageExpression := getDamageByClass(string(playerParticipant.Character.Class))
+
+		// Выполняем атаку
+		result, err := combat.PerformAttack(playerParticipant, targetParticipant, damageExpression)
+		if err != nil {
+			logger.Error("PerformCombatAttackTool: failed to perform attack",
+				logger.ErrorField(err),
+			)
+			return fmt.Errorf("failed to perform attack: %w", err)
+		}
+
+		// Формируем результат
+		attackResult = map[string]interface{}{
+			"hit":           result.Hit,
+			"critical_hit":  result.CriticalHit,
+			"attacker_name": result.AttackerName,
+			"target_name":   result.TargetName,
+			"attack_roll":   result.AttackRoll,
+			"ac":            result.AC,
+			"damage":        0,
+			"target_hp":     targetParticipant.GetHP(),
+			"target_max_hp": targetParticipant.GetMaxHP(),
+		}
+
+		if result.Hit {
+			attackResult["damage"] = result.Damage
+		}
+
+		// Проверяем, не закончился ли бой
+		if activeCombat.CheckCombatEnd() {
+			activeCombat.State = combat.CombatStateFinished
+			attackResult["combat_finished"] = true
+
+			// Проверяем, кто победил
+			alivePlayers := 0
+			for _, p := range activeCombat.Participants {
+				if p.IsPlayer && p.IsAlive() {
+					alivePlayers++
+				}
+			}
+
+			if alivePlayers > 0 {
+				attackResult["victory"] = true
+				attackResult["message"] = "🎉 Победа! Все враги повержены!"
+			} else {
+				attackResult["victory"] = false
+				attackResult["message"] = "💀 Поражение! Все игроки повержены!"
+			}
+		}
+
+		logger.Info("PerformCombatAttackTool: attack completed",
+			logger.Uint("session_id", t.sessionID),
+			logger.Bool("hit", result.Hit),
+			logger.Bool("critical", result.CriticalHit),
+			logger.Int("damage", result.Damage),
+		)
+
+		return nil
+	})
 	if err != nil {
-		logger.Error("PerformCombatAttackTool: failed to get combat",
+		logger.Error("PerformCombatAttackTool: failed to process attack",
 			logger.Uint("session_id", t.sessionID),
 			logger.ErrorField(err),
 		)
 		return nil, fmt.Errorf("failed to get combat: %w", err)
 	}
-
-	if activeCombat == nil || !activeCombat.IsActive() {
-		logger.Info("PerformCombatAttackTool: no active combat",
-			logger.Uint("session_id", t.sessionID),
-		)
-		return map[string]interface{}{
-			"error": "Нет активного боя. Используй этот инструмент только во время активного боя.",
-		}, nil
-	}
-
-	// Находим игрока в бою
-	var playerParticipant *combat.CombatParticipant
-	for i := range activeCombat.Participants {
-		if activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
-			playerParticipant = &activeCombat.Participants[i]
-			break
-		}
-	}
-
-	if playerParticipant == nil {
-		return map[string]interface{}{
-			"error": "Персонаж игрока не участвует в бою или мертв.",
-		}, nil
-	}
-
-	// Находим цель (первого живого врага)
-	var targetParticipant *combat.CombatParticipant
-	for i := range activeCombat.Participants {
-		if !activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
-			targetParticipant = &activeCombat.Participants[i]
-			break
-		}
-	}
-
-	if targetParticipant == nil {
-		// Все враги мертвы - завершаем бой
-		activeCombat.State = combat.CombatStateFinished
-		if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
-			logger.Error("PerformCombatAttackTool: failed to save combat",
-				logger.ErrorField(err),
-			)
-		}
-		return map[string]interface{}{
-			"message":         "🎉 Все враги побеждены! Бой окончен.",
-			"combat_finished": true,
-		}, nil
-	}
-
-	// Определяем выражение урона по классу персонажа
-	damageExpression := getDamageByClass(string(playerParticipant.Character.Class))
-
-	// Выполняем атаку
-	result, err := combat.PerformAttack(playerParticipant, targetParticipant, damageExpression)
-	if err != nil {
-		logger.Error("PerformCombatAttackTool: failed to perform attack",
-			logger.ErrorField(err),
-		)
-		return nil, fmt.Errorf("failed to perform attack: %w", err)
-	}
-
-	// Сохраняем состояние боя
-	if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
-		logger.Error("PerformCombatAttackTool: failed to save combat",
-			logger.ErrorField(err),
-		)
-		// Не возвращаем ошибку - результат атаки уже сформирован
-	}
-
-	// Формируем результат
-	attackResult := map[string]interface{}{
-		"hit":           result.Hit,
-		"critical_hit":  result.CriticalHit,
-		"attacker_name": result.AttackerName,
-		"target_name":   result.TargetName,
-		"attack_roll":   result.AttackRoll,
-		"ac":            result.AC,
-		"damage":        0,
-		"target_hp":     targetParticipant.GetHP(),
-		"target_max_hp": targetParticipant.GetMaxHP(),
-	}
-
-	if result.Hit {
-		attackResult["damage"] = result.Damage
-	}
-
-	// Проверяем, не закончился ли бой
-	if activeCombat.CheckCombatEnd() {
-		activeCombat.State = combat.CombatStateFinished
-		if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
-			logger.Error("PerformCombatAttackTool: failed to save combat",
-				logger.ErrorField(err),
-			)
-		}
-		attackResult["combat_finished"] = true
-
-		// Проверяем, кто победил
-		alivePlayers := 0
-		for _, p := range activeCombat.Participants {
-			if p.IsPlayer && p.IsAlive() {
-				alivePlayers++
-			}
-		}
-
-		if alivePlayers > 0 {
-			attackResult["victory"] = true
-			attackResult["message"] = "🎉 Победа! Все враги повержены!"
-		} else {
-			attackResult["victory"] = false
-			attackResult["message"] = "💀 Поражение! Все игроки повержены!"
-		}
-	}
-
-	logger.Info("PerformCombatAttackTool: attack completed",
-		logger.Uint("session_id", t.sessionID),
-		logger.Bool("hit", result.Hit),
-		logger.Bool("critical", result.CriticalHit),
-		logger.Int("damage", result.Damage),
-	)
 
 	return attackResult, nil
 }
@@ -487,91 +483,144 @@ func (t *ApplyDamageTool) Execute(ctx context.Context, args map[string]interface
 		}, nil
 	}
 
-	// Получаем активный бой
-	activeCombat, err := t.combatRepo.GetActiveBySessionID(ctx, t.sessionID)
-	if err != nil {
-		logger.Error("ApplyDamageTool: failed to get combat",
-			logger.ErrorField(err),
-		)
-		return nil, fmt.Errorf("failed to get combat: %w", err)
-	}
+	var result map[string]interface{}
+	var syncTarget *combat.CombatParticipant
 
-	if activeCombat == nil || !activeCombat.IsActive() {
-		return map[string]interface{}{
-			"error": "Нет активного боя. Используй этот инструмент только во время активного боя.",
-		}, nil
-	}
-
-	// Находим цель
-	var targetParticipant *combat.CombatParticipant
-	var targetFound bool
-
-	if targetType == "player" {
-		// Ищем игрока
-		for i := range activeCombat.Participants {
-			if activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
-				targetParticipant = &activeCombat.Participants[i]
-				targetFound = true
-				break
+	// Читаем и изменяем бой в одной транзакции с блокировкой строки (SELECT ... FOR UPDATE),
+	// чтобы параллельная обработка того же боя не перезаписала это изменение и не применила
+	// урон дважды (см. WithLockedActiveCombat).
+	err := t.combatRepo.WithLockedActiveCombat(ctx, t.sessionID, func(activeCombat *combat.Combat) error {
+		if activeCombat == nil || !activeCombat.IsActive() {
+			result = map[string]interface{}{
+				"error": "Нет активного боя. Используй этот инструмент только во время активного боя.",
 			}
+			return nil
 		}
-	} else if targetType == "monster" {
-		// Ищем монстра по имени
-		for i := range activeCombat.Participants {
-			if !activeCombat.Participants[i].IsPlayer &&
-				activeCombat.Participants[i].IsAlive() &&
-				activeCombat.Participants[i].MonsterName == targetName {
-				targetParticipant = &activeCombat.Participants[i]
-				targetFound = true
-				break
-			}
-		}
-		// Если не нашли по имени, используем первого живого врага
-		if !targetFound {
+
+		// Находим цель
+		var targetParticipant *combat.CombatParticipant
+		var targetFound bool
+
+		if targetType == "player" {
+			// Ищем игрока
 			for i := range activeCombat.Participants {
-				if !activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
+				if activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
 					targetParticipant = &activeCombat.Participants[i]
 					targetFound = true
 					break
 				}
 			}
+		} else if targetType == "monster" {
+			// Ищем монстра по имени
+			for i := range activeCombat.Participants {
+				if !activeCombat.Participants[i].IsPlayer &&
+					activeCombat.Participants[i].IsAlive() &&
+					activeCombat.Participants[i].MonsterName == targetName {
+					targetParticipant = &activeCombat.Participants[i]
+					targetFound = true
+					break
+				}
+			}
+			// Если не нашли по имени, используем первого живого врага
+			if !targetFound {
+				for i := range activeCombat.Participants {
+					if !activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
+						targetParticipant = &activeCombat.Participants[i]
+						targetFound = true
+						break
+					}
+				}
+			}
+		} else {
+			result = map[string]interface{}{
+				"error": fmt.Sprintf("invalid target_type: %s (must be 'player' or 'monster')", targetType),
+			}
+			return nil
 		}
-	} else {
-		return map[string]interface{}{
-			"error": fmt.Sprintf("invalid target_type: %s (must be 'player' or 'monster')", targetType),
-		}, nil
-	}
 
-	if !targetFound || targetParticipant == nil {
-		return map[string]interface{}{
-			"error": fmt.Sprintf("Цель не найдена: %s (%s)", targetName, targetType),
-		}, nil
-	}
+		if !targetFound || targetParticipant == nil {
+			result = map[string]interface{}{
+				"error": fmt.Sprintf("Цель не найдена: %s (%s)", targetName, targetType),
+			}
+			return nil
+		}
 
-	targetDisplayName := targetParticipant.GetName()
-	oldHP := targetParticipant.GetHP()
+		targetDisplayName := targetParticipant.GetName()
+		oldHP := targetParticipant.GetHP()
 
-	// Применяем урон
-	if err := targetParticipant.ApplyDamage(damage); err != nil {
-		logger.Error("ApplyDamageTool: failed to apply damage",
+		// Применяем урон
+		if err := targetParticipant.ApplyDamage(damage); err != nil {
+			logger.Error("ApplyDamageTool: failed to apply damage",
+				logger.ErrorField(err),
+			)
+			return fmt.Errorf("failed to apply damage: %w", err)
+		}
+
+		newHP := targetParticipant.GetHP()
+
+		if targetParticipant.IsPlayer {
+			syncTarget = targetParticipant
+		}
+
+		// Проверяем, не закончился ли бой
+		combatFinished := false
+		victory := false
+		if activeCombat.CheckCombatEnd() {
+			activeCombat.State = combat.CombatStateFinished
+			combatFinished = true
+
+			// Проверяем, кто победил
+			alivePlayers := 0
+			for _, p := range activeCombat.Participants {
+				if p.IsPlayer && p.IsAlive() {
+					alivePlayers++
+				}
+			}
+			victory = alivePlayers > 0
+		}
+
+		// Формируем результат
+		result = map[string]interface{}{
+			"target_name": targetDisplayName,
+			"damage":      damage,
+			"old_hp":      oldHP,
+			"new_hp":      newHP,
+			"max_hp":      targetParticipant.GetMaxHP(),
+			"is_dead":     !targetParticipant.IsAlive(),
+			"message":     fmt.Sprintf("💥 %s получил(а) %d урона. HP: %d/%d", targetDisplayName, damage, newHP, targetParticipant.GetMaxHP()),
+		}
+
+		if combatFinished {
+			result["combat_finished"] = true
+			result["victory"] = victory
+			if victory {
+				result["message"] = fmt.Sprintf("%s\n\n🎉 Победа! Все враги повержены!", result["message"])
+			} else {
+				result["message"] = fmt.Sprintf("%s\n\n💀 Поражение! Все игроки повержены!", result["message"])
+			}
+		}
+
+		logger.Info("ApplyDamageTool: damage applied",
+			logger.Uint("session_id", t.sessionID),
+			logger.String("target", targetDisplayName),
+			logger.Int("damage", damage),
+			logger.Int("old_hp", oldHP),
+			logger.Int("new_hp", newHP),
+			logger.Bool("is_dead", !targetParticipant.IsAlive()),
+		)
+
+		return nil
+	})
+	if err != nil {
+		logger.Error("ApplyDamageTool: failed to process damage",
 			logger.ErrorField(err),
 		)
-		return nil, fmt.Errorf("failed to apply damage: %w", err)
+		return nil, fmt.Errorf("failed to get combat: %w", err)
 	}
 
-	newHP := targetParticipant.GetHP()
-
-	// Сохраняем изменения в бою
-	if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
-		logger.Error("ApplyDamageTool: failed to save combat",
-			logger.ErrorField(err),
-		)
-		// Не возвращаем ошибку - урон уже применен
-	}
-
-	// Если цель - игрок, обновляем персонажа в БД
-	if targetParticipant.IsPlayer && t.playerRepo != nil {
-		if err := syncPlayerHPFromCombat(ctx, targetParticipant, t.sessionRepo, t.playerRepo, t.sessionID, t.chatID); err != nil {
+	// Если цель - игрок, обновляем персонажа в БД (вне транзакции боя - отдельная таблица)
+	if syncTarget != nil && t.playerRepo != nil {
+		if err := syncPlayerHPFromCombat(ctx, syncTarget, t.sessionRepo, t.playerRepo, t.sessionID, t.chatID); err != nil {
 			logger.Error("ApplyDamageTool: failed to sync player HP",
 				logger.ErrorField(err),
 				logger.Uint("session_id", t.sessionID),
@@ -579,58 +628,6 @@ func (t *ApplyDamageTool) Execute(ctx context.Context, args map[string]interface
 			// Не возвращаем ошибку - урон уже применен в бою
 		}
 	}
-
-	// Проверяем, не закончился ли бой
-	combatFinished := false
-	victory := false
-	if activeCombat.CheckCombatEnd() {
-		activeCombat.State = combat.CombatStateFinished
-		if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
-			logger.Error("ApplyDamageTool: failed to save combat",
-				logger.ErrorField(err),
-			)
-		}
-		combatFinished = true
-
-		// Проверяем, кто победил
-		alivePlayers := 0
-		for _, p := range activeCombat.Participants {
-			if p.IsPlayer && p.IsAlive() {
-				alivePlayers++
-			}
-		}
-		victory = alivePlayers > 0
-	}
-
-	// Формируем результат
-	result := map[string]interface{}{
-		"target_name": targetDisplayName,
-		"damage":      damage,
-		"old_hp":      oldHP,
-		"new_hp":      newHP,
-		"max_hp":      targetParticipant.GetMaxHP(),
-		"is_dead":     !targetParticipant.IsAlive(),
-		"message":     fmt.Sprintf("💥 %s получил(а) %d урона. HP: %d/%d", targetDisplayName, damage, newHP, targetParticipant.GetMaxHP()),
-	}
-
-	if combatFinished {
-		result["combat_finished"] = true
-		result["victory"] = victory
-		if victory {
-			result["message"] = fmt.Sprintf("%s\n\n🎉 Победа! Все враги повержены!", result["message"])
-		} else {
-			result["message"] = fmt.Sprintf("%s\n\n💀 Поражение! Все игроки повержены!", result["message"])
-		}
-	}
-
-	logger.Info("ApplyDamageTool: damage applied",
-		logger.Uint("session_id", t.sessionID),
-		logger.String("target", targetDisplayName),
-		logger.Int("damage", damage),
-		logger.Int("old_hp", oldHP),
-		logger.Int("new_hp", newHP),
-		logger.Bool("is_dead", !targetParticipant.IsAlive()),
-	)
 
 	return result, nil
 }
@@ -1052,25 +1049,6 @@ func (t *PerformEnemyAttackTool) Execute(ctx context.Context, args map[string]in
 		logger.Uint("session_id", t.sessionID),
 	)
 
-	// Получаем активный бой
-	activeCombat, err := t.combatRepo.GetActiveBySessionID(ctx, t.sessionID)
-	if err != nil {
-		logger.Error("PerformEnemyAttackTool: failed to get combat",
-			logger.Uint("session_id", t.sessionID),
-			logger.ErrorField(err),
-		)
-		return nil, fmt.Errorf("failed to get combat: %w", err)
-	}
-
-	if activeCombat == nil || !activeCombat.IsActive() {
-		logger.Info("PerformEnemyAttackTool: no active combat",
-			logger.Uint("session_id", t.sessionID),
-		)
-		return map[string]interface{}{
-			"error": "Нет активного боя. Используй этот инструмент только во время активного боя.",
-		}, nil
-	}
-
 	// Получаем параметры (все опциональны)
 	enemyID := ""
 	if enemyIDStr, ok := args["enemy_id"].(string); ok && enemyIDStr != "" {
@@ -1087,101 +1065,198 @@ func (t *PerformEnemyAttackTool) Execute(ctx context.Context, args map[string]in
 		damageExpression = damageExpr
 	}
 
-	// Находим врага (атакующего)
-	var attackerParticipant *combat.CombatParticipant
-	var attackerFound bool
+	var attackResult map[string]interface{}
+	var syncTarget *combat.CombatParticipant
 
-	if enemyID != "" {
-		// Ищем врага по ID или имени
-		for i := range activeCombat.Participants {
-			if !activeCombat.Participants[i].IsPlayer &&
-				activeCombat.Participants[i].IsAlive() {
-				// Проверяем по имени или индексу
-				if activeCombat.Participants[i].MonsterName == enemyID ||
-					fmt.Sprintf("%d", i+1) == enemyID {
+	// Читаем и изменяем бой в одной транзакции с блокировкой строки (SELECT ... FOR UPDATE),
+	// чтобы параллельная обработка того же боя не перезаписала это изменение и не применила
+	// атаку врага дважды (см. WithLockedActiveCombat).
+	err := t.combatRepo.WithLockedActiveCombat(ctx, t.sessionID, func(activeCombat *combat.Combat) error {
+		if activeCombat == nil || !activeCombat.IsActive() {
+			logger.Info("PerformEnemyAttackTool: no active combat",
+				logger.Uint("session_id", t.sessionID),
+			)
+			attackResult = map[string]interface{}{
+				"error": "Нет активного боя. Используй этот инструмент только во время активного боя.",
+			}
+			return nil
+		}
+
+		// Находим врага (атакующего)
+		var attackerParticipant *combat.CombatParticipant
+		var attackerFound bool
+
+		if enemyID != "" {
+			// Ищем врага по ID или имени
+			for i := range activeCombat.Participants {
+				if !activeCombat.Participants[i].IsPlayer &&
+					activeCombat.Participants[i].IsAlive() {
+					// Проверяем по имени или индексу
+					if activeCombat.Participants[i].MonsterName == enemyID ||
+						fmt.Sprintf("%d", i+1) == enemyID {
+						attackerParticipant = &activeCombat.Participants[i]
+						attackerFound = true
+						break
+					}
+				}
+			}
+		} else {
+			// Используем первого живого врага
+			for i := range activeCombat.Participants {
+				if !activeCombat.Participants[i].IsPlayer &&
+					activeCombat.Participants[i].IsAlive() {
 					attackerParticipant = &activeCombat.Participants[i]
 					attackerFound = true
 					break
 				}
 			}
 		}
-	} else {
-		// Используем первого живого врага
-		for i := range activeCombat.Participants {
-			if !activeCombat.Participants[i].IsPlayer &&
-				activeCombat.Participants[i].IsAlive() {
-				attackerParticipant = &activeCombat.Participants[i]
-				attackerFound = true
-				break
+
+		if !attackerFound || attackerParticipant == nil {
+			attackResult = map[string]interface{}{
+				"error": "Враг не найден или все враги мертвы.",
 			}
+			return nil
 		}
-	}
 
-	if !attackerFound || attackerParticipant == nil {
-		return map[string]interface{}{
-			"error": "Враг не найден или все враги мертвы.",
-		}, nil
-	}
+		// Находим цель (игрока)
+		var targetParticipant *combat.CombatParticipant
+		var targetFound bool
 
-	// Находим цель (игрока)
-	var targetParticipant *combat.CombatParticipant
-	var targetFound bool
-
-	if targetID == "player" {
-		// Ищем игрока
-		for i := range activeCombat.Participants {
-			if activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
-				targetParticipant = &activeCombat.Participants[i]
-				targetFound = true
-				break
-			}
-		}
-	} else {
-		// Ищем цель по ID или имени
-		for i := range activeCombat.Participants {
-			if activeCombat.Participants[i].IsAlive() {
-				name := activeCombat.Participants[i].GetName()
-				if name == targetID || fmt.Sprintf("%d", i+1) == targetID {
+		if targetID == "player" {
+			// Ищем игрока
+			for i := range activeCombat.Participants {
+				if activeCombat.Participants[i].IsPlayer && activeCombat.Participants[i].IsAlive() {
 					targetParticipant = &activeCombat.Participants[i]
 					targetFound = true
 					break
 				}
 			}
+		} else {
+			// Ищем цель по ID или имени
+			for i := range activeCombat.Participants {
+				if activeCombat.Participants[i].IsAlive() {
+					name := activeCombat.Participants[i].GetName()
+					if name == targetID || fmt.Sprintf("%d", i+1) == targetID {
+						targetParticipant = &activeCombat.Participants[i]
+						targetFound = true
+						break
+					}
+				}
+			}
 		}
-	}
 
-	if !targetFound || targetParticipant == nil {
-		return map[string]interface{}{
-			"error": fmt.Sprintf("Цель не найдена: %s", targetID),
-		}, nil
-	}
+		if !targetFound || targetParticipant == nil {
+			attackResult = map[string]interface{}{
+				"error": fmt.Sprintf("Цель не найдена: %s", targetID),
+			}
+			return nil
+		}
 
-	// Определяем выражение урона
-	if damageExpression == "" {
-		// Используем стандартный урон врага (1d6 для большинства монстров)
-		damageExpression = "1d6"
-	}
+		// Определяем выражение урона
+		effectiveDamageExpression := damageExpression
+		if effectiveDamageExpression == "" {
+			// Используем стандартный урон врага (1d6 для большинства монстров)
+			effectiveDamageExpression = "1d6"
+		}
 
-	// Выполняем атаку
-	result, err := combat.PerformAttack(attackerParticipant, targetParticipant, damageExpression)
+		// Выполняем атаку
+		result, err := combat.PerformAttack(attackerParticipant, targetParticipant, effectiveDamageExpression)
+		if err != nil {
+			logger.Error("PerformEnemyAttackTool: failed to perform attack",
+				logger.ErrorField(err),
+			)
+			return fmt.Errorf("failed to perform attack: %w", err)
+		}
+
+		if targetParticipant.IsPlayer {
+			syncTarget = targetParticipant
+		}
+
+		// Переходим к следующему ходу после атаки врага
+		activeCombat.NextTurn()
+
+		// Проверяем, не закончился ли бой
+		combatFinished := false
+		victory := false
+		if activeCombat.CheckCombatEnd() {
+			activeCombat.State = combat.CombatStateFinished
+			combatFinished = true
+
+			// Проверяем, кто победил
+			alivePlayers := 0
+			for _, p := range activeCombat.Participants {
+				if p.IsPlayer && p.IsAlive() {
+					alivePlayers++
+				}
+			}
+			victory = alivePlayers > 0
+		}
+
+		// Проверяем, чей следующий ход
+		nextParticipant := activeCombat.GetCurrentParticipant()
+		nextTurnInfo := ""
+		if nextParticipant != nil && !combatFinished {
+			if nextParticipant.IsPlayer {
+				// Следующий ход игрока - явно сообщаем об этом
+				nextTurnInfo = fmt.Sprintf("🎯 Теперь твой ход, %s! Что ты делаешь?", nextParticipant.GetName())
+			} else {
+				// Следующий ход другого врага (не должно происходить, но на всякий случай)
+				nextTurnInfo = fmt.Sprintf("🎯 Следующий ход: %s", nextParticipant.GetName())
+			}
+		}
+
+		// Формируем результат
+		attackResult = map[string]interface{}{
+			"hit":           result.Hit,
+			"critical_hit":  result.CriticalHit,
+			"attacker_name": result.AttackerName,
+			"target_name":   result.TargetName,
+			"attack_roll":   result.AttackRoll,
+			"ac":            result.AC,
+			"damage":        0,
+			"target_hp":     targetParticipant.GetHP(),
+			"target_max_hp": targetParticipant.GetMaxHP(),
+		}
+
+		if result.Hit {
+			attackResult["damage"] = result.Damage
+		}
+
+		if nextTurnInfo != "" {
+			attackResult["next_turn"] = nextTurnInfo
+		}
+
+		if combatFinished {
+			attackResult["combat_finished"] = true
+			attackResult["victory"] = victory
+			if victory {
+				attackResult["message"] = "🎉 Победа! Все враги повержены!"
+			} else {
+				attackResult["message"] = "💀 Поражение! Все игроки повержены!"
+			}
+		}
+
+		logger.Info("PerformEnemyAttackTool: attack completed",
+			logger.Uint("session_id", t.sessionID),
+			logger.Bool("hit", result.Hit),
+			logger.Bool("critical", result.CriticalHit),
+			logger.Int("damage", result.Damage),
+		)
+
+		return nil
+	})
 	if err != nil {
-		logger.Error("PerformEnemyAttackTool: failed to perform attack",
+		logger.Error("PerformEnemyAttackTool: failed to process attack",
+			logger.Uint("session_id", t.sessionID),
 			logger.ErrorField(err),
 		)
-		return nil, fmt.Errorf("failed to perform attack: %w", err)
+		return nil, fmt.Errorf("failed to get combat: %w", err)
 	}
 
-	// Сохраняем состояние боя
-	if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
-		logger.Error("PerformEnemyAttackTool: failed to save combat",
-			logger.ErrorField(err),
-		)
-		// Не возвращаем ошибку - результат атаки уже сформирован
-	}
-
-	// Если цель - игрок, обновляем персонажа в БД
-	if targetParticipant.IsPlayer && t.playerRepo != nil {
-		if err := syncPlayerHPFromCombat(ctx, targetParticipant, t.sessionRepo, t.playerRepo, t.sessionID, t.chatID); err != nil {
+	// Если цель - игрок, обновляем персонажа в БД (вне транзакции боя - отдельная таблица)
+	if syncTarget != nil && t.playerRepo != nil {
+		if err := syncPlayerHPFromCombat(ctx, syncTarget, t.sessionRepo, t.playerRepo, t.sessionID, t.chatID); err != nil {
 			logger.Error("PerformEnemyAttackTool: failed to sync player HP",
 				logger.ErrorField(err),
 				logger.Uint("session_id", t.sessionID),
@@ -1189,85 +1264,6 @@ func (t *PerformEnemyAttackTool) Execute(ctx context.Context, args map[string]in
 			// Не возвращаем ошибку - урон уже применен в бою
 		}
 	}
-
-	// Переходим к следующему ходу после атаки врага
-	activeCombat.NextTurn()
-
-	// Проверяем, не закончился ли бой
-	combatFinished := false
-	victory := false
-	if activeCombat.CheckCombatEnd() {
-		activeCombat.State = combat.CombatStateFinished
-		combatFinished = true
-
-		// Проверяем, кто победил
-		alivePlayers := 0
-		for _, p := range activeCombat.Participants {
-			if p.IsPlayer && p.IsAlive() {
-				alivePlayers++
-			}
-		}
-		victory = alivePlayers > 0
-	}
-
-	// Сохраняем состояние боя после перехода хода
-	if err := t.combatRepo.Save(ctx, activeCombat); err != nil {
-		logger.Error("PerformEnemyAttackTool: failed to save combat after next turn",
-			logger.ErrorField(err),
-		)
-		// Не возвращаем ошибку - результат атаки уже сформирован
-	}
-
-	// Проверяем, чей следующий ход
-	nextParticipant := activeCombat.GetCurrentParticipant()
-	nextTurnInfo := ""
-	if nextParticipant != nil && !combatFinished {
-		if nextParticipant.IsPlayer {
-			// Следующий ход игрока - явно сообщаем об этом
-			nextTurnInfo = fmt.Sprintf("🎯 Теперь твой ход, %s! Что ты делаешь?", nextParticipant.GetName())
-		} else {
-			// Следующий ход другого врага (не должно происходить, но на всякий случай)
-			nextTurnInfo = fmt.Sprintf("🎯 Следующий ход: %s", nextParticipant.GetName())
-		}
-	}
-
-	// Формируем результат
-	attackResult := map[string]interface{}{
-		"hit":           result.Hit,
-		"critical_hit":  result.CriticalHit,
-		"attacker_name": result.AttackerName,
-		"target_name":   result.TargetName,
-		"attack_roll":   result.AttackRoll,
-		"ac":            result.AC,
-		"damage":        0,
-		"target_hp":     targetParticipant.GetHP(),
-		"target_max_hp": targetParticipant.GetMaxHP(),
-	}
-
-	if result.Hit {
-		attackResult["damage"] = result.Damage
-	}
-
-	if nextTurnInfo != "" {
-		attackResult["next_turn"] = nextTurnInfo
-	}
-
-	if combatFinished {
-		attackResult["combat_finished"] = true
-		attackResult["victory"] = victory
-		if victory {
-			attackResult["message"] = "🎉 Победа! Все враги повержены!"
-		} else {
-			attackResult["message"] = "💀 Поражение! Все игроки повержены!"
-		}
-	}
-
-	logger.Info("PerformEnemyAttackTool: attack completed",
-		logger.Uint("session_id", t.sessionID),
-		logger.Bool("hit", result.Hit),
-		logger.Bool("critical", result.CriticalHit),
-		logger.Int("damage", result.Damage),
-	)
 
 	return attackResult, nil
 }
