@@ -880,6 +880,23 @@ func (a *combatRepositoryAdapter) Save(ctx context.Context, c *combat.Combat) er
 	return a.repo.Save(ctx, c)
 }
 
+// WithLockedActiveCombat здесь не транзакционен (в отличие от persistence.CombatRepository) —
+// адаптер используется только для read-only GetBattlefieldStatusTool, которому блокировка
+// не требуется; метод существует лишь для соответствия dm_tools.CombatRepository.
+func (a *combatRepositoryAdapter) WithLockedActiveCombat(ctx context.Context, sessionID uint, fn func(*combat.Combat) error) error {
+	c, err := a.repo.GetActiveBySessionID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err := fn(c); err != nil {
+		return err
+	}
+	if c == nil {
+		return nil
+	}
+	return a.repo.Save(ctx, c)
+}
+
 // sessionRepoAdapter адаптирует session.Repository из bot.go к dm_tools.SessionRepository
 type sessionRepoAdapter struct {
 	sessionRepo session.Repository

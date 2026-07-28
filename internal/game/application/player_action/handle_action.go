@@ -122,6 +122,7 @@ type ContextBuilder interface {
 type CombatRepository interface {
 	Save(ctx context.Context, c *combat.Combat) error
 	GetActiveBySessionID(ctx context.Context, sessionID uint) (*combat.Combat, error)
+	WithLockedActiveCombat(ctx context.Context, sessionID uint, fn func(*combat.Combat) error) error
 }
 
 // sessionRepoAdapter адаптирует session.Repository к dm_tools.GameSessionRepository
