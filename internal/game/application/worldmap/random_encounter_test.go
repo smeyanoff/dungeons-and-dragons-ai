@@ -214,7 +214,7 @@ func TestMoveToLocationUseCase_Execute_WithRandomEncounter(t *testing.T) {
 		CurrentLocationID: uintPtr(1),
 	}}
 
-	uc := NewMoveToLocationUseCase(nil, sessionRepo, repo, nil, nil)
+	uc := NewMoveToLocationUseCase(nil, sessionRepo, repo, nil, nil, nil)
 	resp, err := uc.Execute(context.Background(), MoveToLocationRequest{ChatID: 123, ToLocationID: uintPtr(2)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
