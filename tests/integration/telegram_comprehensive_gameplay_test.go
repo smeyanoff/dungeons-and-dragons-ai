@@ -41,7 +41,8 @@ func TestTelegramGameplay_ComprehensiveUserJourney_StubbedLLM(t *testing.T) {
 	playerRepo := persistence.NewPlayerRepository(cfg.db)
 	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
 	// For tests, we need to pass nil for LLM and other dependencies
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
+	inventoryRepo := persistence.NewInventoryRepository(cfg.db)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil, inventoryRepo)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, nil)
 
 	// Создаем бота без реального LLM для большинства операций

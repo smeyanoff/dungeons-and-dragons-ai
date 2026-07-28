@@ -6,9 +6,27 @@ import (
 	"strings"
 	"testing"
 
+	"dungeons-and-dragons-ai/internal/game/domain/character"
+	"dungeons-and-dragons-ai/internal/game/domain/inventory"
+	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 )
+
+type mockInventoryRepoMove struct {
+	byCharacterID map[uint]*inventory.Inventory
+}
+
+func (m *mockInventoryRepoMove) GetByCharacterID(ctx context.Context, characterID uint) (*inventory.Inventory, error) {
+	if m.byCharacterID == nil {
+		return nil, errors.New("not found")
+	}
+	inv, ok := m.byCharacterID[characterID]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	return inv, nil
+}
 
 type mockSessionRepoMove struct {
 	session       *session.GameSession
@@ -167,7 +185,7 @@ func TestMoveToLocationUseCase_Execute(t *testing.T) {
 		},
 	}
 
-	uc := NewMoveToLocationUseCase(nil, nil, nil, nil, nil)
+	uc := NewMoveToLocationUseCase(nil, nil, nil, nil, nil, nil)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			uc.sessionRepo = tt.repo
@@ -198,6 +216,84 @@ func TestMoveToLocationUseCase_Execute(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMoveToLocationUseCase_RequiredItemGate(t *testing.T) {
+	buildSession := func() *session.GameSession {
+		loc1 := world.Location{
+			ID:      1,
+			WorldID: 1,
+			Name:    "Town",
+			Connections: []world.LocationConnection{
+				{FromLocationID: 1, ToLocationID: 2, Direction: "north", RequiredItemName: "Золотой ключ"},
+			},
+		}
+		loc2 := world.Location{ID: 2, WorldID: 1, Name: "Vault"}
+		return &session.GameSession{
+			ChatID: 123,
+			State:  session.StateActive,
+			World: world.World{
+				ID:        1,
+				Name:      "W",
+				Locations: []world.Location{loc1, loc2},
+			},
+			CurrentLocationID: uintPtr(1),
+			Players: []player.Player{
+				{ID: 1, Character: character.Character{ID: 10}},
+			},
+		}
+	}
+
+	t.Run("no inventory repo -> gate disabled", func(t *testing.T) {
+		repo := &mockSessionRepoMove{session: buildSession()}
+		uc := NewMoveToLocationUseCase(nil, repo, nil, nil, nil, nil)
+		_, err := uc.Execute(context.Background(), MoveToLocationRequest{ChatID: 123, Direction: "north"})
+		if err != nil {
+			t.Fatalf("expected move to succeed without inventory repo, got: %v", err)
+		}
+	})
+
+	t.Run("missing item -> blocked", func(t *testing.T) {
+		repo := &mockSessionRepoMove{session: buildSession()}
+		invRepo := &mockInventoryRepoMove{byCharacterID: map[uint]*inventory.Inventory{
+			10: {CharacterID: 10, Items: []inventory.InventoryItem{{Name: "Меч"}}},
+		}}
+		uc := NewMoveToLocationUseCase(nil, repo, nil, nil, nil, invRepo)
+		_, err := uc.Execute(context.Background(), MoveToLocationRequest{ChatID: 123, Direction: "north"})
+		if err == nil {
+			t.Fatal("expected move to be blocked without required item")
+		}
+		if !strings.Contains(err.Error(), "Золотой ключ") {
+			t.Fatalf("expected error to mention required item, got: %v", err)
+		}
+	})
+
+	t.Run("has item (case-insensitive substring) -> allowed", func(t *testing.T) {
+		repo := &mockSessionRepoMove{session: buildSession()}
+		invRepo := &mockInventoryRepoMove{byCharacterID: map[uint]*inventory.Inventory{
+			10: {CharacterID: 10, Items: []inventory.InventoryItem{{Name: "старый золотой ключ от подвала"}}},
+		}}
+		uc := NewMoveToLocationUseCase(nil, repo, nil, nil, nil, invRepo)
+		resp, err := uc.Execute(context.Background(), MoveToLocationRequest{ChatID: 123, Direction: "north"})
+		if err != nil {
+			t.Fatalf("expected move to succeed with required item present, got: %v", err)
+		}
+		if resp.To.Name != "Vault" {
+			t.Fatalf("expected to move to Vault, got %q", resp.To.Name)
+		}
+	})
+
+	t.Run("no requirement on connection -> not affected by gate", func(t *testing.T) {
+		s := buildSession()
+		s.World.Locations[0].Connections[0].RequiredItemName = ""
+		repo := &mockSessionRepoMove{session: s}
+		invRepo := &mockInventoryRepoMove{}
+		uc := NewMoveToLocationUseCase(nil, repo, nil, nil, nil, invRepo)
+		_, err := uc.Execute(context.Background(), MoveToLocationRequest{ChatID: 123, Direction: "north"})
+		if err != nil {
+			t.Fatalf("expected free move without requirement, got: %v", err)
+		}
+	})
 }
 
 func uintPtr(u uint) *uint { return &u }

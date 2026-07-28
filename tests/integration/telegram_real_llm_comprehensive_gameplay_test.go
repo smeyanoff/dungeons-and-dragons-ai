@@ -52,7 +52,8 @@ func TestTelegramGameplay_RealLLM_FullGameplayJourney(t *testing.T) {
 	playerRepo := persistence.NewPlayerRepository(cfg.db)
 	// For tests, we need to pass nil for LLM and other dependencies to MoveToLocationUseCase
 	// since we're testing without real LLM calls
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
+	inventoryRepo := persistence.NewInventoryRepository(cfg.db)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil, inventoryRepo)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, nil)
 
 	// Create bot with real LLM for comprehensive gameplay testing

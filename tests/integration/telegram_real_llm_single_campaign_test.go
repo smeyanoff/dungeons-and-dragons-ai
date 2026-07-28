@@ -43,7 +43,8 @@ func TestTelegramGameplay_RealLLM_SingleCampaign_ToFirstCombat(t *testing.T) {
 	playerRepo := persistence.NewPlayerRepository(cfg.db)
 	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
 	llmLogRepo := persistence.NewLLMLogRepository(cfg.db)
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
+	inventoryRepo := persistence.NewInventoryRepository(cfg.db)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil, inventoryRepo)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, cfg.indexDocUC)
 
 	// Bot with real dependencies.
