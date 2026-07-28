@@ -878,6 +878,8 @@ func TestEventLinesTiered(t *testing.T) {
 	}
 
 	t.Run("budget decreases with age and floors at minChars", func(t *testing.T) {
+		// events идут в хронологическом порядке (старые → новые), как их возвращают
+		// GetBySessionID/GetRecentByLocation — последний элемент самый свежий.
 		events := makeEvents(5)
 		lines := eventLinesTiered(events, 100, 20)
 
@@ -890,16 +892,16 @@ func TestEventLinesTiered(t *testing.T) {
 			lengths[i] = len(l)
 		}
 
-		// Каждая следующая (более старая) строка не длиннее предыдущей.
+		// Каждая следующая (более свежая) строка не короче предыдущей.
 		for i := 1; i < len(lengths); i++ {
-			if lengths[i] > lengths[i-1] {
-				t.Errorf("expected non-increasing lengths by age, got %v", lengths)
+			if lengths[i] < lengths[i-1] {
+				t.Errorf("expected non-decreasing lengths towards the end, got %v", lengths)
 				break
 			}
 		}
-		// Самая свежая строка должна использовать заметно больший бюджет, чем самая старая.
-		if lengths[0] <= lengths[len(lengths)-1] {
-			t.Errorf("expected the newest line to be longer than the oldest, got lengths %v", lengths)
+		// Самая свежая (последняя) строка должна использовать заметно больший бюджет, чем самая старая (первая).
+		if lengths[len(lengths)-1] <= lengths[0] {
+			t.Errorf("expected the newest (last) line to be longer than the oldest (first), got lengths %v", lengths)
 		}
 	})
 
