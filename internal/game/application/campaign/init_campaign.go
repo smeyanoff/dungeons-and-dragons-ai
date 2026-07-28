@@ -127,7 +127,7 @@ func (uc *InitCampaignUseCase) Execute(
 	}
 
 	// Шаг 4: Генерация связей между локациями
-	connections, err := uc.generateConnections(ctx, locations)
+	connections, err := uc.generateConnections(ctx, locations, mainQuest.Items)
 	if err != nil {
 		logger.Warn("Failed to generate connections",
 			logger.ErrorField(err),
@@ -474,13 +474,18 @@ func (uc *InitCampaignUseCase) generateLocationNPCsWithRetry(ctx context.Context
 	return response.NPCs, nil
 }
 
-// generateConnections генерирует связи между локациями
-func (uc *InitCampaignUseCase) generateConnections(ctx context.Context, locations []LocationDTO) (map[string][]ConnectionDTO, error) {
-	return uc.generateConnectionsWithRetry(ctx, locations, 0)
+// generateConnections генерирует связи между локациями. questItems — предметы главного
+// квеста, которыми (изредка) можно заблокировать отдельные связи через required_item.
+func (uc *InitCampaignUseCase) generateConnections(ctx context.Context, locations []LocationDTO, questItems []ItemDTO) (map[string][]ConnectionDTO, error) {
+	connections, err := uc.generateConnectionsWithRetry(ctx, locations, questItems, 0)
+	if err != nil {
+		return nil, err
+	}
+	return sanitizeRequiredItems(connections, questItems), nil
 }
 
 // generateConnectionsWithRetry генерирует связи между локациями с retry механизмом
-func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context, locations []LocationDTO, attempt int) (map[string][]ConnectionDTO, error) {
+func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context, locations []LocationDTO, questItems []ItemDTO, attempt int) (map[string][]ConnectionDTO, error) {
 	const maxRetries = 1 // Уменьшаем количество retry для ужесточения контрактов
 	if attempt > maxRetries {
 		logger.Warn("Failed to generate valid connections, using fallback",
@@ -489,9 +494,14 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 		return fallbackConnections(locations), nil
 	}
 
-	prompt := GenerateConnectionsPrompt(locations)
+	questItemNames := make([]string, 0, len(questItems))
+	for _, it := range questItems {
+		questItemNames = append(questItemNames, it.Name)
+	}
+
+	prompt := GenerateConnectionsPrompt(locations, questItemNames)
 	if attempt > 0 {
-		prompt = GenerateConnectionsPromptStrict(locations)
+		prompt = GenerateConnectionsPromptStrict(locations, questItemNames)
 	}
 
 	llmCtx, llmCancel := context.WithTimeout(ctx, 90*time.Second)
@@ -518,7 +528,7 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 				logger.Warn("Failed to repair truncated JSON for connections, will retry with stricter prompt",
 					logger.Int("attempt", attempt),
 				)
-				return uc.generateConnectionsWithRetry(ctx, locations, attempt+1)
+				return uc.generateConnectionsWithRetry(ctx, locations, questItems, attempt+1)
 			} else {
 				logger.Info("Successfully repaired truncated JSON for connections",
 					logger.Int("attempt", attempt),
@@ -529,7 +539,7 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 				logger.Int("attempt", attempt),
 				logger.Int("response_length", len(cleaned)),
 			)
-			return uc.generateConnectionsWithRetry(ctx, locations, attempt+1)
+			return uc.generateConnectionsWithRetry(ctx, locations, questItems, attempt+1)
 		}
 	}
 
@@ -547,7 +557,7 @@ func (uc *InitCampaignUseCase) generateConnectionsWithRetry(ctx context.Context,
 			)
 			return fallbackConnections(locations), nil
 		}
-		return uc.generateConnectionsWithRetry(ctx, locations, attempt+1)
+		return uc.generateConnectionsWithRetry(ctx, locations, questItems, attempt+1)
 	}
 
 	return response.Connections, nil
@@ -655,10 +665,11 @@ func (uc *InitCampaignUseCase) buildWorld(
 			}
 
 			connection := world.LocationConnection{
-				FromLocationID: fromID,
-				ToLocationID:   toID,
-				Direction:      connDTO.Direction,
-				Description:    connDTO.Description,
+				FromLocationID:   fromID,
+				ToLocationID:     toID,
+				Direction:        connDTO.Direction,
+				Description:      connDTO.Description,
+				RequiredItemName: connDTO.RequiredItem,
 			}
 			w.Locations[i].Connections = append(w.Locations[i].Connections, connection)
 		}
@@ -795,6 +806,34 @@ func fallbackLocations(worldTheme string) []LocationDTO {
 		{Name: "Древний лес", Description: "Таинственный лес с шепчущими деревьями и скрытыми тропами."},
 		{Name: "Забытые руины", Description: "Разрушенные руины, где хранятся ответы на главный квест."},
 	}
+}
+
+// sanitizeRequiredItems отбрасывает required_item, придуманные LLM и не совпадающие ни с
+// одним реальным предметом главного квеста — иначе партия могла бы получить путь,
+// заблокированный несуществующим предметом, который никогда не попадёт в инвентарь.
+func sanitizeRequiredItems(connections map[string][]ConnectionDTO, questItems []ItemDTO) map[string][]ConnectionDTO {
+	known := make(map[string]bool, len(questItems))
+	for _, it := range questItems {
+		known[strings.ToLower(strings.TrimSpace(it.Name))] = true
+	}
+
+	for from, conns := range connections {
+		for i := range conns {
+			req := strings.TrimSpace(conns[i].RequiredItem)
+			if req == "" {
+				continue
+			}
+			if !known[strings.ToLower(req)] {
+				logger.Warn("Dropping hallucinated required_item on generated connection",
+					logger.String("from", from),
+					logger.String("to", conns[i].ToLocation),
+					logger.String("required_item", req),
+				)
+				conns[i].RequiredItem = ""
+			}
+		}
+	}
+	return connections
 }
 
 func fallbackConnections(locations []LocationDTO) map[string][]ConnectionDTO {

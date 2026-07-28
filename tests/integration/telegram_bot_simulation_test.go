@@ -302,7 +302,8 @@ func TestTelegramGameplay_BotSimulation_UserJourney(t *testing.T) {
 	playerRepo := persistence.NewPlayerRepository(cfg.db)
 	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
 	// For tests, we need to pass nil for LLM and other dependencies
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
+	inventoryRepo := persistence.NewInventoryRepository(cfg.db)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil, inventoryRepo)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, nil)
 
 	// IMPORTANT: to avoid extra (costly) model calls, we pass generateImageUC=nil and indexDocUC=nil in bot.

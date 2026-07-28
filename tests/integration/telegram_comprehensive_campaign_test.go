@@ -44,7 +44,8 @@ func TestTelegramGameplay_ComprehensiveCampaignTest(t *testing.T) {
 
 	// Use cases для перемещений и проверок
 	// Для теста используем nil для LLM зависимостей, так как фокусируемся на основном пути
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
+	inventoryRepo := persistence.NewInventoryRepository(cfg.db)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil, inventoryRepo)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, cfg.indexDocUC)
 
 	// Создаем бота с реальным LLM

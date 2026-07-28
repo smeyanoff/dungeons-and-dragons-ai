@@ -30,6 +30,12 @@ type ConnectionDTO struct {
 	ToLocation  string `json:"to_location"` // Имя целевой локации
 	Direction   string `json:"direction"`   // "north", "south", "east", "west", "up", "down", "portal", etc.
 	Description string `json:"description"` // Описание пути
+
+	// RequiredItem — имя квестового предмета (должно точно совпадать с одним из предметов
+	// главного квеста), без которого партия не может пройти по этой связи. Пусто в
+	// большинстве случаев — путь свободен. Значения, не совпавшие ни с одним известным
+	// предметом квеста, отбрасываются при постобработке (см. sanitizeRequiredItems).
+	RequiredItem string `json:"required_item,omitempty"`
 }
 
 type NPCDTO struct {

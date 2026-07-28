@@ -424,7 +424,7 @@ func main() {
 	rollDiceUC := dice.NewRollDiceUseCase()
 	getQuestsUC := questapp.NewGetQuestsUseCase(sessionRepo, questRepo)
 	getMapUC := mapapp.NewGetMapUseCase(sessionRepo)
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(llm, sessionRepo, worldEventRepo, eventRepo, indexDocUC)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(llm, sessionRepo, worldEventRepo, eventRepo, indexDocUC, inventoryRepo)
 	handleActionUC.SetLocationMover(moveToLocationUC)
 	getAchievementsUC := achievementapp.NewGetAchievementsUseCase(achievementRepo, sessionRepo)
 	getSpellsUC := spellapp.NewGetSpellsUseCase(spellRepo, sessionRepo)

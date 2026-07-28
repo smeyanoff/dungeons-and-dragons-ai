@@ -47,7 +47,8 @@ func TestTelegramGameplay_FullSystemsIntegration_RealLLM(t *testing.T) {
 	feedbackRepo := persistence.NewFeedbackRepository(cfg.db)
 	playerRepo := persistence.NewPlayerRepository(cfg.db)
 	worldEventRepo := persistence.NewWorldEventRepository(cfg.db)
-	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil)
+	inventoryRepo := persistence.NewInventoryRepository(cfg.db)
+	moveToLocationUC := mapapp.NewMoveToLocationUseCase(nil, cfg.sessionRepo, worldEventRepo, nil, nil, inventoryRepo)
 	performAbilityCheckUC := abilitycheck.NewPerformAbilityCheckUseCase(cfg.sessionRepo, eventRepo, nil)
 
 	bot, err := telegrambot.NewBotWithAPIEndpoint(

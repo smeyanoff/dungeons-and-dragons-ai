@@ -150,8 +150,10 @@ func GenerateLocationNPCsPromptStrict(locationName, locationDescription string) 
 - Никакого дополнительного текста вне JSON`, locationName, locationDescription)
 }
 
-// GenerateConnectionsPrompt создает промпт для генерации связей между локациями
-func GenerateConnectionsPrompt(locations []LocationDTO) string {
+// GenerateConnectionsPrompt создает промпт для генерации связей между локациями.
+// questItemNames — предметы главного квеста; ими можно (не обязательно) заблокировать
+// отдельные связи через required_item, чтобы партия не могла пройти без нужного предмета.
+func GenerateConnectionsPrompt(locations []LocationDTO, questItemNames []string) string {
 	var locationNames []string
 	for _, loc := range locations {
 		locationNames = append(locationNames, loc.Name)
@@ -161,6 +163,8 @@ func GenerateConnectionsPrompt(locations []LocationDTO) string {
 
 Локации:
 %s
+
+Квестовые предметы (доступны для блокировки путей, см. required_item ниже): %s
 
 Создай логичные связи между локациями. Каждая локация должна иметь 1-3 связи с другими локациями.
 Связи должны соответствовать географии мира.
@@ -173,17 +177,19 @@ func GenerateConnectionsPrompt(locations []LocationDTO) string {
       {
         "to_location": "название_другой_локации",
         "direction": "north|south|east|west|up|down|portal|path",
-        "description": "описание пути"
+        "description": "описание пути",
+        "required_item": "точное имя предмета из списка квестовых предметов, ЕСЛИ путь заблокирован (ключ/пропуск/артефакт) — иначе пустая строка"
       }
     ]
   }
 }
 
-Используй только названия локаций из списка выше.`, strings.Join(locationNames, "\n- "))
+Используй только названия локаций из списка выше. required_item — редкое исключение (максимум 1-2 связи на весь мир), для большинства связей оставляй пустую строку. Если указываешь required_item, он должен буквально совпадать с одним из квестовых предметов выше.`,
+		strings.Join(locationNames, "\n- "), questItemsOrNone(questItemNames))
 }
 
 // GenerateConnectionsPromptStrict создает более строгий промпт для retry
-func GenerateConnectionsPromptStrict(locations []LocationDTO) string {
+func GenerateConnectionsPromptStrict(locations []LocationDTO, questItemNames []string) string {
 	var locationNames []string
 	for _, loc := range locations {
 		locationNames = append(locationNames, loc.Name)
@@ -195,6 +201,8 @@ func GenerateConnectionsPromptStrict(locations []LocationDTO) string {
 Локации:
 %s
 
+Квестовые предметы (доступны для required_item): %s
+
 Ответ ТОЛЬКО в JSON:
 {
   "connections": {
@@ -202,7 +210,8 @@ func GenerateConnectionsPromptStrict(locations []LocationDTO) string {
       {
         "to_location": "название_другой_локации",
         "direction": "north|south|east|west|up|down|portal|path",
-        "description": "короткое описание пути"
+        "description": "короткое описание пути",
+        "required_item": "точное имя квестового предмета или пустая строка"
       }
     ]
   }
@@ -211,7 +220,16 @@ func GenerateConnectionsPromptStrict(locations []LocationDTO) string {
 Требования:
 - Используй только названия из списка
 - direction строго из перечисления
-- description до 80 символов`, strings.Join(locationNames, "\n- "))
+- description до 80 символов
+- required_item пустой почти всегда; если не пустой — точно совпадает с квестовым предметом из списка`,
+		strings.Join(locationNames, "\n- "), questItemsOrNone(questItemNames))
+}
+
+func questItemsOrNone(names []string) string {
+	if len(names) == 0 {
+		return "нет"
+	}
+	return strings.Join(names, ", ")
 }
 
 // GenerateLocationPlaybookPrompt создаёт промпт для генерации playbook локации: hook → 2–4 сцены → критический выбор → последствия.

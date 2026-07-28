@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/event"
+	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/llm/domain"
@@ -23,6 +24,7 @@ type MoveToLocationUseCase struct {
 	worldEventRepo WorldEventRepository
 	eventRepo      StoryEventRepository
 	indexDocUC     RAGIndexer
+	inventoryRepo  InventoryRepository
 }
 
 type WorldEventRepository interface {
@@ -38,12 +40,20 @@ type RAGIndexer interface {
 	Execute(ctx context.Context, doc ragdomain.Document) error
 }
 
+// InventoryRepository — доступ к инвентарю персонажа, нужен для гейта по квестовым
+// предметам (LocationConnection.RequiredItemName). Если не задан (nil), гейт отключается —
+// перемещение работает как раньше, без проверки предметов.
+type InventoryRepository interface {
+	GetByCharacterID(ctx context.Context, characterID uint) (*inventory.Inventory, error)
+}
+
 func NewMoveToLocationUseCase(
 	llm domain.LLM,
 	sessionRepo session.Repository,
 	worldEventRepo WorldEventRepository,
 	eventRepo StoryEventRepository,
 	indexDocUC RAGIndexer,
+	inventoryRepo InventoryRepository,
 ) *MoveToLocationUseCase {
 	return &MoveToLocationUseCase{
 		llm:            llm,
@@ -51,6 +61,7 @@ func NewMoveToLocationUseCase(
 		worldEventRepo: worldEventRepo,
 		eventRepo:      eventRepo,
 		indexDocUC:     indexDocUC,
+		inventoryRepo:  inventoryRepo,
 	}
 }
 
@@ -139,6 +150,12 @@ func (uc *MoveToLocationUseCase) Execute(ctx context.Context, req MoveToLocation
 		return nil, fmt.Errorf("target location is not reachable from current location")
 	}
 
+	// Гейт по квестовому предмету: если связь требует конкретный предмет, у партии
+	// должен быть хотя бы один персонаж, у которого этот предмет есть в инвентаре.
+	if travelConnection.RequiredItemName != "" && !uc.partyHasItem(ctx, gs, travelConnection.RequiredItemName) {
+		return nil, fmt.Errorf("путь в «%s» заблокирован: нужен предмет %q", to.Name, travelConnection.RequiredItemName)
+	}
+
 	// Рассчитываем время перемещения и продвигаем время в мире
 	travelHours := gs.World.CalculateTravelTimeHours(*travelConnection)
 	if travelHours > 0 {
@@ -191,6 +208,36 @@ func (uc *MoveToLocationUseCase) Execute(ctx context.Context, req MoveToLocation
 		To:      to,
 		Message: msg,
 	}, nil
+}
+
+// partyHasItem проверяет, есть ли у хотя бы одного персонажа партии предмет с именем
+// itemName (сравнение case-insensitive, по подстроке — как в validate_item_usage).
+// Если inventoryRepo не задан, гейт считается отключённым (true), чтобы не ломать
+// существующие вызовы/тесты, где инвентарь не подключён.
+func (uc *MoveToLocationUseCase) partyHasItem(ctx context.Context, gs *session.GameSession, itemName string) bool {
+	if uc.inventoryRepo == nil {
+		return true
+	}
+	needle := strings.ToLower(strings.TrimSpace(itemName))
+	if needle == "" {
+		return true
+	}
+	for i := range gs.Players {
+		charID := gs.Players[i].Character.ID
+		if charID == 0 {
+			continue
+		}
+		inv, err := uc.inventoryRepo.GetByCharacterID(ctx, charID)
+		if err != nil || inv == nil {
+			continue
+		}
+		for _, it := range inv.Items {
+			if strings.Contains(strings.ToLower(it.Name), needle) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (uc *MoveToLocationUseCase) resolveLocationEventsOnLeave(

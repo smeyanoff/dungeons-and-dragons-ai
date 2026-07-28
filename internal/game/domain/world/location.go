@@ -108,4 +108,9 @@ type LocationConnection struct {
 	ToLocationID   uint   `gorm:"index"`
 	Direction      string // "north", "south", "east", "west", "up", "down", "portal", etc.
 	Description    string // Описание пути (например, "узкая тропа", "магический портал")
+
+	// RequiredItemName — если не пусто, переход по этой связи заблокирован программно
+	// (MoveToLocationUseCase), пока хотя бы у одного персонажа партии нет предмета
+	// с таким именем в инвентаре. Пусто — переход свободен.
+	RequiredItemName string
 }
