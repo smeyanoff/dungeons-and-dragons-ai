@@ -7,6 +7,7 @@ import (
 
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/spell"
 	worlddomain "dungeons-and-dragons-ai/internal/game/domain/world"
 	"dungeons-and-dragons-ai/internal/game/infrastructure/persistence"
 	"dungeons-and-dragons-ai/pkg/logger"
@@ -27,6 +28,7 @@ type infraOnlyConfig struct {
 	playerRepo    *persistence.PlayerRepository
 	eventRepo     *persistence.GameEventRepository
 	inventoryRepo *persistence.InventoryRepository
+	spellRepo     *persistence.SpellRepository
 }
 
 func setupInfraOnlyIntegrationTest(t *testing.T) *infraOnlyConfig {
@@ -71,8 +73,16 @@ func setupInfraOnlyIntegrationTest(t *testing.T) *infraOnlyConfig {
 	if err := db.AutoMigrate(&inventory.Inventory{}, &inventory.InventoryItem{}); err != nil {
 		t.Fatalf("Не удалось выполнить AutoMigrate для inventories: %v", err)
 	}
+	if err := db.AutoMigrate(&spell.Spell{}, &spell.CharacterSpell{}); err != nil {
+		t.Fatalf("Не удалось выполнить AutoMigrate для spells: %v", err)
+	}
 
 	chatID, tgUserID := generateTestIDs(t)
+
+	spellRepo := persistence.NewSpellRepository(db)
+	if err := spellRepo.InitDefaultSpells(ctx); err != nil {
+		t.Fatalf("Не удалось инициализировать заклинания по умолчанию: %v", err)
+	}
 
 	return &infraOnlyConfig{
 		db:            db,
@@ -84,5 +94,6 @@ func setupInfraOnlyIntegrationTest(t *testing.T) *infraOnlyConfig {
 		playerRepo:    persistence.NewPlayerRepository(db),
 		eventRepo:     persistence.NewGameEventRepository(db),
 		inventoryRepo: persistence.NewInventoryRepository(db),
+		spellRepo:     spellRepo,
 	}
 }

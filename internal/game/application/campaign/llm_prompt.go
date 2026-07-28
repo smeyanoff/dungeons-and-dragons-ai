@@ -113,11 +113,18 @@ func GenerateLocationNPCsPrompt(locationName, locationDescription string) string
 Ольгерда", "подмастерье кузнеца"), укажи это в поле "relation" — это будет запомнено как факт и не должно
 позже противоречиво меняться. Если родства/принадлежности нет, оставь "relation" пустой строкой.
 
+Дополнительно определи отношение NPC к игроку в поле "attitude" — оно должно логически вытекать
+из характера и роли NPC (например: злодей, охотник за головами, враждебная фракция → "hostile";
+подозрительный страж, конкурент → "wary"; обычный житель, торговец → "neutral"; союзник, друг,
+благодарный за помощь персонаж → "friendly"). Персонажи, которые по своей природе злые или
+враждебны игроку, ДОЛЖНЫ получить "hostile" — это определяет, как DM будет их озвучивать
+в игре. Допустимые значения: "hostile", "wary", "neutral", "friendly".
+
 Ответь ТОЛЬКО валидным JSON без markdown блоков:
 
 {
   "npcs": [
-    { "name": "имя NPC", "role": "роль NPC (например: торговец, страж, маг)", "relation": "родство/принадлежность или пустая строка" }
+    { "name": "имя NPC", "role": "роль NPC (например: торговец, страж, маг)", "relation": "родство/принадлежность или пустая строка", "attitude": "hostile|wary|neutral|friendly" }
   ]
 }`, locationName, locationDescription)
 }
@@ -133,12 +140,13 @@ func GenerateLocationNPCsPromptStrict(locationName, locationDescription string) 
 Ответ ТОЛЬКО в JSON:
 {
   "npcs": [
-    { "name": "имя NPC", "role": "роль NPC", "relation": "родство/принадлежность или пустая строка" }
+    { "name": "имя NPC", "role": "роль NPC", "relation": "родство/принадлежность или пустая строка", "attitude": "hostile|wary|neutral|friendly" }
   ]
 }
 
 Требования:
 - Имя и роль обязательны, relation — пустая строка, если родства/принадлежности нет
+- attitude обязателен: враждебные по природе NPC — "hostile", иначе "wary"/"neutral"/"friendly" по контексту
 - Никакого дополнительного текста вне JSON`, locationName, locationDescription)
 }
 

@@ -40,7 +40,7 @@ func TestAbilityCheck_Guardrails_AlreadyPending(t *testing.T) {
 	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
 		t.Fatalf("Не удалось сохранить сессию: %v", err)
 	}
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo, cfg.spellRepo)
 	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
 		ChatID: chatID, Name: "Герой", Race: character.RaceHuman, Class: character.ClassFighter,
 	}); err != nil {
@@ -102,7 +102,7 @@ func TestAbilityCheck_Guardrails_AlreadyChecked(t *testing.T) {
 	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
 		t.Fatalf("Не удалось сохранить сессию: %v", err)
 	}
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo, cfg.spellRepo)
 	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
 		ChatID: chatID, Name: "Герой", Race: character.RaceElf, Class: character.ClassWizard,
 	}); err != nil {
@@ -174,7 +174,7 @@ func TestAbilityCheck_Guardrails_AlreadyChecked_DifferentLocation(t *testing.T) 
 	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
 		t.Fatalf("Не удалось сохранить сессию: %v", err)
 	}
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo, cfg.spellRepo)
 	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
 		ChatID: chatID, Name: "Герой", Race: character.RaceElf, Class: character.ClassWizard,
 	}); err != nil {
@@ -245,7 +245,7 @@ func TestAbilityCheck_Guardrails_BudgetExceeded(t *testing.T) {
 	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
 		t.Fatalf("Не удалось сохранить сессию: %v", err)
 	}
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo, cfg.spellRepo)
 	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
 		ChatID: chatID, Name: "Герой", Race: character.RaceElf, Class: character.ClassRogue,
 	}); err != nil {
@@ -407,7 +407,7 @@ func TestAbilityCheck_Guardrails_Cooldown(t *testing.T) {
 	if err := cfg.sessionRepo.Save(ctx, gs); err != nil {
 		t.Fatalf("Не удалось сохранить сессию: %v", err)
 	}
-	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo)
+	createCharacterUC := characterapp.NewCreateCharacterUseCase(cfg.sessionRepo, cfg.playerRepo, cfg.inventoryRepo, cfg.spellRepo)
 	if _, err := createCharacterUC.Execute(ctx, characterapp.CreateCharacterRequest{
 		ChatID: chatID, Name: "Герой", Race: character.RaceHuman, Class: character.ClassRogue,
 	}); err != nil {

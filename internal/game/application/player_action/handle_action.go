@@ -628,7 +628,7 @@ func (uc *HandleActionUseCase) Execute(
 	// и сразу возвращаем игроку текстовую подсказку. LLM-DM не участвует и не должен просить /roll.
 	// OOC-запросы не создают проверку — ответ DM без cooldown и без бросков.
 	if actionAnalysis != nil && actionAnalysis.NeedsAbilityCheck && actionAnalysis.AbilityCheck != nil && !actionAnalysis.SimpleAction && !isOOCQuery {
-		checkMsg, handled, err := uc.createAbilityCheckFromAnalyzer(ctx, gs, actionAnalysis.AbilityCheck)
+		checkMsg, handled, err := uc.createAbilityCheckFromAnalyzer(ctx, gs, actionAnalysis.AbilityCheck, playerMessage)
 		if err != nil {
 			logger.Warn("Failed to create pending ability check from analyzer",
 				logger.ErrorField(err),
@@ -1842,6 +1842,7 @@ func (uc *HandleActionUseCase) createAbilityCheckFromAnalyzer(
 	ctx context.Context,
 	gs *session.GameSession,
 	check *dm_analyzer.AbilityCheckDetails,
+	playerMessage string,
 ) (string, bool, error) {
 	if uc.sessionRepo == nil || gs == nil || check == nil {
 		return "", false, nil
@@ -1854,7 +1855,13 @@ func (uc *HandleActionUseCase) createAbilityCheckFromAnalyzer(
 		return "", false, nil
 	}
 	if reason == "" {
-		reason = "попытка с неопределенным исходом"
+		// Проверка обязана быть привязана к конкретному действию игрока,
+		// а не к обезличенной формулировке — используем исходную реплику игрока.
+		if action := strings.TrimSpace(playerMessage); action != "" {
+			reason = fmt.Sprintf("твоя попытка: %s", action)
+		} else {
+			reason = "попытка с неопределенным исходом"
+		}
 	}
 	if stakes == "" {
 		stakes = "успех даст преимущество, провал усложнит ситуацию"
@@ -2289,7 +2296,8 @@ func isLocationEventType(t world.WorldEventType) bool {
 		world.WorldEventTypeLocationItem,
 		world.WorldEventTypeLocationTrap,
 		world.WorldEventTypeLocationPuzzle,
-		world.WorldEventTypeLocationEncounter:
+		world.WorldEventTypeLocationEncounter,
+		world.WorldEventTypeRandomEncounter:
 		return true
 	default:
 		return false

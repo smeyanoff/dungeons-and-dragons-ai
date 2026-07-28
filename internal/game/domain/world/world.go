@@ -171,6 +171,7 @@ func (w *World) AddLocation(loc *location.Location) {
 			Name:        npc.Name,
 			Role:        npc.Role,
 			Personality: "",
+			Attitude:    npc.Attitude,
 		})
 	}
 	w.Locations = append(w.Locations, worldLoc)

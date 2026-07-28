@@ -9,6 +9,7 @@ import (
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/spell"
 	"dungeons-and-dragons-ai/internal/game/domain/world"
 )
 
@@ -71,13 +72,33 @@ func (m *mockInventoryRepo) Save(ctx context.Context, inv *inventory.Inventory) 
 	return nil
 }
 
+// Mock Spell Repository
+type mockSpellRepo struct {
+	getByClassFunc       func(ctx context.Context, class character.Class) ([]*spell.Spell, error)
+	savedCharacterSpells []*spell.CharacterSpell
+}
+
+func (m *mockSpellRepo) GetByClass(ctx context.Context, class character.Class) ([]*spell.Spell, error) {
+	if m.getByClassFunc != nil {
+		return m.getByClassFunc(ctx, class)
+	}
+	return nil, nil
+}
+
+func (m *mockSpellRepo) SaveCharacterSpell(ctx context.Context, cs *spell.CharacterSpell) error {
+	m.savedCharacterSpells = append(m.savedCharacterSpells, cs)
+	return nil
+}
+
 func TestCreateCharacterUseCase_Execute(t *testing.T) {
 	tests := []struct {
 		name          string
 		req           CreateCharacterRequest
 		setupMocks    func(*mockSessionRepo, *mockPlayerRepo, *mockInventoryRepo)
+		setupSpells   func(*mockSpellRepo)
 		expectedError bool
 		validate      func(*testing.T, *player.Player, *mockInventoryRepo)
+		validateSpell func(*testing.T, *mockSpellRepo)
 	}{
 		{
 			name: "successful character creation",
@@ -267,6 +288,85 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 			},
 		},
 		{
+			name: "wizard gets fixed starting spellbook",
+			req: CreateCharacterRequest{
+				ChatID: 12345,
+				Name:   "Test Wizard",
+				Race:   character.RaceHuman,
+				Class:  character.ClassWizard,
+			},
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
+				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					return &session.GameSession{
+						ChatID: chatID,
+						State:  session.StateActive,
+					}, nil
+				}
+				playerRepo.getByTgUserIDAndSessionIDFunc = func(ctx context.Context, tgUserID int64, sessionID uint) (*player.Player, error) {
+					return nil, nil
+				}
+			},
+			setupSpells: func(spellRepo *mockSpellRepo) {
+				spellRepo.getByClassFunc = func(ctx context.Context, class character.Class) ([]*spell.Spell, error) {
+					return []*spell.Spell{
+						{ID: 1, Name: "Магическая стрела", Level: 1},
+						{ID: 2, Name: "Щит", Level: 1},
+						{ID: 3, Name: "Огненный шар", Level: 2}, // не входит в стартовый список абилок
+					}, nil
+				}
+			},
+			expectedError: false,
+			validateSpell: func(t *testing.T, spellRepo *mockSpellRepo) {
+				// Книга заклинаний должна содержать ровно те заклинания, что перечислены
+				// в character.GetCharacterAbilities как стартовые способности мага —
+				// не больше и не меньше, чтобы нельзя было скастовать что угодно.
+				if len(spellRepo.savedCharacterSpells) != 2 {
+					t.Fatalf("expected exactly 2 starting spells learned, got %d", len(spellRepo.savedCharacterSpells))
+				}
+				learnedIDs := map[uint]bool{}
+				for _, cs := range spellRepo.savedCharacterSpells {
+					learnedIDs[cs.SpellID] = true
+					if !cs.Prepared {
+						t.Errorf("expected starting spell %d to be Prepared", cs.SpellID)
+					}
+				}
+				if !learnedIDs[1] || !learnedIDs[2] {
+					t.Errorf("expected 'Магическая стрела' (id=1) and 'Щит' (id=2) to be learned, got %v", learnedIDs)
+				}
+				if learnedIDs[3] {
+					t.Error("expected 'Огненный шар' (id=3) NOT to be learned automatically")
+				}
+			},
+		},
+		{
+			name: "non-wizard spellcaster is not restricted to a fixed spellbook",
+			req: CreateCharacterRequest{
+				ChatID: 12345,
+				Name:   "Test Cleric",
+				Race:   character.RaceHuman,
+				Class:  character.ClassCleric,
+			},
+			setupMocks: func(sessionRepo *mockSessionRepo, playerRepo *mockPlayerRepo, inventoryRepo *mockInventoryRepo) {
+				sessionRepo.getByChatIDFunc = func(ctx context.Context, chatID int64) (*session.GameSession, error) {
+					return &session.GameSession{
+						ChatID: chatID,
+						State:  session.StateActive,
+					}, nil
+				}
+				playerRepo.getByTgUserIDAndSessionIDFunc = func(ctx context.Context, tgUserID int64, sessionID uint) (*player.Player, error) {
+					return nil, nil
+				}
+			},
+			expectedError: false,
+			validateSpell: func(t *testing.T, spellRepo *mockSpellRepo) {
+				// Жрец — подготавливающий заклинатель (UsesSpellbook() == false), поэтому
+				// при создании персонажа книга заклинаний не наполняется вообще.
+				if len(spellRepo.savedCharacterSpells) != 0 {
+					t.Errorf("expected no CharacterSpell records for a preparing caster, got %d", len(spellRepo.savedCharacterSpells))
+				}
+			},
+		},
+		{
 			name: "session repo error",
 			req: CreateCharacterRequest{
 				ChatID: 12345,
@@ -378,12 +478,16 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 			sessionRepo := &mockSessionRepo{}
 			playerRepo := &mockPlayerRepo{}
 			inventoryRepo := &mockInventoryRepo{}
+			spellRepo := &mockSpellRepo{}
 
 			if tt.setupMocks != nil {
 				tt.setupMocks(sessionRepo, playerRepo, inventoryRepo)
 			}
+			if tt.setupSpells != nil {
+				tt.setupSpells(spellRepo)
+			}
 
-			uc := NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo)
+			uc := NewCreateCharacterUseCase(sessionRepo, playerRepo, inventoryRepo, spellRepo)
 
 			result, err := uc.Execute(context.Background(), tt.req)
 
@@ -397,6 +501,9 @@ func TestCreateCharacterUseCase_Execute(t *testing.T) {
 				}
 				if tt.validate != nil {
 					tt.validate(t, result, inventoryRepo)
+				}
+				if tt.validateSpell != nil {
+					tt.validateSpell(t, spellRepo)
 				}
 			}
 		})

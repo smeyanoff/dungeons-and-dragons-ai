@@ -121,26 +121,31 @@ func (uc *UseSpellUseCase) Execute(ctx context.Context, req UseSpellRequest) (*U
 		}, nil
 	}
 
-	// Проверяем, известно ли заклинание персонажу
-	characterSpells, err := uc.spellRepo.GetCharacterSpells(ctx, player.CharacterID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get character spells: %w", err)
-	}
-
-	known := false
-	for _, cs := range characterSpells {
-		if cs.SpellID == foundSpell.ID {
-			known = true
-			break
+	// Проверяем, известно ли заклинание персонажу. Ограничение книгой заклинаний
+	// действует только для классов, заучивающих заклинания заранее (сейчас — маг);
+	// подготавливающие заклинатели (жрец, следопыт) используют весь список заклинаний
+	// своего класса, ограниченные только слотами заклинаний.
+	if player.Character.UsesSpellbook() {
+		characterSpells, err := uc.spellRepo.GetCharacterSpells(ctx, player.CharacterID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get character spells: %w", err)
 		}
-	}
 
-	if !known {
-		return &UseSpellResponse{
-			Success: false,
-			Message: fmt.Sprintf("Вы еще не выучили заклинание '%s'. Используйте /spells для просмотра доступных заклинаний.",
-				foundSpell.Name),
-		}, nil
+		known := false
+		for _, cs := range characterSpells {
+			if cs.SpellID == foundSpell.ID {
+				known = true
+				break
+			}
+		}
+
+		if !known {
+			return &UseSpellResponse{
+				Success: false,
+				Message: fmt.Sprintf("Заклинание '%s' не записано в вашей книге заклинаний. Используйте /spells для просмотра изученных заклинаний.",
+					foundSpell.Name),
+			}, nil
+		}
 	}
 
 	// Проверяем доступность слотов (если это не заговор)

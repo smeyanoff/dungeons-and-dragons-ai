@@ -113,6 +113,43 @@ func TestSimpleContextBuilder_BuildContext(t *testing.T) {
 			},
 		},
 		{
+			name: "location NPCs with attitude are included in context",
+			gs: func() *session.GameSession {
+				locID := uint(1)
+				return &session.GameSession{
+					CurrentLocationID: &locID,
+					World: world.World{
+						Name:        "Test World",
+						Description: "A test world description",
+						Locations: []world.Location{
+							{
+								ID:          1,
+								Name:        "Тёмное подземелье",
+								Description: "Description 1",
+								NPCs: []world.NPC{
+									{Name: "Злой некромант", Role: "враг", Attitude: "hostile"},
+									{Name: "Торговец", Role: "торговец", Attitude: "friendly"},
+								},
+							},
+						},
+					},
+				}
+			}(),
+			message:   "I want to explore",
+			wantError: false,
+			validate: func(t *testing.T, result string) {
+				if !contains(result, "Злой некромант") {
+					t.Error("expected NPC name in context")
+				}
+				if !contains(result, "враждебно настроен") {
+					t.Error("expected hostile attitude instruction in context for hostile NPC")
+				}
+				if !contains(result, "дружелюбно настроен") {
+					t.Error("expected friendly attitude instruction in context for friendly NPC")
+				}
+			},
+		},
+		{
 			name: "minimal world",
 			gs: &session.GameSession{
 				World: world.World{

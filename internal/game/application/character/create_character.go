@@ -6,17 +6,20 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"dungeons-and-dragons-ai/internal/game/domain/character"
 	"dungeons-and-dragons-ai/internal/game/domain/inventory"
 	"dungeons-and-dragons-ai/internal/game/domain/player"
 	"dungeons-and-dragons-ai/internal/game/domain/session"
+	"dungeons-and-dragons-ai/internal/game/domain/spell"
 )
 
 type CreateCharacterUseCase struct {
 	sessionRepo   session.Repository
 	playerRepo    PlayerRepository
 	inventoryRepo InventoryRepository
+	spellRepo     SpellRepository
 }
 
 type PlayerRepository interface {
@@ -28,15 +31,24 @@ type InventoryRepository interface {
 	Save(ctx context.Context, inv *inventory.Inventory) error
 }
 
+// SpellRepository — часть API persistence.SpellRepository, нужная для наполнения
+// книги заклинаний персонажа при создании.
+type SpellRepository interface {
+	GetByClass(ctx context.Context, class character.Class) ([]*spell.Spell, error)
+	SaveCharacterSpell(ctx context.Context, cs *spell.CharacterSpell) error
+}
+
 func NewCreateCharacterUseCase(
 	sessionRepo session.Repository,
 	playerRepo PlayerRepository,
 	inventoryRepo InventoryRepository,
+	spellRepo SpellRepository,
 ) *CreateCharacterUseCase {
 	return &CreateCharacterUseCase{
 		sessionRepo:   sessionRepo,
 		playerRepo:    playerRepo,
 		inventoryRepo: inventoryRepo,
+		spellRepo:     spellRepo,
 	}
 }
 
@@ -115,7 +127,57 @@ func (uc *CreateCharacterUseCase) Execute(
 		return nil, fmt.Errorf("failed to save starting inventory: %w", err)
 	}
 
+	// Наполняем книгу заклинаний персонажа фиксированным стартовым списком
+	// (актуально только для классов, заучивающих заклинания заранее — см. UsesSpellbook)
+	if char.UsesSpellbook() {
+		if err := uc.grantStartingSpells(ctx, p.Character.ID, req.Class); err != nil {
+			return nil, fmt.Errorf("failed to grant starting spells: %w", err)
+		}
+	}
+
 	return p, nil
+}
+
+// grantStartingSpells записывает в книгу заклинаний персонажа фиксированный список
+// заклинаний, соответствующий стартовым способностям класса (character.GetCharacterAbilities).
+// Это единственный источник заклинаний, доступных персонажу с UsesSpellbook() == true —
+// скастовать заклинание, отсутствующее в этом списке, будет невозможно (см. UseSpellUseCase).
+func (uc *CreateCharacterUseCase) grantStartingSpells(ctx context.Context, characterID uint, class character.Class) error {
+	var startingSpellNames []string
+	for _, ability := range character.GetCharacterAbilities(class, 1) {
+		if ability.Type == character.AbilityTypeSpell && ability.SpellLevel > 0 {
+			startingSpellNames = append(startingSpellNames, ability.Name)
+		}
+	}
+
+	if len(startingSpellNames) == 0 {
+		return nil
+	}
+
+	classSpells, err := uc.spellRepo.GetByClass(ctx, class)
+	if err != nil {
+		return fmt.Errorf("failed to load class spells: %w", err)
+	}
+
+	for _, name := range startingSpellNames {
+		for _, s := range classSpells {
+			if s.Name != name {
+				continue
+			}
+			cs := &spell.CharacterSpell{
+				CharacterID: characterID,
+				SpellID:     s.ID,
+				Prepared:    true,
+				LearnedAt:   time.Now(),
+			}
+			if err := uc.spellRepo.SaveCharacterSpell(ctx, cs); err != nil {
+				return fmt.Errorf("failed to save character spell %q: %w", name, err)
+			}
+			break
+		}
+	}
+
+	return nil
 }
 
 // generateStats генерирует характеристики персонажа по стандартным правилам D&D

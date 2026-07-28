@@ -962,6 +962,51 @@ func TestBuildWorld(t *testing.T) {
 	}
 }
 
+func TestBuildWorld_NPCAttitude(t *testing.T) {
+	llm := &mockLLM{}
+	worldRepo := &mockWorldRepo{}
+
+	uc := NewInitCampaignUseCase(llm, worldRepo)
+
+	mainQuest := &QuestDTO{Title: "Test Quest", Description: "Test Description"}
+
+	locations := []LocationDTO{
+		{
+			Name:        "Location 1",
+			Description: "Description 1",
+			NPCs: []NPCDTO{
+				{Name: "Злодей", Role: "враг", Attitude: "hostile"},
+				{Name: "Житель", Role: "торговец", Attitude: ""},
+				{Name: "Странник", Role: "путник", Attitude: "unknown-value"},
+			},
+		},
+	}
+
+	w, err := uc.buildWorld(context.Background(), mainQuest, locations)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(w.Locations[0].NPCs) != 3 {
+		t.Fatalf("expected 3 NPCs, got %d", len(w.Locations[0].NPCs))
+	}
+
+	got := map[string]string{}
+	for _, n := range w.Locations[0].NPCs {
+		got[n.Name] = n.Attitude
+	}
+
+	if got["Злодей"] != "hostile" {
+		t.Errorf("expected hostile attitude to be preserved, got %q", got["Злодей"])
+	}
+	if got["Житель"] != "neutral" {
+		t.Errorf("expected empty attitude to default to neutral, got %q", got["Житель"])
+	}
+	if got["Странник"] != "neutral" {
+		t.Errorf("expected unknown attitude value to default to neutral, got %q", got["Странник"])
+	}
+}
+
 func TestBuildWorld_WithConnections(t *testing.T) {
 	llm := &mockLLM{}
 	worldRepo := &mockWorldRepo{}
