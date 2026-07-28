@@ -487,14 +487,17 @@ func generateMiniEvent() string {
 // непрерывности разговора), а каждое следующее, более старое — вдвое меньше, до пола minChars
 // (там уже достаточно компактной фактической выжимки, а не дословного текста). Так средний
 // расход токенов на пачку событий заметно ниже, чем при пересылке всех сообщений полным текстом.
+// events ожидаются в хронологическом порядке (старые → новые — как их возвращают
+// GetBySessionID/GetRecentByLocation). Полный бюджет символов достаётся самому свежему
+// (последнему) событию, более старым — по убывающей, с полом minChars.
 func eventLinesTiered(events []event.StoryEvent, maxChars, minChars int) []string {
 	if minChars <= 0 || minChars > maxChars {
 		minChars = maxChars
 	}
-	lines := make([]string, 0, len(events))
+	lines := make([]string, len(events))
 	budget := maxChars
-	for _, e := range events {
-		lines = append(lines, formatStoryEventLine(e, budget))
+	for i := len(events) - 1; i >= 0; i-- {
+		lines[i] = formatStoryEventLine(events[i], budget)
 		if budget > minChars {
 			budget /= 2
 			if budget < minChars {
